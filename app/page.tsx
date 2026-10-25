@@ -82,21 +82,21 @@ export default function Home() {
       </header>
 
       <section className="hero container" id="top">
-        <div className="hero-left">
-          <div className="pill">
+        <div className="hero-left anim-slide-left">
+          <div className="pill anim-fade-up delay-1">
             <span className="dot" />
             <span>AES-GCM · ZERO-KNOWLEDGE · ONE VIEW ONLY</span>
           </div>
-          <h1>Send secrets<br />that <span>disappear.</span></h1>
-          <p>Zero-knowledge password and photo sharing. Encrypted in your browser. The key never touches our servers. Every secret burns after one view.</p>
-          <ul className="checks">
+          <h1 className="anim-fade-up delay-2">Send secrets<br />that <span>disappear.</span></h1>
+          <p className="anim-fade-up delay-3">Zero-knowledge password and photo sharing. Encrypted in your browser. The key never touches our servers. Every secret burns after one view.</p>
+          <ul className="checks anim-fade-up delay-4">
             <li>✓ Encrypted on your device before anything is sent</li>
             <li>✓ We store ciphertext only — never the key</li>
             <li>✓ Opened once, then deleted for good</li>
           </ul>
         </div>
 
-        <div className="tool-card" id="send">
+        <div className="tool-card anim-slide-right delay-2" id="send">
           <div className="tool-header">
             <div className="dots"><span /><span /><span /></div>
             <div style={{display:'flex', alignItems:'center', gap:8}}>
@@ -133,15 +133,15 @@ export default function Home() {
       </section>
 
       <section id="problem" className="section-pad" style={{borderTop:'1px solid rgba(255,255,255,0.07)', borderBottom:'1px solid rgba(255,255,255,0.07)', background:'rgba(13,16,20,0.6)'}}>
-        <div className="container">
+        <div className="container anim-fade-up">
           <h2 className="section-title">A password you paste is a password you keep sharing.</h2>
           <p className="section-sub">Slack, email, tickets — they all keep a copy. OnePass doesn’t.</p>
         </div>
       </section>
 
       <section id="how" className="section-pad container">
-        <h2 className="section-title">How it works</h2>
-        <p className="section-sub">Three steps. Nothing complicated.</p>
+        <h2 className="section-title anim-fade-up">How it works</h2>
+        <p className="section-sub anim-fade-up delay-1">Three steps. Nothing complicated.</p>
         <div className="how-grid">
           <div className="feature-card step-card">
             <div className="step-num">1</div>
@@ -163,17 +163,17 @@ export default function Home() {
 
       <section id="features" className="section-pad" style={{borderTop:'1px solid rgba(255,255,255,0.07)'}}>
         <div className="container">
-          <h2 className="section-title">Why teams choose OnePass</h2>
+          <h2 className="section-title anim-fade-up">Why teams choose OnePass</h2>
           <div className="grid">
-            <div className="feature-card"><h3>Zero-knowledge</h3><p>AES-GCM encryption in your browser. We only ever see ciphertext.</p></div>
-            <div className="feature-card"><h3>Burn after reading</h3><p>One-time links destroyed on open. Optional expiry windows.</p></div>
-            <div className="feature-card"><h3>Photos & files</h3><p>Share screenshots or configs. Encrypted before they leave your device.</p></div>
-            <div className="feature-card"><h3>No accounts required</h3><p>Send in seconds. Optional login for a dashboard of sent secrets.</p></div>
+            <div className="feature-card anim-fade-up"><h3>Zero-knowledge</h3><p>AES-GCM encryption in your browser. We only ever see ciphertext.</p></div>
+            <div className="feature-card anim-fade-up"><h3>Burn after reading</h3><p>One-time links destroyed on open. Optional expiry windows.</p></div>
+            <div className="feature-card anim-fade-up"><h3>Photos & files</h3><p>Share screenshots or configs. Encrypted before they leave your device.</p></div>
+            <div className="feature-card anim-fade-up"><h3>No accounts required</h3><p>Send in seconds. Optional login for a dashboard of sent secrets.</p></div>
           </div>
         </div>
       </section>
 
-      <footer>
+      <footer className="anim-fade-up">
         <div className="footer-inner">
           <div className="footer-top">
             <div className="footer-brand">

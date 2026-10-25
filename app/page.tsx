@@ -59,7 +59,7 @@ export default function Home() {
 
   return (
     <>
-      <header className="container">
+      <header className="container fade-in">
         <div className="logo">Grok<span>Pass</span></div>
         <nav>
           <a href="#how">How it works</a>
@@ -70,63 +70,15 @@ export default function Home() {
       </header>
 
       <section className="hero container">
-        <h1>Send secrets that <span style={{color:'var(--accent)'}}>disappear</span></h1>
-        <p>
+        <h1 className="slide-up">Send secrets that <span style={{color:'var(--accent)'}}>disappear</span></h1>
+        <p className="slide-up delay-1">
           Zero-knowledge password and photo sharing. Encrypted in your browser.
           The key never touches our servers. Links burn after one view.
         </p>
-        <div className="hero-actions">
-          <a href="#tool" className="btn">Create a secure link</a>
-          <a href="#how" className="btn btn-outline">See how it works</a>
-        </div>
-      </section>
 
-      <section id="features" className="container">
-        <h2 className="section-title">Why teams choose GrokPass</h2>
-        <p className="section-sub">Stop pasting passwords into Slack, email, or tickets.</p>
-        <div className="grid">
-          <div className="feature-card">
-            <h3>Zero-knowledge</h3>
-            <p>Encryption happens in your browser with AES-GCM. We only ever store ciphertext. The decryption key lives only in the URL fragment.</p>
-          </div>
-          <div className="feature-card">
-            <h3>Burn after reading</h3>
-            <p>One-time links are destroyed the moment they are opened. Set automatic expiry for 1 hour, 24 hours, or 7 days.</p>
-          </div>
-          <div className="feature-card">
-            <h3>Photos & files</h3>
-            <p>Share screenshots, config files, or short notes. Everything is encrypted client-side before it leaves your device.</p>
-          </div>
-          <div className="feature-card">
-            <h3>No accounts required</h3>
-            <p>Send a secret in seconds. Optional login gives you a dashboard of what you’ve sent and whether it was opened.</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="how" className="container">
-        <h2 className="section-title">How it works</h2>
-        <p className="section-sub">Three steps. Nothing complicated.</p>
-        <div className="grid">
-          <div className="feature-card">
-            <h3>1. Paste or upload</h3>
-            <p>Type a password, API key, or drop a photo. Encryption starts immediately in your browser.</p>
-          </div>
-          <div className="feature-card">
-            <h3>2. Share the link</h3>
-            <p>Copy the unique link. The decryption key is in the # fragment and is never sent to the server.</p>
-          </div>
-          <div className="feature-card">
-            <h3>3. They open it once</h3>
-            <p>Recipient clicks Reveal. Their browser decrypts the secret locally. The link is destroyed.</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="tool" className="container">
-        <h2 className="section-title">Create a secure link</h2>
-        <p className="section-sub">Encrypted in your browser. No account needed.</p>
-        <div className="tool-card">
+        <div id="tool" className="tool-card slide-up delay-2">
+          <h2 style={{marginBottom:'0.4rem', fontSize:'1.4rem'}}>Create a secure link</h2>
+          <p style={{color:'var(--muted)', marginBottom:'1rem', fontSize:'0.95rem'}}>Encrypted in your browser. No account needed.</p>
           <textarea
             placeholder="Password, API key, note… or leave blank and attach a file"
             value={text}
@@ -160,9 +112,73 @@ export default function Home() {
         </div>
       </section>
 
-      <footer>
-        <div className="container">
-          GrokPass · Zero-knowledge secret sharing · Encrypted in your browser
+      <section id="features" className="container">
+        <h2 className="section-title fade-in">Why teams choose GrokPass</h2>
+        <p className="section-sub fade-in">Stop pasting passwords into Slack, email, or tickets.</p>
+        <div className="grid">
+          <div className="feature-card pop-in">
+            <h3>Zero-knowledge</h3>
+            <p>Encryption happens in your browser with AES-GCM. We only ever store ciphertext. The decryption key lives only in the URL fragment.</p>
+          </div>
+          <div className="feature-card pop-in delay-1">
+            <h3>Burn after reading</h3>
+            <p>One-time links are destroyed the moment they are opened. Set automatic expiry for 1 hour, 24 hours, or 7 days.</p>
+          </div>
+          <div className="feature-card pop-in delay-2">
+            <h3>Photos & files</h3>
+            <p>Share screenshots, config files, or short notes. Everything is encrypted client-side before it leaves your device.</p>
+          </div>
+          <div className="feature-card pop-in delay-3">
+            <h3>No accounts required</h3>
+            <p>Send a secret in seconds. Optional login gives you a dashboard of what you’ve sent and whether it was opened.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="how" className="container">
+        <h2 className="section-title fade-in">How it works</h2>
+        <p className="section-sub fade-in">Three steps. Nothing complicated.</p>
+        <div className="grid">
+          <div className="feature-card pop-in">
+            <h3>1. Paste or upload</h3>
+            <p>Type a password, API key, or drop a photo. Encryption starts immediately in your browser.</p>
+          </div>
+          <div className="feature-card pop-in delay-1">
+            <h3>2. Share the link</h3>
+            <p>Copy the unique link. The decryption key is in the # fragment and is never sent to the server.</p>
+          </div>
+          <div className="feature-card pop-in delay-2">
+            <h3>3. They open it once</h3>
+            <p>Recipient clicks Reveal. Their browser decrypts the secret locally. The link is destroyed.</p>
+          </div>
+        </div>
+      </section>
+
+      <footer className="fade-in">
+        <div className="container footer-grid">
+          <div>
+            <div className="logo" style={{marginBottom:'0.5rem'}}>Grok<span>Pass</span></div>
+            <p>Zero-knowledge secret sharing. Encrypted in your browser.</p>
+          </div>
+          <div>
+            <h4>Product</h4>
+            <a href="#how">How it works</a>
+            <a href="#features">Features</a>
+            <a href="#tool">Send a secret</a>
+          </div>
+          <div>
+            <h4>Account</h4>
+            <Link href="/login">Login</Link>
+            <Link href="/dashboard">Dashboard</Link>
+          </div>
+          <div>
+            <h4>Legal</h4>
+            <a href="#">Privacy</a>
+            <a href="#">Terms</a>
+          </div>
+        </div>
+        <div className="container" style={{marginTop:'2rem', paddingTop:'1rem', borderTop:'1px solid var(--border)', textAlign:'center'}}>
+          © {new Date().getFullYear()} GrokPass · Encrypted in your browser
         </div>
       </footer>
     </>

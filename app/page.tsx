@@ -4,32 +4,31 @@ import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
 import ProcessAnim from './components/ProcessAnim';
-
-function toB64(buf: ArrayBuffer | Uint8Array): string {
-  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
-  let binary = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-async function encryptFile(file: File): Promise<{ ct: string; iv: string; key: string }> {
-  if (file.size > 800 * 1024) throw new Error('File too large for browser demo (max ~800 KB).');
-  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt']);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const buffer = await file.arrayBuffer();
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, buffer);
-  const rawKey = await crypto.subtle.exportKey('raw', key);
-  return { ct: toB64(ciphertext), iv: toB64(iv), key: toB64(rawKey) };
-}
+import LimitModal from './components/LimitModal';
+import { getClientId, captureRef, type Quota } from '@/lib/quota';
+import {
+  newKey, encryptBytes, encryptJson, encryptText, randomToken,
+  MAX_FILE_BYTES, MAX_TEXT_CHARS, type SecretHeader,
+} from '@/lib/crypto';
 
 const EXPIRIES = [
-  { id: '1h', label: '1 hour' },
-  { id: '24h', label: '24 hours' },
-  { id: '7d', label: '7 days' },
+  { id: '1h', label: '1 hour', seconds: 3600 },
+  { id: '24h', label: '24 hours', seconds: 86400 },
+  { id: '7d', label: '7 days', seconds: 604800 },
 ];
+
+const TIMERS = [
+  { id: 0, label: 'Off' },
+  { id: 10, label: '10s' },
+  { id: 30, label: '30s' },
+  { id: 60, label: '60s' },
+];
+
+function formatBytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export default function Home() {
   const [user, setUser] = useState<any>(null);
@@ -37,6 +36,12 @@ export default function Home() {
   const [text, setText] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [expiry, setExpiry] = useState('24h');
+  const [timerMode, setTimerMode] = useState<number | 'custom'>(0);
+  const [customSeconds, setCustomSeconds] = useState('20');
+  const [copied, setCopied] = useState(false);
+  const [quota, setQuota] = useState<Quota | null>(null);
+  const [showLimit, setShowLimit] = useState(false);
+  const refCode = useRef<string | null>(null);
   const [link, setLink] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -51,25 +56,100 @@ export default function Home() {
     }
   }, []);
 
+  async function loadQuota() {
+    if (!supabase) return null;
+    const { data } = await supabase.rpc('get_quota', { p_client_id: getClientId(), p_ref: refCode.current });
+    const q = (Array.isArray(data) ? data[0] : null) as Quota | null;
+    if (q) setQuota(q);
+    return q;
+  }
+
+  useEffect(() => {
+    refCode.current = captureRef();
+    loadQuota();
+    try { if (new URLSearchParams(window.location.search).get('limit') === '1') setShowLimit(true); } catch {}
+  }, []);
+
+  const outOfSecrets = !!quota && quota.quota !== null && quota.used >= quota.quota;
+  const secretsLeft = quota && quota.quota !== null ? Math.max(0, quota.quota - quota.used) : null;
+
+  const timerSeconds = timerMode === 'custom'
+    ? Math.max(0, Math.min(3600, Math.floor(Number(customSeconds) || 0)))
+    : timerMode;
+
+  function pickFile(f: File | null) {
+    setError('');
+    if (f && f.size > MAX_FILE_BYTES) {
+      setFile(null);
+      setError(`That file is ${formatBytes(f.size)}. The limit is 10 MB.`);
+      return;
+    }
+    setFile(f);
+  }
+
   async function createSecret() {
     setError('');
     setEmailMsg('');
+    setCopied(false);
     if (mode === 'text' && !text.trim()) return;
     if (mode === 'file' && !file) return;
+    if (!supabase) { setError('Secure storage is not configured yet.'); return; }
+    if (mode === 'text' && text.length > MAX_TEXT_CHARS) { setError('That secret is too long (max 50,000 characters).'); return; }
+    if (mode === 'file' && file && file.size > MAX_FILE_BYTES) { setError('Files can be up to 10 MB.'); return; }
+    if (outOfSecrets) { setShowLimit(true); return; }
     setLoading(true);
     try {
-      let payload: any = { type: 'text', content: text, expiry };
+      // Everything is encrypted with AES-256-GCM in this tab before it leaves the device.
+      const { key, keyB64 } = await newKey();
+      const ttl = EXPIRIES.find(e => e.id === expiry)?.seconds ?? 86400;
+      const header: SecretHeader = mode === 'file' && file
+        ? { v: 1, type: 'file', name: file.name, mime: file.type || 'application/octet-stream', size: file.size, timer: timerSeconds }
+        : { v: 1, type: 'text', timer: timerSeconds };
+      const encHeader = await encryptJson(key, header);
+
+      let body: string | null = null;
+      let filePath: string | null = null;
       if (mode === 'file' && file) {
-        const enc = await encryptFile(file);
-        payload = { type: 'file', name: file.name, mime: file.type, expiry, ...enc };
+        const ct = await encryptBytes(key, await file.arrayBuffer());
+        filePath = `f/${randomToken(24)}.bin`;
+        const { error: upErr } = await supabase.storage.from('secrets').upload(
+          filePath,
+          ct,
+          { contentType: 'application/octet-stream', upsert: false },
+        );
+        if (upErr) throw new Error('Upload failed. Please try again.');
+      } else {
+        body = await encryptText(key, text);
       }
-      const id = crypto.randomUUID().slice(0, 8);
-      const share = `${window.location.origin}/s/${id}#${btoa(JSON.stringify(payload))}`;
-      setLink(share);
+
+      const { data: id, error: rpcErr } = await supabase.rpc('create_secret', {
+        p_header: encHeader, p_body: body, p_file_path: filePath, p_ttl_seconds: ttl,
+        p_client_id: getClientId(), p_ref: refCode.current,
+      });
+      if (rpcErr && /quota_exceeded/.test(rpcErr.message || '')) {
+        if (filePath) supabase.storage.from('secrets').remove([filePath]).catch(() => {});
+        await loadQuota();
+        setShowLimit(true);
+        setLoading(false);
+        return;
+      }
+      if (rpcErr || !id) throw new Error('Could not create the link. Please try again.');
+      setQuota(q => (q ? { ...q, used: q.used + 1 } : q));
+
+      setLink(`${window.location.origin}/s/${id}#${keyB64}`);
+      setText('');
+      setFile(null);
     } catch (e) {
-      setError((e as Error).message);
+      setError((e as Error).message || 'Something went wrong.');
     }
     setLoading(false);
+  }
+
+  function copyLink() {
+    navigator.clipboard.writeText(link).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   }
 
   async function sendEmail() {
@@ -143,8 +223,8 @@ export default function Home() {
           </div>
           <div className="tool-body">
             <div className="tabs" role="group" aria-label="Secret type">
-              <button type="button" className={`tab ${mode === 'text' ? 'tab-on' : ''}`} onClick={() => { setMode('text'); setFile(null); }} aria-pressed={mode === 'text'}>Text or password</button>
-              <button type="button" className={`tab ${mode === 'file' ? 'tab-on' : ''}`} onClick={() => { setMode('file'); setText(''); }} aria-pressed={mode === 'file'}>Photo or file</button>
+              <button type="button" className={`tab ${mode === 'text' ? 'tab-on' : ''}`} onClick={() => { setMode('text'); setFile(null); setError(''); }} aria-pressed={mode === 'text'}>Text or password</button>
+              <button type="button" className={`tab ${mode === 'file' ? 'tab-on' : ''}`} onClick={() => { setMode('file'); setText(''); setError(''); }} aria-pressed={mode === 'file'}>Photo or file</button>
             </div>
 
             {mode === 'text' ? (
@@ -155,10 +235,10 @@ export default function Home() {
             ) : (
               <div>
                 <label className="field-label">Your file</label>
-                <div className="dropzone" onClick={() => fileRef.current?.click()} onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('drag'); }} onDragLeave={e => e.currentTarget.classList.remove('drag')} onDrop={e => { e.preventDefault(); e.currentTarget.classList.remove('drag'); const f = e.dataTransfer.files?.[0]; if (f) setFile(f); }}>
+                <div className="dropzone" onClick={() => fileRef.current?.click()} onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('drag'); }} onDragLeave={e => e.currentTarget.classList.remove('drag')} onDrop={e => { e.preventDefault(); e.currentTarget.classList.remove('drag'); const f = e.dataTransfer.files?.[0]; if (f) pickFile(f); }}>
                   <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#A3ABB6" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m17 8-5-5-5 5" /><path d="M12 3v12" /></svg>
-                  {file ? (<><span style={{color:'#E6E8EB', fontSize:15}}>{file.name}</span><span style={{color:'#8A93A0', fontSize:13}}>{Math.round(file.size/1024)} KB · click to change</span></>) : (<><span style={{fontSize:15, color:'#E6E8EB'}}>Drop a photo or file, or <span style={{color:'var(--gp-accent)', textDecoration:'underline'}}>browse</span></span><span style={{fontSize:13, color:'#8A93A0'}}>Max ~800 KB</span></>)}
-                  <input ref={fileRef} type="file" accept="image/*,.pdf,.txt,.json" style={{display:'none'}} onChange={e => setFile(e.target.files?.[0] || null)} />
+                  {file ? (<><span style={{color:'#E6E8EB', fontSize:15}}>{file.name}</span><span style={{color:'#8A93A0', fontSize:13}}>{formatBytes(file.size)} · click to change</span></>) : (<><span style={{fontSize:15, color:'#E6E8EB'}}>Drop a photo or file, or <span style={{color:'var(--gp-accent)', textDecoration:'underline'}}>browse</span></span><span style={{fontSize:13, color:'#8A93A0'}}>Images, PDF, TXT or JSON · up to 10 MB</span></>)}
+                  <input ref={fileRef} type="file" accept="image/*,.pdf,.txt,.json" style={{display:'none'}} onChange={e => pickFile(e.target.files?.[0] || null)} />
                 </div>
               </div>
             )}
@@ -172,27 +252,56 @@ export default function Home() {
               </div>
             </div>
 
+            <div>
+              <div className="field-label">Viewer timer</div>
+              <div className="pills">
+                {TIMERS.map(t => (
+                  <button key={t.id} type="button" className={`pill-btn ${timerMode === t.id ? 'pill-on' : ''}`} onClick={() => setTimerMode(t.id)} aria-pressed={timerMode === t.id}>{t.label}</button>
+                ))}
+                <button type="button" className={`pill-btn ${timerMode === 'custom' ? 'pill-on' : ''}`} onClick={() => setTimerMode('custom')} aria-pressed={timerMode === 'custom'}>Custom</button>
+              </div>
+              {timerMode === 'custom' && (
+                <div className="timer-custom">
+                  <label htmlFor="gp-seconds">Seconds</label>
+                  <input id="gp-seconds" type="number" inputMode="numeric" min={1} max={3600} step={1} value={customSeconds} onChange={e => setCustomSeconds(e.target.value)} />
+                  <span>1–3600</span>
+                </div>
+              )}
+              <p className="field-hint">
+                {timerSeconds > 0
+                  ? `Once opened, the secret vanishes after ${timerSeconds} second${timerSeconds === 1 ? '' : 's'}.`
+                  : 'No countdown — the secret stays on screen until the viewer leaves.'}
+              </p>
+            </div>
+
+            {quota && (
+              <div className="quota-row">
+                <span>{quota.plan === 'plus' ? 'OnePass+ · unlimited secrets' : `${secretsLeft} of ${quota.quota} free secrets left`}</span>
+                {quota.plan !== 'plus' && <button type="button" onClick={() => setShowLimit(true)}>Get more</button>}
+              </div>
+            )}
+
             <div className="burn-notice">
               <span>🔥</span>
               <span>Burns after one view — even if it hasn’t expired yet.</span>
             </div>
 
-            <button className="gp-btn" onClick={createSecret} disabled={loading || !canCreate} style={{width:'100%', justifyContent:'center', fontSize:16, padding:'14px 18px'}}>
+            <button className="gp-btn" onClick={createSecret} disabled={loading || !canCreate || (timerMode === 'custom' && timerSeconds < 1)} style={{width:'100%', justifyContent:'center', fontSize:16, padding:'14px 18px'}}>
               {loading ? 'Encrypting…' : <>Create secure link <span className="gp-arrow">→</span></>}
             </button>
 
             {error && <p className="warning">{error}</p>}
             {link && (
-              <div>
-                <p style={{marginBottom:8, fontSize:14, color:'#A3ABB6'}}>Share this link:</p>
-                <div className="link-box">{link}</div>
+              <div className="link-result">
+                <p style={{marginBottom:8, fontSize:14, color:'#A3ABB6'}}>Share this link — it works once:</p>
+                <div className="link-box" title={link}>{link}</div>
                 <div style={{display:'flex', gap:8, marginTop:8}}>
-                  <button className="gp-btn gp-ghost" onClick={() => navigator.clipboard.writeText(link)} style={{flex:1, justifyContent:'center'}}>Copy link</button>
+                  <button className="gp-btn gp-ghost" onClick={copyLink} style={{flex:1, justifyContent:'center'}}>{copied ? 'Copied ✓' : 'Copy link'}</button>
                 </div>
                 <div style={{marginTop:14}}>
-                  <label className="field-label">Email the link</label>
+                  <label className="field-label" htmlFor="gp-email">Email the link</label>
                   <div style={{display:'flex', gap:8}}>
-                    <input type="email" placeholder="recipient@email.com" value={emailTo} onChange={e => setEmailTo(e.target.value)} style={{flex:1, background:'#0A0C0F', border:'1px solid #262C35', borderRadius:8, padding:'10px 12px', color:'#E6E8EB', fontSize:14}} />
+                    <input id="gp-email" type="email" placeholder="recipient@email.com" value={emailTo} onChange={e => setEmailTo(e.target.value)} style={{flex:1, background:'#0A0C0F', border:'1px solid #262C35', borderRadius:8, padding:'10px 12px', color:'#E6E8EB', fontSize:14}} />
                     <button className="gp-btn" onClick={sendEmail} disabled={sending || !emailTo.trim()} style={{whiteSpace:'nowrap'}}>{sending ? 'Sending…' : 'Send'}</button>
                   </div>
                   {emailMsg && <p style={{marginTop:6, fontSize:13, color: emailMsg === 'Sent' ? 'var(--gp-accent)' : 'var(--danger)'}}>{emailMsg}</p>}
@@ -268,7 +377,7 @@ export default function Home() {
 
       <section className="cta-section">
         <div className="container cta-inner">
-          <h2>Your next password shouldn’t outlive the conversation.</h2>
+          <h2>Your next password shouldn’t<br />outlive the conversation.</h2>
           <p>Encrypted in your browser. Read once. Gone for good.</p>
           <div className="cta-btns">
             <a href="#send" className="gp-btn">Send a secret →</a>
@@ -299,6 +408,8 @@ export default function Home() {
           </div>
         </div>
       </footer>
+
+      {showLimit && <LimitModal quota={quota} onClose={() => setShowLimit(false)} />}
     </div>
   );
 }

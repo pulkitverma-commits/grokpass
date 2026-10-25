@@ -1,71 +1,132 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
+import { supabase } from '@/lib/supabase';
+import { importKey, decryptJson, decryptText, decryptBytes, type SecretHeader } from '@/lib/crypto';
+
+type Phase = 'loading' | 'ready' | 'opening' | 'revealed' | 'vanished' | 'error';
+
+function formatBytes(n?: number) {
+  if (!n && n !== 0) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export default function RevealPage() {
   const params = useParams();
-  const [secret, setSecret] = useState<any>(null);
-  const [revealed, setRevealed] = useState(false);
+  const id = String(params?.id || '');
+  const [phase, setPhase] = useState<Phase>('loading');
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [header, setHeader] = useState<SecretHeader | null>(null);
+  const [text, setText] = useState('');
+  const [fileUrl, setFileUrl] = useState('');
+  const [remaining, setRemaining] = useState(0);
+  const [fading, setFading] = useState(false);
+  const keyRef = useRef<CryptoKey | null>(null);
+  const urlRef = useRef('');
 
+  // Load: read the key from the #fragment and peek at the (encrypted) header. Peeking does not burn.
   useEffect(() => {
-    const hash = window.location.hash.slice(1);
-    if (!hash) {
-      setError('This link is invalid or has already been destroyed.');
-      setLoading(false);
+    (async () => {
+      const keyB64 = window.location.hash.slice(1);
+      if (!id || !keyB64) {
+        setError('This link is incomplete. Ask the sender to share the full link.');
+        setPhase('error');
+        return;
+      }
+      if (!supabase) {
+        setError('Secure storage is not configured.');
+        setPhase('error');
+        return;
+      }
+      try {
+        keyRef.current = await importKey(keyB64);
+      } catch {
+        setError('This link is damaged. Ask the sender to share it again.');
+        setPhase('error');
+        return;
+      }
+      const { data, error: peekErr } = await supabase.rpc('peek_secret', { p_id: id });
+      const row = Array.isArray(data) ? data[0] : null;
+      if (peekErr || !row) {
+        setError('This secret has already been opened, or it has expired.');
+        setPhase('error');
+        return;
+      }
+      try {
+        setHeader(await decryptJson<SecretHeader>(keyRef.current, row.header));
+        setPhase('ready');
+      } catch {
+        setError('This link’s key doesn’t match the secret. Ask the sender to share it again.');
+        setPhase('error');
+      }
+    })();
+  }, [id]);
+
+  // Wipe decrypted data from memory when leaving the page.
+  useEffect(() => () => { if (urlRef.current) URL.revokeObjectURL(urlRef.current); }, []);
+
+  async function reveal() {
+    if (!supabase || !keyRef.current || !header) return;
+    setPhase('opening');
+    const { data, error: openErr } = await supabase.rpc('open_secret', { p_id: id });
+    const row = Array.isArray(data) ? data[0] : null;
+    // Drop the key from the address bar so it isn't left in history.
+    history.replaceState(null, '', window.location.pathname);
+    if (openErr || !row) {
+      setError('This secret has already been opened, or it has expired.');
+      setPhase('error');
       return;
     }
     try {
-      const data = JSON.parse(atob(hash));
-      setSecret(data);
-    } catch {
-      setError('Could not read this secret. The link may be corrupted.');
-    }
-    setLoading(false);
-  }, []);
-
-  async function reveal() {
-    if (!secret) return;
-    if (secret.type === 'file') {
-      const fromB64 = (s: string) => {
-        s = s.replace(/-/g, '+').replace(/_/g, '/');
-        while (s.length % 4) s += '=';
-        const bin = atob(s);
-        const buf = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-        return buf;
-      };
-      try {
-        const ct = fromB64(secret.ct);
-        const iv = fromB64(secret.iv);
-        const rawKey = fromB64(secret.key);
-        const key = await crypto.subtle.importKey('raw', rawKey, 'AES-GCM', false, ['decrypt']);
-        const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
-        const blob = new Blob([plain], { type: secret.mime || 'application/octet-stream' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = secret.name || 'secret-file';
-        a.click();
-        URL.revokeObjectURL(url);
-        if (secret.mime?.startsWith('image/')) {
-          setSecret({ ...secret, preview: url });
-        }
-      } catch {
-        setError('Failed to decrypt the file.');
-        return;
+      if (row.body) {
+        setText(await decryptText(keyRef.current, row.body));
+      } else if (row.file_path) {
+        const { data: blob, error: dlErr } = await supabase.storage.from('secrets').download(row.file_path);
+        if (dlErr || !blob) throw new Error('download');
+        const plain = await decryptBytes(keyRef.current, new Uint8Array(await blob.arrayBuffer()));
+        const url = URL.createObjectURL(new Blob([plain], { type: header.mime || 'application/octet-stream' }));
+        urlRef.current = url;
+        setFileUrl(url);
+        // Ciphertext is no longer needed anywhere: delete it from storage now.
+        supabase.storage.from('secrets').remove([row.file_path]).catch(() => {});
       }
+      setPhase('revealed');
+      if (header.timer && header.timer > 0) setRemaining(header.timer);
+    } catch {
+      setError('We couldn’t decrypt this secret. The link may be damaged.');
+      setPhase('error');
     }
-    setRevealed(true);
-    history.replaceState(null, '', window.location.pathname);
   }
+
+  // Viewer timer: count down, then make the secret vanish.
+  useEffect(() => {
+    if (phase !== 'revealed' || !header?.timer) return;
+    if (remaining <= 0) {
+      setFading(true);
+      const t = setTimeout(() => {
+        setText('');
+        if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+        urlRef.current = '';
+        setFileUrl('');
+        setFading(false);
+        setPhase('vanished');
+      }, 600);
+      return () => clearTimeout(t);
+    }
+    const t = setTimeout(() => setRemaining(r => r - 1), 1000);
+    return () => clearTimeout(t);
+  }, [phase, remaining, header]);
+
+  const isImage = !!header?.mime?.startsWith('image/');
+  const timer = header?.timer || 0;
+  const low = timer > 0 && remaining <= Math.min(5, Math.ceil(timer / 3));
 
   return (
     <div style={{ position: 'relative', minHeight: '100vh', background: '#0A0C0F' }}>
-      {/* Animated background */}
       <div className="bg-layer" aria-hidden="true">
         <div className="gp-grid" />
         <div className="gp-glow gp-glow-a" />
@@ -84,26 +145,26 @@ export default function RevealPage() {
       </header>
 
       <main style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 'calc(100vh - 80px)', padding: '40px 24px' }}>
-        <div className="tool-card" style={{ width: '100%', maxWidth: 560 }}>
+        <div className="tool-card" style={{ width: '100%', maxWidth: 620 }}>
           <div className="tool-header">
             <div className="dots"><span /><span /><span /></div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span>🔒</span>
-              <span>one-time secret</span>
+              <span>one-time secret · AES-256-GCM</span>
             </div>
           </div>
 
-          <div className="tool-body" style={{ gap: 20 }}>
-            {loading && (
-              <p style={{ color: '#A3ABB6', textAlign: 'center' }}>Loading…</p>
+          <div className="tool-body" style={{ gap: 18 }}>
+            {(phase === 'loading') && (
+              <p style={{ color: '#A3ABB6', textAlign: 'center', margin: 0 }}>Checking your link…</p>
             )}
 
-            {!loading && error && (
+            {phase === 'error' && (
               <>
-                <h2 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 400, color: '#F4F5F6' }}>Link destroyed</h2>
+                <h2 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 400, color: '#F4F5F6' }}>Nothing to reveal</h2>
                 <p className="warning" style={{ margin: 0 }}>{error}</p>
                 <p style={{ color: '#A3ABB6', fontSize: '0.95rem', margin: 0 }}>
-                  OnePass links can only be opened once. After the secret is revealed, the link is permanently destroyed.
+                  OnePass secrets can be opened only once. After that, they’re permanently deleted.
                 </p>
                 <Link href="/" className="gp-btn" style={{ justifyContent: 'center', textDecoration: 'none', marginTop: 8 }}>
                   Send a new secret
@@ -111,58 +172,86 @@ export default function RevealPage() {
               </>
             )}
 
-            {!loading && secret && !error && (
+            {(phase === 'ready' || phase === 'opening') && header && (
               <>
-                <h2 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 400, color: '#F4F5F6' }}>
-                  Someone sent you a secret
-                </h2>
-                <p style={{ color: '#A3ABB6', margin: 0, fontSize: '0.95rem' }}>
-                  {secret.type === 'file' ? `File: ${secret.name}` : 'Text or password'}
+                <h2 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 400, color: '#F4F5F6' }}>Someone sent you a secret</h2>
+                <div className="reveal-meta">
+                  <span className="reveal-chip">{header.type === 'file' ? (isImage ? 'Image' : 'File') : 'Text'}</span>
+                  {header.type === 'file' && header.size ? <span className="reveal-chip">{formatBytes(header.size)}</span> : null}
+                  {timer > 0 && <span className="reveal-chip accent">⏱ vanishes {timer}s after opening</span>}
+                  <span className="reveal-chip">1 view</span>
+                </div>
+                <p style={{ color: '#C9CED6', margin: 0, fontSize: '0.95rem' }}>
+                  It will be decrypted in your browser. As soon as you open it, it’s deleted from OnePass — this link won’t work again.
+                  {timer > 0 && ` You’ll have ${timer} second${timer === 1 ? '' : 's'} to view it.`}
                 </p>
+                <button className="gp-btn" onClick={reveal} disabled={phase === 'opening'} style={{ width: '100%', justifyContent: 'center' }}>
+                  {phase === 'opening' ? 'Decrypting…' : 'Reveal secret'}
+                </button>
+              </>
+            )}
 
-                {!revealed ? (
-                  <>
-                    <p style={{ color: '#C9CED6', margin: 0, fontSize: '0.95rem' }}>
-                      This secret is encrypted in your browser. Click below to reveal it. The link will be destroyed immediately after.
-                    </p>
-                    <button className="gp-btn" onClick={reveal} style={{ width: '100%', justifyContent: 'center' }}>
-                      Reveal secret
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    {secret.type === 'text' && (
-                      <pre style={{
-                        whiteSpace: 'pre-wrap',
-                        background: '#0A0C0F',
-                        border: '1px solid #262C35',
-                        borderRadius: 10,
-                        padding: 16,
-                        fontFamily: "'Geist Mono', ui-monospace, monospace",
-                        fontSize: 14,
-                        color: '#E6E8EB',
-                        margin: 0,
-                        overflowX: 'auto'
-                      }}>
-                        {secret.content}
-                      </pre>
-                    )}
-                    {secret.type === 'file' && (
-                      <div>
-                        <p style={{ color: '#C9CED6', margin: '0 0 12px' }}>Downloaded: <strong>{secret.name}</strong></p>
-                        {secret.preview && (
-                          <img src={secret.preview} alt="preview" style={{ maxWidth: '100%', borderRadius: 8, border: '1px solid #262C35' }} />
-                        )}
-                      </div>
-                    )}
-                    <p className="warning" style={{ margin: 0 }}>
-                      This link has been destroyed. You cannot open it again.
-                    </p>
-                    <Link href="/" className="gp-btn gp-ghost" style={{ justifyContent: 'center', textDecoration: 'none' }}>
-                      Send your own secret
-                    </Link>
-                  </>
+            {phase === 'revealed' && header && (
+              <>
+                {timer > 0 && (
+                  <div className="countdown" role="timer" aria-live="polite">
+                    <div className="countdown-row">
+                      <span>Vanishes in</span>
+                      <strong className={low ? 'low' : ''}>{Math.max(0, remaining)}s</strong>
+                    </div>
+                    <div className="countdown-track">
+                      <div className={`countdown-fill ${low ? 'low' : ''}`} style={{ width: `${(Math.max(0, remaining) / timer) * 100}%` }} />
+                    </div>
+                  </div>
                 )}
+
+                <div className={fading ? 'vanishing' : ''} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {header.type === 'text' && (
+                    <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: '#0A0C0F', border: '1px solid #262C35', borderRadius: 10, padding: 16, fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 14, color: '#E6E8EB', margin: 0, maxHeight: '50vh', overflow: 'auto' }}>
+                      {text}
+                    </pre>
+                  )}
+                  {header.type === 'text' && (
+                    <button className="gp-btn gp-ghost" onClick={() => navigator.clipboard.writeText(text)} style={{ justifyContent: 'center' }}>
+                      Copy secret
+                    </button>
+                  )}
+
+                  {header.type === 'file' && fileUrl && isImage && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={fileUrl} alt={header.name || 'Secret image'} className="reveal-image" draggable={false} onContextMenu={e => e.preventDefault()} />
+                  )}
+                  {header.type === 'file' && fileUrl && !isImage && (
+                    <div className="file-card">
+                      <span aria-hidden="true" style={{ fontSize: 22 }}>📄</span>
+                      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                        <span style={{ color: '#F4F5F6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{header.name}</span>
+                        <span style={{ color: '#8A93A0', fontSize: 13 }}>{formatBytes(header.size)}</span>
+                      </div>
+                    </div>
+                  )}
+                  {header.type === 'file' && fileUrl && (
+                    <a href={fileUrl} download={header.name || 'secret-file'} className="gp-btn" style={{ justifyContent: 'center', textDecoration: 'none' }}>
+                      Download {isImage ? 'image' : 'file'}
+                    </a>
+                  )}
+                </div>
+
+                <p className="warning" style={{ margin: 0 }}>
+                  This secret has been deleted from OnePass. The link won’t work again.
+                </p>
+              </>
+            )}
+
+            {phase === 'vanished' && (
+              <>
+                <h2 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 400, color: '#F4F5F6' }}>The secret has vanished</h2>
+                <p style={{ color: '#A3ABB6', fontSize: '0.95rem', margin: 0 }}>
+                  The viewing time set by the sender ran out. It’s gone from this page and from OnePass.
+                </p>
+                <Link href="/" className="gp-btn gp-ghost" style={{ justifyContent: 'center', textDecoration: 'none' }}>
+                  Send your own secret
+                </Link>
               </>
             )}
           </div>

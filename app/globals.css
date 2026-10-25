@@ -330,7 +330,10 @@ section { position: relative; z-index: 1; }
 }
 .feat:nth-child(3) { border-right: none; }
 .feat.wide { grid-column: 1 / -1; border-right: none; border-bottom: none; }
-.feat-icon { font-size: 22px; margin-bottom: 12px; }
+.feat-icon { margin-bottom: 14px; width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: var(--gp-accent); background: color-mix(in srgb, var(--gp-accent) 8%, transparent); border: 1px solid color-mix(in srgb, var(--gp-accent) 22%, transparent); }
+.feat-icon.ic-burn { color: #FF9F5A; background: rgba(255,159,90,.08); border-color: rgba(255,159,90,.25); }
+.ic-accent { color: var(--gp-accent); }
+.burn-notice .ic-burn, .ic-burn { color: #FF9F5A; }
 .feat h3 { margin: 0 0 8px; font-size: 18px; font-weight: 400; color: #F4F5F6; }
 .feat p { margin: 0; font-size: 14.5px; color: #A3ABB6; line-height: 1.55; }
 @media (max-width: 760px) {
@@ -472,3 +475,43 @@ footer {
 .auth-switch button:hover { text-decoration: underline; }
 .auth-perks { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 4px; }
 .auth-perks span { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; letter-spacing: .4px; color: #8A93A0; border: 1px solid #262C35; border-radius: 999px; padding: 4px 10px; }
+.auth-social { display: flex; flex-direction: column; gap: 10px; }
+.auth-social-btn {
+  width: 100%; min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 12px;
+  background: #F4F5F6; color: #111316; border: 1px solid #F4F5F6; border-radius: 10px; cursor: pointer;
+  font-family: inherit; font-size: 15px; transition: transform .2s, box-shadow .2s, background-color .2s;
+}
+.auth-social-btn:hover:not(:disabled) { transform: translateY(-1px); background: #fff; box-shadow: 0 10px 24px -12px rgba(255,255,255,.35); }
+.auth-social-btn:disabled { opacity: .6; cursor: default; }
+.auth-social-btn:focus-visible { outline: 2px solid var(--gp-accent); outline-offset: 2px; }
+.auth-divider { display: flex; align-items: center; gap: 12px; color: #6E7784; font-size: 12.5px; }
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: #262C35; }
+
+/* Encryption section */
+.enc-section { border-top: 1px solid rgba(255,255,255,0.07); background: rgba(13,16,20,0.6); }
+.enc-grid { display: flex; flex-wrap: wrap; gap: 56px; align-items: center; }
+.enc-copy { flex: 1 1 440px; min-width: 0; }
+.enc-list { list-style: none; padding: 0; margin: 28px 0 0; display: flex; flex-direction: column; gap: 16px; }
+.enc-list li { display: flex; gap: 14px; align-items: flex-start; font-size: 15.5px; color: #A3ABB6; line-height: 1.55; }
+.enc-list li svg { margin-top: 3px; }
+.enc-list strong { color: #F4F5F6; font-weight: 400; }
+.enc-visual {
+  flex: 1 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 14px; padding: 28px;
+  border: 1px solid #262C35; border-radius: 16px; background: rgba(10,12,15,0.85); box-shadow: 0 24px 64px rgba(0,0,0,.45);
+}
+.enc-row { display: flex; flex-direction: column; gap: 8px; }
+.enc-label { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11.5px; letter-spacing: 1px; color: #6E7784; }
+.enc-row code {
+  display: flex; align-items: center; gap: 8px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 14px;
+  padding: 14px 16px; border-radius: 10px; background: #0D1014; border: 1px solid #1E232A; word-break: break-all;
+}
+.enc-plain { color: #F4F5F6; }
+.enc-cipher { color: #8A93A0; animation: encShimmer 3.5s ease-in-out infinite; }
+.enc-none { color: #FF9F5A; }
+@keyframes encShimmer { 0%,100% { opacity: .65; } 50% { opacity: 1; } }
+.enc-arrow { display: flex; align-items: center; gap: 8px; color: var(--gp-accent); font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; padding-left: 4px; }
+.enc-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin-top: 6px; background: #232831; border: 1px solid #232831; border-radius: 12px; overflow: hidden; }
+.enc-stats div { background: #0D1014; padding: 14px 12px; display: flex; flex-direction: column; gap: 2px; text-align: center; }
+.enc-stats strong { font-size: 22px; font-weight: 400; color: var(--gp-accent); }
+.enc-stats span { font-size: 12.5px; color: #8A93A0; }
+@media (prefers-reduced-motion: reduce) { .enc-cipher { animation: none; } }

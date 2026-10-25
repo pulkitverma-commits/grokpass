@@ -162,17 +162,38 @@ export default function Home() {
       </section>
 
       <footer>
-        <div className="container footer-grid">
-          <div>
-            <div className="logo" style={{marginBottom:'0.5rem'}}><span className="logo-mark">1</span><span>OnePass</span></div>
-            <p>Zero-knowledge secret sharing. Encrypted in your browser.</p>
+        <div className="footer-inner">
+          <div className="footer-top">
+            <div className="footer-brand">
+              <div className="logo" style={{fontSize:19}}>
+                <span className="logo-mark" style={{width:26, height:26, fontSize:16}}>1</span>
+                <span>OnePass</span>
+              </div>
+              <p>Zero-knowledge secret sharing. Encrypted in your browser.</p>
+            </div>
+            <div className="footer-navs">
+              <nav className="footer-nav">
+                <span>PRODUCT</span>
+                <a href="#how">How it works</a>
+                <a href="#features">Features</a>
+                <a href="#send">Send a secret</a>
+              </nav>
+              <nav className="footer-nav">
+                <span>ACCOUNT</span>
+                <Link href="/login">Login</Link>
+                <Link href="/dashboard">Dashboard</Link>
+              </nav>
+              <nav className="footer-nav">
+                <span>LEGAL</span>
+                <a href="#">Privacy</a>
+                <a href="#">Terms</a>
+              </nav>
+            </div>
           </div>
-          <div><h4>Product</h4><a href="#how">How it works</a><a href="#features">Features</a><a href="#send">Send a secret</a></div>
-          <div><h4>Account</h4><Link href="/login">Login</Link><Link href="/dashboard">Dashboard</Link></div>
-          <div><h4>Legal</h4><a href="#">Privacy</a><a href="#">Terms</a></div>
-        </div>
-        <div className="container" style={{marginTop:'2rem', paddingTop:'1rem', borderTop:'1px solid rgba(255,255,255,0.07)', textAlign:'center', color:'#A3ABB6'}}>
-          © {new Date().getFullYear()} OnePass · Encrypted in your browser
+          <div className="footer-bottom">
+            <span>© {new Date().getFullYear()} OnePass</span>
+            <span>encrypted in your browser · AES-GCM</span>
+          </div>
         </div>
       </footer>
     </div>

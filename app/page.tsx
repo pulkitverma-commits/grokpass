@@ -142,96 +142,36 @@ export default function Home() {
             </div>
           </div>
           <div className="tool-body">
-            {/* Tabs */}
             <div className="tabs" role="group" aria-label="Secret type">
-              <button
-                type="button"
-                className={`tab ${mode === 'text' ? 'tab-on' : ''}`}
-                onClick={() => { setMode('text'); setFile(null); }}
-                aria-pressed={mode === 'text'}
-              >
-                Text or password
-              </button>
-              <button
-                type="button"
-                className={`tab ${mode === 'file' ? 'tab-on' : ''}`}
-                onClick={() => { setMode('file'); setText(''); }}
-                aria-pressed={mode === 'file'}
-              >
-                Photo or file
-              </button>
+              <button type="button" className={`tab ${mode === 'text' ? 'tab-on' : ''}`} onClick={() => { setMode('text'); setFile(null); }} aria-pressed={mode === 'text'}>Text or password</button>
+              <button type="button" className={`tab ${mode === 'file' ? 'tab-on' : ''}`} onClick={() => { setMode('file'); setText(''); }} aria-pressed={mode === 'file'}>Photo or file</button>
             </div>
 
             {mode === 'text' ? (
               <div>
                 <label htmlFor="gp-secret" className="field-label">Your secret</label>
-                <textarea
-                  id="gp-secret"
-                  placeholder="Password, API key, note…"
-                  value={text}
-                  onChange={e => setText(e.target.value)}
-                />
+                <textarea id="gp-secret" placeholder="Password, API key, note…" value={text} onChange={e => setText(e.target.value)} />
               </div>
             ) : (
               <div>
                 <label className="field-label">Your file</label>
-                <div
-                  className="dropzone"
-                  onClick={() => fileRef.current?.click()}
-                  onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('drag'); }}
-                  onDragLeave={e => e.currentTarget.classList.remove('drag')}
-                  onDrop={e => {
-                    e.preventDefault();
-                    e.currentTarget.classList.remove('drag');
-                    const f = e.dataTransfer.files?.[0];
-                    if (f) setFile(f);
-                  }}
-                >
-                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#A3ABB6" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <path d="m17 8-5-5-5 5" />
-                    <path d="M12 3v12" />
-                  </svg>
-                  {file ? (
-                    <>
-                      <span style={{color:'#E6E8EB', fontSize:15}}>{file.name}</span>
-                      <span style={{color:'#8A93A0', fontSize:13}}>{Math.round(file.size/1024)} KB · click to change</span>
-                    </>
-                  ) : (
-                    <>
-                      <span style={{fontSize:15, color:'#E6E8EB'}}>Drop a photo or file, or <span style={{color:'var(--gp-accent)', textDecoration:'underline'}}>browse</span></span>
-                      <span style={{fontSize:13, color:'#8A93A0'}}>Max ~800 KB</span>
-                    </>
-                  )}
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    accept="image/*,.pdf,.txt,.json"
-                    style={{display:'none'}}
-                    onChange={e => setFile(e.target.files?.[0] || null)}
-                  />
+                <div className="dropzone" onClick={() => fileRef.current?.click()} onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('drag'); }} onDragLeave={e => e.currentTarget.classList.remove('drag')} onDrop={e => { e.preventDefault(); e.currentTarget.classList.remove('drag'); const f = e.dataTransfer.files?.[0]; if (f) setFile(f); }}>
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#A3ABB6" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m17 8-5-5-5 5" /><path d="M12 3v12" /></svg>
+                  {file ? (<><span style={{color:'#E6E8EB', fontSize:15}}>{file.name}</span><span style={{color:'#8A93A0', fontSize:13}}>{Math.round(file.size/1024)} KB · click to change</span></>) : (<><span style={{fontSize:15, color:'#E6E8EB'}}>Drop a photo or file, or <span style={{color:'var(--gp-accent)', textDecoration:'underline'}}>browse</span></span><span style={{fontSize:13, color:'#8A93A0'}}>Max ~800 KB</span></>)}
+                  <input ref={fileRef} type="file" accept="image/*,.pdf,.txt,.json" style={{display:'none'}} onChange={e => setFile(e.target.files?.[0] || null)} />
                 </div>
               </div>
             )}
 
-            {/* Expiry */}
             <div>
               <div className="field-label">Expires after</div>
               <div className="pills">
                 {EXPIRIES.map(o => (
-                  <button
-                    key={o.id}
-                    type="button"
-                    className={`pill-btn ${expiry === o.id ? 'pill-on' : ''}`}
-                    onClick={() => setExpiry(o.id)}
-                  >
-                    {o.label}
-                  </button>
+                  <button key={o.id} type="button" className={`pill-btn ${expiry === o.id ? 'pill-on' : ''}`} onClick={() => setExpiry(o.id)}>{o.label}</button>
                 ))}
               </div>
             </div>
 
-            {/* Burn notice */}
             <div className="burn-notice">
               <span>🔥</span>
               <span>Burns after one view — even if it hasn’t expired yet.</span>
@@ -247,30 +187,18 @@ export default function Home() {
                 <p style={{marginBottom:8, fontSize:14, color:'#A3ABB6'}}>Share this link:</p>
                 <div className="link-box">{link}</div>
                 <div style={{display:'flex', gap:8, marginTop:8}}>
-                  <button className="gp-btn gp-ghost" onClick={() => navigator.clipboard.writeText(link)} style={{flex:1, justifyContent:'center'}}>
-                    Copy link
-                  </button>
+                  <button className="gp-btn gp-ghost" onClick={() => navigator.clipboard.writeText(link)} style={{flex:1, justifyContent:'center'}}>Copy link</button>
                 </div>
-
                 <div style={{marginTop:14}}>
                   <label className="field-label">Email the link</label>
                   <div style={{display:'flex', gap:8}}>
-                    <input
-                      type="email"
-                      placeholder="recipient@email.com"
-                      value={emailTo}
-                      onChange={e => setEmailTo(e.target.value)}
-                      style={{flex:1, background:'#0A0C0F', border:'1px solid #262C35', borderRadius:8, padding:'10px 12px', color:'#E6E8EB', fontSize:14}}
-                    />
-                    <button className="gp-btn" onClick={sendEmail} disabled={sending || !emailTo.trim()} style={{whiteSpace:'nowrap'}}>
-                      {sending ? 'Sending…' : 'Send'}
-                    </button>
+                    <input type="email" placeholder="recipient@email.com" value={emailTo} onChange={e => setEmailTo(e.target.value)} style={{flex:1, background:'#0A0C0F', border:'1px solid #262C35', borderRadius:8, padding:'10px 12px', color:'#E6E8EB', fontSize:14}} />
+                    <button className="gp-btn" onClick={sendEmail} disabled={sending || !emailTo.trim()} style={{whiteSpace:'nowrap'}}>{sending ? 'Sending…' : 'Send'}</button>
                   </div>
                   {emailMsg && <p style={{marginTop:6, fontSize:13, color: emailMsg === 'Sent' ? 'var(--gp-accent)' : 'var(--danger)'}}>{emailMsg}</p>}
                 </div>
               </div>
             )}
-
             <p className="tool-foot">Encrypted in your browser before anything is sent.</p>
           </div>
         </div>
@@ -281,43 +209,13 @@ export default function Home() {
           <div className="problem-copy anim-slide-left">
             <span className="eyebrow">THE PROBLEM</span>
             <h2 className="section-title" style={{marginTop:12}}>A password you paste is a password you keep sharing.</h2>
-            <p className="section-sub" style={{marginBottom:0, maxWidth:480}}>
-              Drop it into Slack, an email or a support ticket and it stays there — searchable, forwardable and backed up long after anyone needs it. OnePass gives every secret exactly one reading. Then there’s nothing left to find.
-            </p>
+            <p className="section-sub" style={{marginBottom:0, maxWidth:480}}>Drop it into Slack, an email or a support ticket and it stays there — searchable, forwardable and backed up long after anyone needs it. OnePass gives every secret exactly one reading. Then there’s nothing left to find.</p>
           </div>
-
           <div className="leak-stack anim-slide-right">
-            <div className="leak-card">
-              <div className="leak-head">
-                <span>#devops · chat</span>
-                <span className="leak-tag bad">STILL SEARCHABLE</span>
-              </div>
-              <p>here’s the prod db login → <code>Pr0d!x92</code></p>
-            </div>
-
-            <div className="leak-card">
-              <div className="leak-head">
-                <span>Re: server access · email</span>
-                <span className="leak-tag bad">FORWARDED 3×</span>
-              </div>
-              <p>Admin password is <code>Adm1n#2026</code> — don’t share it</p>
-            </div>
-
-            <div className="leak-card">
-              <div className="leak-head">
-                <span>SUP-1042 · ticket</span>
-                <span className="leak-tag bad">IN EVERY BACKUP</span>
-              </div>
-              <p>API key for the vendor: <code>sk_live_9fA2…</code></p>
-            </div>
-
-            <div className="leak-card good">
-              <div className="leak-head">
-                <span style={{color:'var(--gp-accent)'}}>OnePass · secret</span>
-                <span className="leak-tag good">BURNED</span>
-              </div>
-              <p>Prod db login → <span style={{color:'#FF9F5A'}}>🔥 Read once. Gone.</span></p>
-            </div>
+            <div className="leak-card"><div className="leak-head"><span>#devops · chat</span><span className="leak-tag bad">STILL SEARCHABLE</span></div><p>here’s the prod db login → <code>Pr0d!x92</code></p></div>
+            <div className="leak-card"><div className="leak-head"><span>Re: server access · email</span><span className="leak-tag bad">FORWARDED 3×</span></div><p>Admin password is <code>Adm1n#2026</code> — don’t share it</p></div>
+            <div className="leak-card"><div className="leak-head"><span>SUP-1042 · ticket</span><span className="leak-tag bad">IN EVERY BACKUP</span></div><p>API key for the vendor: <code>sk_live_9fA2…</code></p></div>
+            <div className="leak-card good"><div className="leak-head"><span style={{color:'var(--gp-accent)'}}>OnePass · secret</span><span className="leak-tag good">BURNED</span></div><p>Prod db login → <span style={{color:'#FF9F5A'}}>🔥 Read once. Gone.</span></p></div>
           </div>
         </div>
       </section>
@@ -325,7 +223,7 @@ export default function Home() {
       <section id="how" className="section-pad container">
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, marginBottom: 32 }}>
           <div>
-            <span style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 13, letterSpacing: 1, color: 'var(--gp-accent)' }}>HOW IT WORKS</span>
+            <span className="eyebrow">HOW IT WORKS</span>
             <h2 className="section-title" style={{ marginTop: 8 }}>Follow one secret from paste to burn.</h2>
             <p className="section-sub" style={{ marginBottom: 0 }}>Six steps, start to finish. Watch where the secret goes — and where the key never does.</p>
           </div>
@@ -335,12 +233,46 @@ export default function Home() {
 
       <section id="features" className="section-pad" style={{borderTop:'1px solid rgba(255,255,255,0.07)'}}>
         <div className="container">
-          <h2 className="section-title anim-fade-up">Why teams choose OnePass</h2>
-          <div className="grid">
-            <div className="feature-card anim-fade-up"><h3>Zero-knowledge</h3><p>AES-GCM encryption in your browser. We only ever see ciphertext.</p></div>
-            <div className="feature-card anim-fade-up"><h3>Burn after reading</h3><p>One-time links destroyed on open. Optional expiry windows.</p></div>
-            <div className="feature-card anim-fade-up"><h3>Photos & files</h3><p>Share screenshots or configs. Encrypted before they leave your device.</p></div>
-            <div className="feature-card anim-fade-up"><h3>No accounts required</h3><p>Send in seconds. Optional login for a dashboard of sent secrets.</p></div>
+          <div className="features-head">
+            <div>
+              <span className="eyebrow">WHY TEAMS CHOOSE ONEPASS</span>
+              <h2 className="section-title" style={{marginTop:12}}>Built so there’s nothing to leak.</h2>
+            </div>
+            <p className="features-sub">Every design decision removes something an attacker — or a careless inbox — could get hold of.</p>
+          </div>
+
+          <div className="features-grid">
+            <div className="feat">
+              <div className="feat-icon">🛡️</div>
+              <h3>Zero-knowledge</h3>
+              <p>Encryption happens in your browser with AES-GCM. We only ever store ciphertext. The decryption key lives only in the link you share.</p>
+            </div>
+            <div className="feat">
+              <div className="feat-icon">🔥</div>
+              <h3>Burn after reading</h3>
+              <p>One-time links are destroyed the moment they are opened. Set automatic expiry for 1 hour, 24 hours, or 7 days.</p>
+            </div>
+            <div className="feat">
+              <div className="feat-icon">🖼️</div>
+              <h3>Photos & files</h3>
+              <p>Share screenshots, config files, or short notes. Everything is encrypted client-side before it leaves your device.</p>
+            </div>
+            <div className="feat wide">
+              <div className="feat-icon">👁️</div>
+              <h3>Know when it’s opened</h3>
+              <p>Your dashboard shows every secret you’ve sent and whether it has been opened — without ever showing the secret itself.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="cta-section">
+        <div className="container cta-inner">
+          <h2>Your next password shouldn’t outlive the conversation.</h2>
+          <p>Encrypted in your browser. Read once. Gone for good.</p>
+          <div className="cta-btns">
+            <a href="#send" className="gp-btn">Send a secret →</a>
+            <Link href={user ? '/dashboard' : '/login'} className="gp-btn gp-ghost">Log in to your dashboard</Link>
           </div>
         </div>
       </section>
@@ -356,22 +288,9 @@ export default function Home() {
               <p>Zero-knowledge secret sharing. Encrypted in your browser.</p>
             </div>
             <div className="footer-navs">
-              <nav className="footer-nav">
-                <span>PRODUCT</span>
-                <a href="#how">How it works</a>
-                <a href="#features">Features</a>
-                <a href="#send">Send a secret</a>
-              </nav>
-              <nav className="footer-nav">
-                <span>ACCOUNT</span>
-                <Link href="/login">Login</Link>
-                <Link href="/dashboard">Dashboard</Link>
-              </nav>
-              <nav className="footer-nav">
-                <span>LEGAL</span>
-                <a href="#">Privacy</a>
-                <a href="#">Terms</a>
-              </nav>
+              <nav className="footer-nav"><span>PRODUCT</span><a href="#how">How it works</a><a href="#features">Features</a><a href="#send">Send a secret</a></nav>
+              <nav className="footer-nav"><span>ACCOUNT</span><Link href="/login">Login</Link><Link href="/dashboard">Dashboard</Link></nav>
+              <nav className="footer-nav"><span>LEGAL</span><a href="#">Privacy</a><a href="#">Terms</a></nav>
             </div>
           </div>
           <div className="footer-bottom">

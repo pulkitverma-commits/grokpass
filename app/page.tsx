@@ -193,7 +193,9 @@ export default function Home() {
           <a href="#problem">Why OnePass</a>
           <a href="#how">How it works</a>
           <a href="#features">Features</a>
-          {user ? <Link href="/dashboard">Dashboard</Link> : <Link href="/login">Login</Link>}
+          <Link href={user ? '/dashboard' : '/login'} className="nav-icon" aria-label={user ? 'Dashboard' : 'Log in'} title={user ? 'Dashboard' : 'Log in'}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>
+          </Link>
           <a href="#send" className="gp-btn">Send a secret →</a>
         </nav>
       </header>
@@ -302,7 +304,9 @@ export default function Home() {
                   <label className="field-label" htmlFor="gp-email">Email the link</label>
                   <div style={{display:'flex', gap:8}}>
                     <input id="gp-email" type="email" placeholder="recipient@email.com" value={emailTo} onChange={e => setEmailTo(e.target.value)} style={{flex:1, background:'#0A0C0F', border:'1px solid #262C35', borderRadius:8, padding:'10px 12px', color:'#E6E8EB', fontSize:14}} />
-                    <button className="gp-btn" onClick={sendEmail} disabled={sending || !emailTo.trim()} style={{whiteSpace:'nowrap'}}>{sending ? 'Sending…' : 'Send'}</button>
+                    <button type="button" className={`send-icon ${sending ? 'sending' : ''}`} onClick={sendEmail} disabled={sending || !emailTo.trim()} aria-label={sending ? 'Sending' : 'Send link by email'} title="Send">
+                      <svg viewBox="0 0 110 100" width="34" height="31" aria-hidden="true"><polygon points="4,14 108,2 58,98 50,44" fill="currentColor" /></svg>
+                    </button>
                   </div>
                   {emailMsg && <p style={{marginTop:6, fontSize:13, color: emailMsg === 'Sent' ? 'var(--gp-accent)' : 'var(--danger)'}}>{emailMsg}</p>}
                 </div>

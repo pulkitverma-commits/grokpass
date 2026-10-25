@@ -8,7 +8,9 @@ export default function Dashboard() {
   const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+    if (supabase) {
+      supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+    }
   }, []);
 
   if (!user) return <div className="card"><p>Please <Link href="/login">log in</Link>.</p></div>;

@@ -4,13 +4,17 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
 
+function toB64(buf: ArrayBuffer | Uint8Array): string {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
 async function encryptFile(file: File): Promise<{ ct: string; iv: string; key: string }> {
   const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt']);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const buffer = await file.arrayBuffer();
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, buffer);
   const rawKey = await crypto.subtle.exportKey('raw', key);
-  const toB64 = (buf: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   return { ct: toB64(ciphertext), iv: toB64(iv), key: toB64(rawKey) };
 }
 

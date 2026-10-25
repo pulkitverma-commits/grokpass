@@ -142,10 +142,22 @@ export default function Home() {
       <section id="how" className="section-pad container">
         <h2 className="section-title">How it works</h2>
         <p className="section-sub">Three steps. Nothing complicated.</p>
-        <div className="grid">
-          <div className="feature-card"><h3>1. Paste or upload</h3><p>Type a password or drop a photo. Encryption starts immediately in your browser.</p></div>
-          <div className="feature-card"><h3>2. Share the link</h3><p>The decryption key lives only in the URL fragment and is never sent to the server.</p></div>
-          <div className="feature-card"><h3>3. They open it once</h3><p>Recipient reveals the secret locally. The link is destroyed.</p></div>
+        <div className="how-grid">
+          <div className="feature-card step-card">
+            <div className="step-num">1</div>
+            <h3>Paste or upload</h3>
+            <p>Type a password or drop a photo. Encryption starts immediately in your browser.</p>
+          </div>
+          <div className="feature-card step-card">
+            <div className="step-num">2</div>
+            <h3>Share the link</h3>
+            <p>The decryption key lives only in the URL fragment and is never sent to the server.</p>
+          </div>
+          <div className="feature-card step-card">
+            <div className="step-num">3</div>
+            <h3>They open it once</h3>
+            <p>Recipient reveals the secret locally. The link is destroyed.</p>
+          </div>
         </div>
       </section>
 

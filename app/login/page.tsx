@@ -12,6 +12,10 @@ export default function LoginPage() {
   const router = useRouter();
 
   async function submit() {
+    if (!supabase) {
+      setMsg('Supabase not configured');
+      return;
+    }
     setMsg('');
     if (mode === 'signup') {
       const { error } = await supabase.auth.signUp({ email, password });

@@ -112,10 +112,10 @@ nav a:hover { color: #fff; }
 .gp-arrow { display: inline-block; transition: transform .22s cubic-bezier(.2,.8,.2,1); }
 .gp-btn:hover .gp-arrow { transform: translateX(4px); }
 
-/* Hero */
+/* Hero — tighter top padding so content sits higher */
 .hero {
   position: relative; z-index: 1;
-  padding: 88px 0 104px;
+  padding: 32px 0 72px;
   display: flex; flex-wrap: wrap; gap: 56px; align-items: center;
 }
 .hero-left { flex: 1 1 460px; min-width: 0; display: flex; flex-direction: column; gap: 28px; }
@@ -320,7 +320,7 @@ footer {
 .footer-bottom span:last-child { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; }
 
 @media (max-width: 760px) {
-  .hero { flex-direction: column; }
+  .hero { flex-direction: column; padding-top: 24px; }
   .footer-navs { gap: 32px; }
   header nav { gap: 16px; }
 }

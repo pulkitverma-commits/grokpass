@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
+import ProcessAnim from './components/ProcessAnim';
 
 function toB64(buf: ArrayBuffer | Uint8Array): string {
   const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
@@ -240,25 +241,14 @@ export default function Home() {
       </section>
 
       <section id="how" className="section-pad container">
-        <h2 className="section-title anim-fade-up">How it works</h2>
-        <p className="section-sub anim-fade-up delay-1">Three steps. Nothing complicated.</p>
-        <div className="how-grid">
-          <div className="feature-card step-card">
-            <div className="step-num">1</div>
-            <h3>Paste or upload</h3>
-            <p>Type a password or drop a photo. Encryption starts immediately in your browser.</p>
-          </div>
-          <div className="feature-card step-card">
-            <div className="step-num">2</div>
-            <h3>Share the link</h3>
-            <p>The decryption key lives only in the URL fragment and is never sent to the server.</p>
-          </div>
-          <div className="feature-card step-card">
-            <div className="step-num">3</div>
-            <h3>They open it once</h3>
-            <p>Recipient reveals the secret locally. The link is destroyed.</p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, marginBottom: 32 }}>
+          <div>
+            <span style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 13, letterSpacing: 1, color: 'var(--gp-accent)' }}>HOW IT WORKS</span>
+            <h2 className="section-title" style={{ marginTop: 8 }}>Follow one secret from paste to burn.</h2>
+            <p className="section-sub" style={{ marginBottom: 0 }}>Six steps, start to finish. Watch where the secret goes — and where the key never does.</p>
           </div>
         </div>
+        <ProcessAnim />
       </section>
 
       <section id="features" className="section-pad" style={{borderTop:'1px solid rgba(255,255,255,0.07)'}}>

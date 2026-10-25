@@ -159,6 +159,28 @@ nav a:hover { color: #fff; }
   font-weight: 400; color: #F4F5F6; margin: 0;
 }
 .hero h1 span { color: var(--gp-accent); }
+
+/* Hero typing word: accent ⇄ #FF5757 → #79DEFE gradient every 3s */
+@property --tw-a { syntax: '<color>'; inherits: true; initial-value: #D7FF39; }
+@property --tw-b { syntax: '<color>'; inherits: true; initial-value: #D7FF39; }
+.hero h1 .type-word {
+  --tw-a: var(--gp-accent); --tw-b: var(--gp-accent);
+  transition: --tw-a .9s ease, --tw-b .9s ease; white-space: nowrap; color: inherit;
+}
+.hero h1 .type-word.is-grad { --tw-a: #FF5757; --tw-b: #79DEFE; }
+.hero h1 .type-text {
+  background-image: linear-gradient(90deg, var(--tw-a), var(--tw-b));
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent; -webkit-text-fill-color: transparent;
+}
+.hero h1 .type-caret {
+  display: inline-block; width: 0.06em; min-width: 3px; height: 0.86em; margin-left: 0.06em;
+  vertical-align: -0.06em; border-radius: 2px; background: var(--tw-b);
+  animation: twBlink 1s steps(1) infinite;
+}
+@keyframes twBlink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .hero h1 .type-caret { animation: none; } }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 .hero-left > p { font-size: 19px; line-height: 1.6; color: #A3ABB6; max-width: 520px; margin: 0; }
 .checks { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 12px; font-size: 15.5px; color: #C9CED6; }
 .checks li { display: flex; align-items: center; gap: 12px; }

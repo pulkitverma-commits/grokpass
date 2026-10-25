@@ -234,9 +234,48 @@ export default function Home() {
       </section>
 
       <section id="problem" className="section-pad" style={{borderTop:'1px solid rgba(255,255,255,0.07)', borderBottom:'1px solid rgba(255,255,255,0.07)', background:'rgba(13,16,20,0.6)'}}>
-        <div className="container anim-fade-up">
-          <h2 className="section-title">A password you paste is a password you keep sharing.</h2>
-          <p className="section-sub">Slack, email, tickets — they all keep a copy. OnePass doesn’t.</p>
+        <div className="container problem-grid">
+          <div className="problem-copy anim-slide-left">
+            <span className="eyebrow">THE PROBLEM</span>
+            <h2 className="section-title" style={{marginTop:12}}>A password you paste is a password you keep sharing.</h2>
+            <p className="section-sub" style={{marginBottom:0, maxWidth:480}}>
+              Drop it into Slack, an email or a support ticket and it stays there — searchable, forwardable and backed up long after anyone needs it. OnePass gives every secret exactly one reading. Then there’s nothing left to find.
+            </p>
+          </div>
+
+          <div className="leak-stack anim-slide-right">
+            <div className="leak-card">
+              <div className="leak-head">
+                <span>#devops · chat</span>
+                <span className="leak-tag bad">STILL SEARCHABLE</span>
+              </div>
+              <p>here’s the prod db login → <code>Pr0d!x92</code></p>
+            </div>
+
+            <div className="leak-card">
+              <div className="leak-head">
+                <span>Re: server access · email</span>
+                <span className="leak-tag bad">FORWARDED 3×</span>
+              </div>
+              <p>Admin password is <code>Adm1n#2026</code> — don’t share it</p>
+            </div>
+
+            <div className="leak-card">
+              <div className="leak-head">
+                <span>SUP-1042 · ticket</span>
+                <span className="leak-tag bad">IN EVERY BACKUP</span>
+              </div>
+              <p>API key for the vendor: <code>sk_live_9fA2…</code></p>
+            </div>
+
+            <div className="leak-card good">
+              <div className="leak-head">
+                <span style={{color:'var(--gp-accent)'}}>OnePass · secret</span>
+                <span className="leak-tag good">BURNED</span>
+              </div>
+              <p>Prod db login → <span style={{color:'#FF9F5A'}}>🔥 Read once. Gone.</span></p>
+            </div>
+          </div>
         </div>
       </section>
 

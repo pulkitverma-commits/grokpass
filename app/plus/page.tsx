@@ -18,7 +18,10 @@ export default function PlusPage() {
         <div className="gp-glow gp-glow-b" />
       </div>
       <header className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', position: 'relative', zIndex: 10 }}>
-        <Link href="/" className="logo"><span className="logo-mark">1</span><span>OnePass</span></Link>
+        <Link href="/" className="logo" aria-label="OnePass home">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/onepass-logo.png" alt="OnePass" className="logo-img" width={139} height={56} />
+        </Link>
         <Link href="/#send" className="gp-btn gp-ghost" style={{ textDecoration: 'none' }}>Send a secret →</Link>
       </header>
 

@@ -40,6 +40,9 @@ export default function Home() {
   const [link, setLink] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [emailTo, setEmailTo] = useState('');
+  const [sending, setSending] = useState(false);
+  const [emailMsg, setEmailMsg] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -50,6 +53,7 @@ export default function Home() {
 
   async function createSecret() {
     setError('');
+    setEmailMsg('');
     if (mode === 'text' && !text.trim()) return;
     if (mode === 'file' && !file) return;
     setLoading(true);
@@ -66,6 +70,26 @@ export default function Home() {
       setError((e as Error).message);
     }
     setLoading(false);
+  }
+
+  async function sendEmail() {
+    if (!emailTo.trim() || !link) return;
+    setSending(true);
+    setEmailMsg('');
+    try {
+      const res = await fetch('/api/send-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: emailTo.trim(), link }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      setEmailMsg('Sent');
+      setEmailTo('');
+    } catch (e) {
+      setEmailMsg((e as Error).message);
+    }
+    setSending(false);
   }
 
   const canCreate = mode === 'text' ? !!text.trim() : !!file;
@@ -222,9 +246,28 @@ export default function Home() {
               <div>
                 <p style={{marginBottom:8, fontSize:14, color:'#A3ABB6'}}>Share this link:</p>
                 <div className="link-box">{link}</div>
-                <button className="gp-btn gp-ghost" onClick={() => navigator.clipboard.writeText(link)} style={{marginTop:8, width:'100%', justifyContent:'center'}}>
-                  Copy link
-                </button>
+                <div style={{display:'flex', gap:8, marginTop:8}}>
+                  <button className="gp-btn gp-ghost" onClick={() => navigator.clipboard.writeText(link)} style={{flex:1, justifyContent:'center'}}>
+                    Copy link
+                  </button>
+                </div>
+
+                <div style={{marginTop:14}}>
+                  <label className="field-label">Email the link</label>
+                  <div style={{display:'flex', gap:8}}>
+                    <input
+                      type="email"
+                      placeholder="recipient@email.com"
+                      value={emailTo}
+                      onChange={e => setEmailTo(e.target.value)}
+                      style={{flex:1, background:'#0A0C0F', border:'1px solid #262C35', borderRadius:8, padding:'10px 12px', color:'#E6E8EB', fontSize:14}}
+                    />
+                    <button className="gp-btn" onClick={sendEmail} disabled={sending || !emailTo.trim()} style={{whiteSpace:'nowrap'}}>
+                      {sending ? 'Sending…' : 'Send'}
+                    </button>
+                  </div>
+                  {emailMsg && <p style={{marginTop:6, fontSize:13, color: emailMsg === 'Sent' ? 'var(--gp-accent)' : 'var(--danger)'}}>{emailMsg}</p>}
+                </div>
               </div>
             )}
 

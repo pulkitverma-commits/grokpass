@@ -1,44 +1,110 @@
 'use client';
 
 import { useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
+
+type Mode = 'login' | 'signup';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
-  const [msg, setMsg] = useState('');
+  const [mode, setMode] = useState<Mode>('login');
+  const [showPass, setShowPass] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const router = useRouter();
 
-  async function submit() {
-    if (!supabase) {
-      setMsg('Supabase not configured');
-      return;
-    }
-    setMsg('');
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!supabase) { setMsg({ kind: 'err', text: 'Login is not configured yet.' }); return; }
+    setMsg(null);
+    setLoading(true);
     if (mode === 'signup') {
       const { error } = await supabase.auth.signUp({ email, password });
-      setMsg(error ? error.message : 'Check your email for confirmation (Mandrill will deliver it in production).');
+      setMsg(error ? { kind: 'err', text: error.message } : { kind: 'ok', text: 'Check your inbox to confirm your email, then log in.' });
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) setMsg(error.message);
-      else router.push('/dashboard');
+      if (error) setMsg({ kind: 'err', text: error.message });
+      else { router.push('/dashboard'); return; }
     }
+    setLoading(false);
+  }
+
+  function switchMode(m: Mode) {
+    setMode(m);
+    setMsg(null);
   }
 
   return (
-    <div className="card">
-      <h2>{mode === 'login' ? 'Login' : 'Sign up'}</h2>
-      <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
-      <input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} />
-      <button onClick={submit} style={{ marginTop: '1rem' }}>{mode === 'login' ? 'Login' : 'Create account'}</button>
-      <p style={{ marginTop: '1rem', fontSize: '0.9rem' }}>
-        <button onClick={() => setMode(mode === 'login' ? 'signup' : 'login')} style={{ background: 'transparent', color: '#7c9cff' }}>
-          {mode === 'login' ? 'Need an account?' : 'Already have one?'}
-        </button>
-      </p>
-      {msg && <p style={{ marginTop: '0.75rem' }}>{msg}</p>}
+    <div style={{ position: 'relative', minHeight: '100vh', background: '#0A0C0F' }}>
+      <div className="bg-layer" aria-hidden="true">
+        <div className="gp-grid" />
+        <div className="gp-glow gp-glow-a" />
+        <div className="gp-glow gp-glow-b" />
+        <div className="gp-scan" />
+      </div>
+
+      <header className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', position: 'relative', zIndex: 10 }}>
+        <Link href="/" className="logo" aria-label="OnePass home">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/onepass-logo.png" alt="OnePass" className="logo-img" width={139} height={56} />
+        </Link>
+        <Link href="/#send" className="gp-btn gp-ghost" style={{ textDecoration: 'none' }}>Send a secret →</Link>
+      </header>
+
+      <main className="auth-wrap">
+        <form className="auth-card" onSubmit={submit} noValidate>
+          <div className="tabs" role="group" aria-label="Account">
+            <button type="button" className={`tab ${mode === 'login' ? 'tab-on' : ''}`} aria-pressed={mode === 'login'} onClick={() => switchMode('login')}>Log in</button>
+            <button type="button" className={`tab ${mode === 'signup' ? 'tab-on' : ''}`} aria-pressed={mode === 'signup'} onClick={() => switchMode('signup')}>Sign up</button>
+          </div>
+
+          <h1>{mode === 'login' ? 'Welcome back' : 'Create your account'}</h1>
+          <p className="auth-sub">
+            {mode === 'login'
+              ? 'See every secret you’ve sent and whether it was opened.'
+              : 'Track your secrets in one place. Your secrets stay end-to-end encrypted.'}
+          </p>
+
+          <div className="auth-field">
+            <label htmlFor="auth-email">Email</label>
+            <input id="auth-email" className="auth-input" type="email" autoComplete="email" placeholder="you@company.com" value={email} onChange={e => setEmail(e.target.value)} required />
+          </div>
+
+          <div className="auth-field">
+            <label htmlFor="auth-pass">Password</label>
+            <div className="auth-pass">
+              <input id="auth-pass" className="auth-input" type={showPass ? 'text' : 'password'} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} placeholder={mode === 'login' ? 'Your password' : 'At least 6 characters'} value={password} onChange={e => setPassword(e.target.value)} required minLength={6} />
+              <button type="button" className="auth-eye" onClick={() => setShowPass(s => !s)} aria-label={showPass ? 'Hide password' : 'Show password'}>
+                {showPass ? (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3l18 18" /><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" /><path d="M9.9 5.1A9.8 9.8 0 0 1 12 5c6.5 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6C3.7 8.4 2 12 2 12s3.5 7 10 7a9.6 9.6 0 0 0 5.4-1.6" /></svg>
+                ) : (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></svg>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {msg && <p className={`auth-msg ${msg.kind}`} role={msg.kind === 'err' ? 'alert' : 'status'}>{msg.text}</p>}
+
+          <button type="submit" className="gp-btn auth-submit" disabled={loading || !email || password.length < 6}>
+            {loading ? (mode === 'login' ? 'Logging in…' : 'Creating account…') : (mode === 'login' ? 'Log in' : 'Create account')}
+          </button>
+
+          <p className="auth-switch">
+            {mode === 'login' ? 'New to OnePass? ' : 'Already have an account? '}
+            <button type="button" onClick={() => switchMode(mode === 'login' ? 'signup' : 'login')}>
+              {mode === 'login' ? 'Create an account' : 'Log in'}
+            </button>
+          </p>
+
+          <div className="auth-perks" aria-hidden="true">
+            <span>AES-256</span><span>ZERO-KNOWLEDGE</span><span>ONE VIEW ONLY</span>
+          </div>
+        </form>
+      </main>
     </div>
   );
 }

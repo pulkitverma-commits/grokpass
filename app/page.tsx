@@ -6,6 +6,7 @@ import Link from 'next/link';
 import ProcessAnim from './components/ProcessAnim';
 import LimitModal from './components/LimitModal';
 import Icon from './components/Icon';
+import TypeWord from './components/TypeWord';
 import { getClientId, captureRef, type Quota } from '@/lib/quota';
 import {
   newKey, encryptBytes, encryptJson, encryptText, randomToken,
@@ -208,7 +209,7 @@ export default function Home() {
             <span className="dot" />
             <span>AES-256-GCM · ZERO-KNOWLEDGE · ONE VIEW ONLY</span>
           </div>
-          <h1 className="anim-fade-up delay-2">Send secrets<br />that <span>disappear.</span></h1>
+          <h1 className="anim-fade-up delay-2">Send secrets<br />that <TypeWord word="disappear." /></h1>
           <p className="anim-fade-up delay-3">Zero-knowledge password and photo sharing. Encrypted in your browser. The key never touches our servers. Every secret burns after one view.</p>
           <ul className="checks anim-fade-up delay-4">
             <li><Icon name="check" className="ic-accent" />Encrypted on your device before anything is sent</li>

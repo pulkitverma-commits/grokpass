@@ -26,7 +26,9 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+    if (supabase) {
+      supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+    }
   }, []);
 
   async function createSecret() {

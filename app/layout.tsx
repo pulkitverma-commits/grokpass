@@ -4,6 +4,7 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'OnePass — Send secrets that disappear',
   description: 'Zero-knowledge one-time secret sharing',
+  icons: { icon: '/onepass-icon.png', apple: '/onepass-icon.png' },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

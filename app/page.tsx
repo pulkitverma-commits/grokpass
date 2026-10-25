@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
 
@@ -24,13 +24,22 @@ async function encryptFile(file: File): Promise<{ ct: string; iv: string; key: s
   return { ct: toB64(ciphertext), iv: toB64(iv), key: toB64(rawKey) };
 }
 
+const EXPIRIES = [
+  { id: '1h', label: '1 hour' },
+  { id: '24h', label: '24 hours' },
+  { id: '7d', label: '7 days' },
+];
+
 export default function Home() {
   const [user, setUser] = useState<any>(null);
+  const [mode, setMode] = useState<'text' | 'file'>('text');
   const [text, setText] = useState('');
   const [file, setFile] = useState<File | null>(null);
+  const [expiry, setExpiry] = useState('24h');
   const [link, setLink] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (supabase) {
@@ -40,13 +49,14 @@ export default function Home() {
 
   async function createSecret() {
     setError('');
-    if (!text && !file) return;
+    if (mode === 'text' && !text.trim()) return;
+    if (mode === 'file' && !file) return;
     setLoading(true);
     try {
-      let payload: any = { type: 'text', content: text };
-      if (file) {
+      let payload: any = { type: 'text', content: text, expiry };
+      if (mode === 'file' && file) {
         const enc = await encryptFile(file);
-        payload = { type: 'file', name: file.name, mime: file.type, ...enc };
+        payload = { type: 'file', name: file.name, mime: file.type, expiry, ...enc };
       }
       const id = crypto.randomUUID().slice(0, 8);
       const share = `${window.location.origin}/s/${id}#${btoa(JSON.stringify(payload))}`;
@@ -56,6 +66,8 @@ export default function Home() {
     }
     setLoading(false);
   }
+
+  const canCreate = mode === 'text' ? !!text.trim() : !!file;
 
   return (
     <div style={{position:'relative', minHeight:'100vh'}}>
@@ -105,29 +117,117 @@ export default function Home() {
             </div>
           </div>
           <div className="tool-body">
-            <textarea
-              placeholder="Password, API key, note… or leave blank and attach a file"
-              value={text}
-              onChange={e => setText(e.target.value)}
-            />
-            <label className="file-label">
-              Attach a photo or file (max ~800 KB)
-              <input type="file" accept="image/*,.pdf,.txt,.json" onChange={e => setFile(e.target.files?.[0] || null)} style={{marginTop:6, display:'block'}} />
-            </label>
-            {file && <p style={{fontSize:'0.85rem', color:'#A3ABB6'}}>Selected: {file.name} ({Math.round(file.size/1024)} KB)</p>}
-            <button className="gp-btn" onClick={createSecret} disabled={loading || (!text && !file)} style={{width:'100%', justifyContent:'center'}}>
-              {loading ? 'Encrypting…' : 'Create secure link'}
+            {/* Tabs */}
+            <div className="tabs" role="group" aria-label="Secret type">
+              <button
+                type="button"
+                className={`tab ${mode === 'text' ? 'tab-on' : ''}`}
+                onClick={() => { setMode('text'); setFile(null); }}
+                aria-pressed={mode === 'text'}
+              >
+                Text or password
+              </button>
+              <button
+                type="button"
+                className={`tab ${mode === 'file' ? 'tab-on' : ''}`}
+                onClick={() => { setMode('file'); setText(''); }}
+                aria-pressed={mode === 'file'}
+              >
+                Photo or file
+              </button>
+            </div>
+
+            {mode === 'text' ? (
+              <div>
+                <label htmlFor="gp-secret" className="field-label">Your secret</label>
+                <textarea
+                  id="gp-secret"
+                  placeholder="Password, API key, note…"
+                  value={text}
+                  onChange={e => setText(e.target.value)}
+                />
+              </div>
+            ) : (
+              <div>
+                <label className="field-label">Your file</label>
+                <div
+                  className="dropzone"
+                  onClick={() => fileRef.current?.click()}
+                  onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('drag'); }}
+                  onDragLeave={e => e.currentTarget.classList.remove('drag')}
+                  onDrop={e => {
+                    e.preventDefault();
+                    e.currentTarget.classList.remove('drag');
+                    const f = e.dataTransfer.files?.[0];
+                    if (f) setFile(f);
+                  }}
+                >
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#A3ABB6" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <path d="m17 8-5-5-5 5" />
+                    <path d="M12 3v12" />
+                  </svg>
+                  {file ? (
+                    <>
+                      <span style={{color:'#E6E8EB', fontSize:15}}>{file.name}</span>
+                      <span style={{color:'#8A93A0', fontSize:13}}>{Math.round(file.size/1024)} KB · click to change</span>
+                    </>
+                  ) : (
+                    <>
+                      <span style={{fontSize:15, color:'#E6E8EB'}}>Drop a photo or file, or <span style={{color:'var(--gp-accent)', textDecoration:'underline'}}>browse</span></span>
+                      <span style={{fontSize:13, color:'#8A93A0'}}>Max ~800 KB</span>
+                    </>
+                  )}
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*,.pdf,.txt,.json"
+                    style={{display:'none'}}
+                    onChange={e => setFile(e.target.files?.[0] || null)}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Expiry */}
+            <div>
+              <div className="field-label">Expires after</div>
+              <div className="pills">
+                {EXPIRIES.map(o => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    className={`pill-btn ${expiry === o.id ? 'pill-on' : ''}`}
+                    onClick={() => setExpiry(o.id)}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Burn notice */}
+            <div className="burn-notice">
+              <span>🔥</span>
+              <span>Burns after one view — even if it hasn’t expired yet.</span>
+            </div>
+
+            <button className="gp-btn" onClick={createSecret} disabled={loading || !canCreate} style={{width:'100%', justifyContent:'center', fontSize:16, padding:'14px 18px'}}>
+              {loading ? 'Encrypting…' : <>Create secure link <span className="gp-arrow">→</span></>}
             </button>
+
             {error && <p className="warning">{error}</p>}
             {link && (
               <div>
-                <p style={{marginBottom:8}}>Share this link:</p>
+                <p style={{marginBottom:8, fontSize:14, color:'#A3ABB6'}}>Share this link:</p>
                 <div className="link-box">{link}</div>
-                <button className="gp-btn gp-ghost" onClick={() => navigator.clipboard.writeText(link)} style={{marginTop:8}}>
+                <button className="gp-btn gp-ghost" onClick={() => navigator.clipboard.writeText(link)} style={{marginTop:8, width:'100%', justifyContent:'center'}}>
                   Copy link
                 </button>
               </div>
             )}
+
+            <p className="tool-foot">Encrypted in your browser before anything is sent.</p>
           </div>
         </div>
       </section>

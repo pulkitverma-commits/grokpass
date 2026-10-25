@@ -109,6 +109,8 @@ nav a:hover { color: #fff; }
   background: transparent; color: #E6E8EB; border: 1px solid #343B46;
 }
 .gp-ghost:hover { border-color: var(--gp-accent); color: var(--gp-accent); }
+.gp-arrow { display: inline-block; transition: transform .22s cubic-bezier(.2,.8,.2,1); }
+.gp-btn:hover .gp-arrow { transform: translateX(4px); }
 
 /* Hero */
 .hero {
@@ -150,6 +152,7 @@ nav a:hover { color: #fff; }
 .dots { display: flex; gap: 7px; }
 .dots span { width: 11px; height: 11px; border-radius: 50%; background: #2A3039; }
 .tool-body { padding: 22px; display: flex; flex-direction: column; gap: 18px; }
+.field-label { display: block; font-size: 13.5px; color: #A3ABB6; margin-bottom: 8px; }
 textarea {
   width: 100%; background: #0A0C0F; border: 1px solid #262C35; border-radius: 10px;
   padding: 14px 16px; color: #E6E8EB; font-family: 'Geist Mono', ui-monospace, monospace;
@@ -157,12 +160,64 @@ textarea {
   transition: border-color 0.2s;
 }
 textarea:focus { outline: none; border-color: var(--gp-accent); }
-.file-label { font-size: 13.5px; color: #A3ABB6; }
+textarea::placeholder { color: #7D8693; }
 .link-box {
   background: #0A0C0F; border: 1px solid #262C35; border-radius: 8px;
   padding: 12px; word-break: break-all; font-family: ui-monospace, monospace; font-size: 0.85rem;
 }
 .warning { color: var(--danger); font-size: 0.85rem; }
+.tool-foot { text-align: center; font-size: 13px; color: #8A93A0; margin: 0; }
+
+/* Tabs */
+.tabs {
+  display: flex; gap: 6px; padding: 4px;
+  background: #0A0C0F; border: 1px solid #1E232A; border-radius: 10px;
+}
+.tab {
+  flex: 1; min-height: 44px; border-radius: 7px;
+  font-family: inherit; font-size: 14.5px; cursor: pointer;
+  border: 1px solid transparent; background: transparent; color: #A3ABB6;
+  transition: background-color .25s, color .25s, border-color .25s;
+}
+.tab-on {
+  border-color: #343B46; background: #1C2128; color: #F4F5F6;
+}
+.tab:hover { color: #F4F5F6; }
+
+/* Expiry pills */
+.pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill-btn {
+  min-height: 44px; padding: 0 18px; border-radius: 999px;
+  font-family: inherit; font-size: 14.5px; cursor: pointer;
+  border: 1px solid #2A3039; background: transparent; color: #C9CED6;
+  transition: border-color .2s, background-color .2s, color .2s, transform .15s;
+}
+.pill-btn:hover { transform: translateY(-1px); border-color: #6B7684; }
+.pill-on {
+  border-color: var(--gp-accent);
+  background: color-mix(in srgb, var(--gp-accent) 10%, transparent);
+  color: var(--gp-accent);
+}
+
+/* Dropzone */
+.dropzone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; min-height: 152px; border: 1px dashed #343B46; border-radius: 10px;
+  background: #0A0C0F; cursor: pointer; text-align: center; padding: 20px;
+  transition: border-color .2s, background-color .2s;
+}
+.dropzone:hover, .dropzone.drag {
+  border-color: var(--gp-accent);
+  background: color-mix(in srgb, var(--gp-accent) 4%, #0A0C0F);
+}
+
+/* Burn notice */
+.burn-notice {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; border: 1px solid #2A3039; border-radius: 10px;
+  background: rgba(10,12,15,0.6); font-size: 14px; color: #C9CED6;
+}
+.burn-notice span:first-child { font-size: 16px; }
 
 /* Sections */
 section { position: relative; z-index: 1; }

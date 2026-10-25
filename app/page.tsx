@@ -185,9 +185,9 @@ export default function Home() {
       </div>
 
       <header className="container" style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 24px'}}>
-        <Link href="/" className="logo">
-          <span className="logo-mark">1</span>
-          <span>OnePass</span>
+        <Link href="/" className="logo" aria-label="OnePass home">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/onepass-logo.png" alt="OnePass" className="logo-img" width={139} height={56} />
         </Link>
         <nav>
           <a href="#problem">Why OnePass</a>
@@ -390,9 +390,9 @@ export default function Home() {
         <div className="footer-inner">
           <div className="footer-top">
             <div className="footer-brand">
-              <div className="logo" style={{fontSize:19}}>
-                <span className="logo-mark" style={{width:26, height:26, fontSize:16}}>1</span>
-                <span>OnePass</span>
+              <div className="logo">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/onepass-logo.png" alt="OnePass" className="logo-img logo-img-sm" width={119} height={48} />
               </div>
               <p>Zero-knowledge secret sharing. Encrypted in your browser.</p>
             </div>

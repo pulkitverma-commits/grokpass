@@ -15,7 +15,11 @@ const STEPS = [
 const CIPHER = '9f3a e1c0 77b2 04d9 c1b8 …';
 const PLAIN = 'db_pass = Pr0d!x92';
 const ACCENT = '#C8F135';
-const BURN = '#FF9F5A';
+const BURN = 'grad'; // OnePeek logo gradient
+const GRAD = 'linear-gradient(135deg, #45BDEB 0%, #89DB96 50%, #D5FD3A 100%)';
+const paint = (c: string): React.CSSProperties => c === BURN
+  ? { background: GRAD, WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }
+  : { color: c };
 const DIM = '#8A93A0';
 const BRIGHT = '#F4F5F6';
 
@@ -72,9 +76,10 @@ export default function ProcessAnim() {
 
   const nodeStyle = (on: boolean, burn = false): React.CSSProperties => ({
     ...nodeBase,
-    border: `1px solid ${burn ? BURN : on ? ACCENT : '#262C35'}`,
+    border: `1px solid ${burn ? 'transparent' : on ? ACCENT : '#262C35'}`,
+    ...(burn ? { background: `linear-gradient(#0D1014, #0D1014) padding-box, ${GRAD} border-box` } : {}),
     boxShadow: burn
-      ? '0 0 0 4px rgba(255,159,90,0.12)'
+      ? '0 0 0 4px rgba(137,219,150,0.12)'
       : on
         ? `0 0 0 4px color-mix(in srgb, ${ACCENT} 12%, transparent), 0 16px 40px -18px ${ACCENT}`
         : 'none',
@@ -93,8 +98,8 @@ export default function ProcessAnim() {
             </span>
             <span style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 11, letterSpacing: 0.5, color: '#8A93A0' }}>SENDER</span>
           </div>
-          <span style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 11.5, letterSpacing: 0.6, color: sender.tagC }}>{sender.tag}</span>
-          <div style={{ background: '#0A0C0F', border: '1px solid #1E232A', borderRadius: 8, padding: '12px 14px', fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 13.5, color: sender.bodyC, minHeight: 22, wordBreak: 'break-all' }}>{sender.body}</div>
+          <span style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 11.5, letterSpacing: 0.6, ...paint(sender.tagC) }}>{sender.tag}</span>
+          <div style={{ background: '#0A0C0F', border: '1px solid #1E232A', borderRadius: 8, padding: '12px 14px', fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 13.5, minHeight: 22, wordBreak: 'break-all' }}><span style={paint(sender.bodyC)}>{sender.body}</span></div>
           {sender.hasKey && (
             <span style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 12, color: ACCENT, border: `1px solid color-mix(in srgb, ${ACCENT} 40%, transparent)`, borderRadius: 999, padding: '3px 10px' }}>
               <Icon name="key" size={12} strokeWidth={2.2} />key stays here
@@ -119,8 +124,8 @@ export default function ProcessAnim() {
             </span>
             <span style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 11, letterSpacing: 0.5, color: '#8A93A0' }}>STORAGE</span>
           </div>
-          <span style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 11.5, letterSpacing: 0.6, color: server.tagC }}>{server.tag}</span>
-          <div style={{ background: '#0A0C0F', border: '1px solid #1E232A', borderRadius: 8, padding: '12px 14px', fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 13.5, color: server.bodyC, minHeight: 22, wordBreak: 'break-all' }}>{server.body}</div>
+          <span style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 11.5, letterSpacing: 0.6, ...paint(server.tagC) }}>{server.tag}</span>
+          <div style={{ background: '#0A0C0F', border: '1px solid #1E232A', borderRadius: 8, padding: '12px 14px', fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 13.5, minHeight: 22, wordBreak: 'break-all' }}><span style={paint(server.bodyC)}>{server.body}</span></div>
           <span style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 12, color: '#8A93A0', border: '1px solid #2A3039', borderRadius: 999, padding: '3px 10px' }}>
             <Icon name="ban" size={12} strokeWidth={2.2} />never sees the key
           </span>
@@ -143,8 +148,8 @@ export default function ProcessAnim() {
             </span>
             <span style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 11, letterSpacing: 0.5, color: '#8A93A0' }}>RECIPIENT</span>
           </div>
-          <span style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 11.5, letterSpacing: 0.6, color: recipient.tagC }}>{recipient.tag}</span>
-          <div style={{ background: '#0A0C0F', border: '1px solid #1E232A', borderRadius: 8, padding: '12px 14px', fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 13.5, color: recipient.bodyC, minHeight: 22, wordBreak: 'break-all' }}>{recipient.body}</div>
+          <span style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 11.5, letterSpacing: 0.6, ...paint(recipient.tagC) }}>{recipient.tag}</span>
+          <div style={{ background: '#0A0C0F', border: '1px solid #1E232A', borderRadius: 8, padding: '12px 14px', fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 13.5, minHeight: 22, wordBreak: 'break-all' }}><span style={paint(recipient.bodyC)}>{recipient.body}</span></div>
           {recipient.hasKey && (
             <span style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 12, color: ACCENT, border: `1px solid color-mix(in srgb, ${ACCENT} 40%, transparent)`, borderRadius: 999, padding: '3px 10px' }}>
               <Icon name="key" size={12} strokeWidth={2.2} />key received

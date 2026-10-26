@@ -9,6 +9,7 @@ import Icon from './components/Icon';
 import TypeWord from './components/TypeWord';
 import { getClientId, captureRef, type Quota } from '@/lib/quota';
 import UserAvatar from './components/UserAvatar';
+import GeofencePicker, { type Geofence } from './components/GeofencePicker';
 import {
   newKey, encryptBytes, encryptJson, encryptText, randomToken,
   MAX_FILE_BYTES, MAX_TEXT_CHARS, type SecretHeader,
@@ -53,6 +54,8 @@ export default function Home() {
   const [emailMsg, setEmailMsg] = useState('');
   const [recipient, setRecipient] = useState('');
   const [shareLoc, setShareLoc] = useState(false);
+  const [geofence, setGeofence] = useState<Geofence | null>(null);
+  const [fenceOn, setFenceOn] = useState(false);
   const [lastSecret, setLastSecret] = useState<{ id: string; recipient: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -103,6 +106,7 @@ export default function Home() {
     if (mode === 'text' && text.length > MAX_TEXT_CHARS) { setError('That secret is too long (max 50,000 characters).'); return; }
     if (mode === 'file' && file && file.size > MAX_FILE_BYTES) { setError('Files can be up to 10 MB.'); return; }
     if (outOfSecrets) { setShowLimit(true); return; }
+    if (fenceOn && !geofence) { setError('Choose a place for the geofence, or turn it off.'); return; }
     setLoading(true);
     try {
       // Everything is encrypted with AES-256-GCM in this tab before it leaves the device.
@@ -134,6 +138,7 @@ export default function Home() {
         p_recipient: user ? recipient.trim() || null : null,
         p_share_location: !!user && shareLoc,
         p_size: mode === 'file' && file ? file.size : null,
+        ...(geofence ? { p_fence_lat: geofence.lat, p_fence_lon: geofence.lon, p_fence_radius: geofence.radius, p_fence_label: geofence.label } : {}),
       });
       if (rpcErr && /quota_exceeded/.test(rpcErr.message || '')) {
         if (filePath) supabase.storage.from('secrets').remove([filePath]).catch(() => {});
@@ -142,6 +147,8 @@ export default function Home() {
         setLoading(false);
         return;
       }
+      if (rpcErr && /invalid geofence/.test(rpcErr.message || '')) throw new Error('Pick a place and a radius for the geofence.');
+      if (rpcErr && geofence && /could not find the function|p_fence/i.test(rpcErr.message || '')) throw new Error('Geofencing isn’t switched on yet. Turn it off or try again later.');
       if (rpcErr || !id) throw new Error('Could not create the link. Please try again.');
       setQuota(q => (q ? { ...q, used: q.used + 1 } : q));
       setLastSecret({ id: String(id), recipient: user ? recipient.trim() : '' });
@@ -312,6 +319,8 @@ export default function Home() {
             ) : (
               <p className="track-hint"><Icon name="pin" size={14} strokeWidth={2} /><span><Link href="/login">Log in</Link> to keep a history of who you sent secrets to and see where they were opened.</span></p>
             )}
+
+            <GeofencePicker value={geofence} onChange={setGeofence} onActiveChange={setFenceOn} />
 
             {quota && (
               <div className="quota-row">

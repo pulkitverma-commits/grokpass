@@ -68,7 +68,7 @@ export default function LoginPage() {
       provider,
       options: {
         redirectTo: `${window.location.origin}/dashboard`,
-        scopes: provider === 'azure' ? 'email openid profile' : undefined,
+        scopes: provider === 'azure' ? 'email openid profile User.Read' : undefined,
       },
     });
     if (error) {

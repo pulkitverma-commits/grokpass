@@ -8,7 +8,6 @@ import LimitModal from './components/LimitModal';
 import Icon from './components/Icon';
 import TypeWord from './components/TypeWord';
 import { getClientId, captureRef, type Quota } from '@/lib/quota';
-import { addToHistory } from '@/lib/history';
 import UserAvatar from './components/UserAvatar';
 import {
   newKey, encryptBytes, encryptJson, encryptText, randomToken,
@@ -52,6 +51,9 @@ export default function Home() {
   const [emailTo, setEmailTo] = useState('');
   const [sending, setSending] = useState(false);
   const [emailMsg, setEmailMsg] = useState('');
+  const [recipient, setRecipient] = useState('');
+  const [shareLoc, setShareLoc] = useState(false);
+  const [lastSecret, setLastSecret] = useState<{ id: string; recipient: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -129,6 +131,9 @@ export default function Home() {
       const { data: id, error: rpcErr } = await supabase.rpc('create_secret', {
         p_header: encHeader, p_body: body, p_file_path: filePath, p_ttl_seconds: ttl,
         p_client_id: getClientId(), p_ref: refCode.current,
+        p_recipient: user ? recipient.trim() || null : null,
+        p_share_location: !!user && shareLoc,
+        p_size: mode === 'file' && file ? file.size : null,
       });
       if (rpcErr && /quota_exceeded/.test(rpcErr.message || '')) {
         if (filePath) supabase.storage.from('secrets').remove([filePath]).catch(() => {});
@@ -139,8 +144,8 @@ export default function Home() {
       }
       if (rpcErr || !id) throw new Error('Could not create the link. Please try again.');
       setQuota(q => (q ? { ...q, used: q.used + 1 } : q));
-      const now = Date.now();
-      addToHistory({ id: String(id), type: header.type, size: header.size, timer: timerSeconds, createdAt: now, expiresAt: now + ttl * 1000 });
+      setLastSecret({ id: String(id), recipient: user ? recipient.trim() : '' });
+      setRecipient('');
 
       setLink(`${window.location.origin}/s/${id}#${keyB64}`);
       setText('');
@@ -171,6 +176,10 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed');
       setEmailMsg('Sent');
+      if (user && supabase && lastSecret && !lastSecret.recipient) {
+        supabase.rpc('set_secret_recipient', { p_id: lastSecret.id, p_recipient: emailTo.trim() }).then(() => {});
+        setLastSecret({ ...lastSecret, recipient: emailTo.trim() });
+      }
       setEmailTo('');
     } catch (e) {
       setEmailMsg((e as Error).message);
@@ -284,6 +293,25 @@ export default function Home() {
                   : 'No countdown — the secret stays on screen until the viewer leaves.'}
               </p>
             </div>
+
+            {user ? (
+              <div className="track-box">
+                <div>
+                  <label className="field-label" htmlFor="gp-recipient">Who is it for? <span className="field-opt">optional · only you see this</span></label>
+                  <input id="gp-recipient" className="field-input" type="text" maxLength={200} placeholder="e.g. Rahul, finance team, rahul@company.com" value={recipient} onChange={e => setRecipient(e.target.value)} />
+                </div>
+                <label className="loc-toggle">
+                  <input type="checkbox" checked={shareLoc} onChange={e => setShareLoc(e.target.checked)} />
+                  <span className="loc-switch" aria-hidden="true" />
+                  <span className="loc-text">
+                    <strong><Icon name="pin" size={14} strokeWidth={2} />Show me where it’s opened</strong>
+                    <small>Approximate city on a map in your dashboard. The viewer is told before they open it.</small>
+                  </span>
+                </label>
+              </div>
+            ) : (
+              <p className="track-hint"><Icon name="pin" size={14} strokeWidth={2} /><span><Link href="/login">Log in</Link> to keep a history of who you sent secrets to and see where they were opened.</span></p>
+            )}
 
             {quota && (
               <div className="quota-row">

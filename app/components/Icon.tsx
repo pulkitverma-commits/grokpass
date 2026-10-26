@@ -1,5 +1,5 @@
 // Flat, single-colour line icons (inherit currentColor).
-type Name = 'shield' | 'flame' | 'image' | 'eye' | 'lock' | 'key' | 'ban' | 'clock' | 'file' | 'check';
+type Name = 'shield' | 'flame' | 'image' | 'eye' | 'lock' | 'key' | 'ban' | 'clock' | 'file' | 'check' | 'pin' | 'user' | 'trash';
 
 const PATHS: Record<Name, JSX.Element> = {
   shield: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /><path d="m9 12 2 2 4-4" /></>,
@@ -12,6 +12,9 @@ const PATHS: Record<Name, JSX.Element> = {
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
   file: <><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z" /><path d="M14 3v6h6" /></>,
   check: <path d="M20 6 9 17l-5-5" />,
+  pin: <><path d="M12 22s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12Z" /><circle cx="12" cy="10" r="2.6" /></>,
+  user: <><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>,
+  trash: <><path d="M4 7h16" /><path d="M10 11v6M14 11v6" /><path d="M6 7l1 13h10l1-13" /><path d="M9 7V4h6v3" /></>,
 };
 
 export default function Icon({ name, size = 18, strokeWidth = 1.9, className, style }: { name: Name; size?: number; strokeWidth?: number; className?: string; style?: React.CSSProperties }) {

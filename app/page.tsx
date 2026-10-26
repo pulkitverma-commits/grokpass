@@ -444,7 +444,7 @@ export default function Home() {
             <div className="footer-navs">
               <nav className="footer-nav"><span>PRODUCT</span><a href="#how">How it works</a><a href="#features">Features</a><a href="#encryption">Encryption</a><a href="#send">Send a secret</a></nav>
               <nav className="footer-nav"><span>ACCOUNT</span><Link href="/login">Login</Link><Link href="/dashboard">Dashboard</Link></nav>
-              <nav className="footer-nav"><span>LEGAL</span><a href="#">Privacy</a><a href="#">Terms</a></nav>
+              <nav className="footer-nav"><span>LEGAL</span><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link></nav>
             </div>
           </div>
           <div className="footer-bottom">

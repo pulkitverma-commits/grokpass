@@ -52,7 +52,7 @@ export default function LimitModal({ quota, onClose }: { quota: Quota | null; on
               </button>
               <button type="button" role="radio" aria-checked={choice === 'plus'} className={`lm-option ${choice === 'plus' ? 'on' : ''}`} onClick={() => setChoice('plus')}>
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /><path d="M12 8v6M9 11h6" /></svg>
-                <strong>OnePass+</strong>
+                <strong>OnePeek+</strong>
                 <span>Unlimited secrets, no limits</span>
               </button>
             </div>
@@ -67,7 +67,7 @@ export default function LimitModal({ quota, onClose }: { quota: Quota | null; on
           <>
             <h2 id="lm-title" className="lm-title">Refer a friend</h2>
             <p className="lm-sub">
-              Share your link. When a friend starts using OnePass through it,<br />
+              Share your link. When a friend starts using OnePeek through it,<br />
               your limit goes up to {REFERRAL_SECRETS} secrets.
             </p>
             <div className="lm-ref">

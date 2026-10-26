@@ -6,10 +6,10 @@ import Icon from './Icon';
 const STEPS = [
   { name: 'Write', desc: 'You paste a password, API key or note — or drop in a photo. Nothing has left your device yet.' },
   { name: 'Encrypt', desc: 'Your browser creates a one-time key and locks the secret with AES-GCM, right inside the tab.' },
-  { name: 'Upload', desc: 'Only the scrambled ciphertext is sent to OnePass. The key stays with you.' },
+  { name: 'Upload', desc: 'Only the scrambled ciphertext is sent to OnePeek. The key stays with you.' },
   { name: 'Share', desc: 'You send the link. The key rides inside it — in the part browsers never send to any server.' },
   { name: 'Reveal', desc: 'The recipient opens it once. Their browser fetches the ciphertext and unlocks it locally.' },
-  { name: 'Burn', desc: 'The moment it’s read, OnePass deletes the ciphertext. Open the link again and there’s nothing there.' },
+  { name: 'Burn', desc: 'The moment it’s read, OnePeek deletes the ciphertext. Open the link again and there’s nothing there.' },
 ];
 
 const CIPHER = '9f3a e1c0 77b2 04d9 c1b8 …';
@@ -115,7 +115,7 @@ export default function ProcessAnim() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 15.5, color: '#F4F5F6' }}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="2" y="3" width="20" height="6" rx="1" /><rect x="2" y="15" width="20" height="6" rx="1" /><path d="M6 6h.01" /><path d="M6 18h.01" /></svg>
-              OnePass server
+              OnePeek server
             </span>
             <span style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 11, letterSpacing: 0.5, color: '#8A93A0' }}>STORAGE</span>
           </div>
@@ -158,8 +158,8 @@ export default function ProcessAnim() {
         {keyTravel && (
           <span style={{ position: 'absolute', top: -8, left: 0, width: 18, height: 18, borderRadius: '50%', background: ACCENT, boxShadow: `0 0 18px ${ACCENT}`, animation: 'keyTravel 2.4s linear infinite' }} />
         )}
-        <span style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', whiteSpace: 'nowrap', fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 11.5, color: keyTravel ? ACCENT : '#6B7684' }}>
-          the key travels inside the link — sender to recipient, never through OnePass
+        <span style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', width: 'max-content', maxWidth: 'calc(100vw - 48px)', textAlign: 'center', fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 11.5, color: keyTravel ? ACCENT : '#6B7684' }}>
+          the key travels inside the link — sender to recipient, never through OnePeek
         </span>
       </div>
 

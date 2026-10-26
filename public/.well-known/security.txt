@@ -1,0 +1,5 @@
+Contact: mailto:pulkit.verma@foxnetglobal.com
+Expires: 2027-10-26T00:00:00.000Z
+Preferred-Languages: en, hi
+Canonical: https://onepeek.io/.well-known/security.txt
+Policy: https://onepeek.io/encryption#report

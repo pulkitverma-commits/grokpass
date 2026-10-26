@@ -5,7 +5,7 @@ import type { User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 
 // Photo first: the Google / Microsoft profile picture, then Gravatar for the
-// email. If none loads, a placeholder in the OnePass logo gradient with the
+// email. If none loads, a placeholder in the OnePeek logo gradient with the
 // user's initial.
 export function avatarInfo(user: User | null) {
   const meta = (user?.user_metadata || {}) as Record<string, string>;
@@ -24,8 +24,8 @@ async function sha256Hex(s: string) {
 async function syncMicrosoftPhoto(): Promise<string | null> {
   if (!supabase) return null;
   try {
-    if (sessionStorage.getItem('onepass.msphoto')) return null;
-    sessionStorage.setItem('onepass.msphoto', '1');
+    if (sessionStorage.getItem('onepeek.msphoto')) return null;
+    sessionStorage.setItem('onepeek.msphoto', '1');
   } catch { /* ignore */ }
   const { data } = await supabase.auth.getSession();
   const token = data.session?.provider_token;

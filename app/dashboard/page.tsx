@@ -7,10 +7,15 @@ import type { User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import { getClientId, type Quota } from '@/lib/quota';
 import Icon from '@/app/components/Icon';
+import { tzLabel } from '@/lib/time';
 import UserAvatar from '@/app/components/UserAvatar';
 import OpenMap from '@/app/components/OpenMap';
+import OpensMap, { type OpenPoint } from '@/app/components/OpensMap';
+import RequestsPanel from '@/app/components/RequestsPanel';
+import AlertsPanel from '@/app/components/AlertsPanel';
+import { countryName } from '@/lib/countries';
 
-type Status = 'waiting' | 'opened' | 'expired';
+type Status = 'waiting' | 'opened' | 'expired' | 'burned';
 type LogRow = {
   id: string;
   kind: 'text' | 'file';
@@ -32,7 +37,30 @@ type LogRow = {
   fence_label?: string | null;
   fence_lat?: number | null;
   fence_lon?: number | null;
+  max_views?: number | null;
+  views_used?: number | null;
+  last_opened_at?: string | null;
+  burned_at?: string | null;
+  lock_email?: string | null;
+  open_after?: string | null;
+  window_start?: number | null;
+  window_end?: number | null;
+  window_tz?: string | null;
+  allowed_countries?: string[] | null;
 };
+
+function statusOf(r: LogRow, now: number): Status {
+  const max = r.max_views || 1;
+  const used = r.views_used ?? (r.opened_at ? 1 : 0);
+  if (r.burned_at) return 'burned';
+  if (r.opened_at && used >= max) return 'opened';
+  if (new Date(r.expires_at).getTime() <= now) return r.opened_at ? 'opened' : 'expired';
+  return 'waiting';
+}
+
+function hhmm(min: number) {
+  return new Date(2000, 0, 1, Math.floor(min / 60), min % 60).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
 type Row = LogRow & { status: Status };
 type Filter = 'all' | Status;
 
@@ -74,7 +102,7 @@ function dist(m: number) {
   return m < 1000 ? `${Math.round(m)} m` : `${+(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`;
 }
 
-const STATUS_LABEL: Record<Status, string> = { waiting: 'Waiting', opened: 'Opened', expired: 'Expired' };
+const STATUS_LABEL: Record<Status, string> = { waiting: 'Waiting', opened: 'Opened', expired: 'Expired', burned: 'Burned' };
 
 export default function Dashboard() {
   const router = useRouter();
@@ -89,6 +117,8 @@ export default function Dashboard() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [copied, setCopied] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmBurn, setConfirmBurn] = useState<string | null>(null);
+  const [burnMsg, setBurnMsg] = useState('');
 
   useEffect(() => {
     if (!supabase) { setReady(true); return; }
@@ -103,21 +133,21 @@ export default function Dashboard() {
     const { data, error } = await supabase.from('secret_log').select('*').order('created_at', { ascending: false }).limit(500);
     if (error) { setLoadErr('Could not load your history.'); setRows([]); return; }
     const now = Date.now();
-    setRows((data as LogRow[]).map(r => ({
-      ...r,
-      status: r.opened_at ? 'opened' : new Date(r.expires_at).getTime() <= now ? 'expired' : 'waiting',
-    })));
+    setRows((data as LogRow[]).map(r => ({ ...r, status: statusOf(r, now) })));
   }, []);
 
   const userId = user?.id;
-  useEffect(() => {
-    if (!userId || !supabase) return;
-    supabase.rpc('get_quota', { p_client_id: getClientId(), p_ref: null }).then(({ data }) => {
+  const loadQuota = useCallback(() => {
+    supabase?.rpc('get_quota', { p_client_id: getClientId(), p_ref: null }).then(({ data }) => {
       const q = (Array.isArray(data) ? data[0] : null) as Quota | null;
       if (q) setQuota(q);
     });
+  }, []);
+  useEffect(() => {
+    if (!userId || !supabase) return;
+    loadQuota();
     loadHistory();
-  }, [userId, loadHistory]);
+  }, [userId, loadHistory, loadQuota]);
 
   const counts = useMemo(() => {
     const list = rows || [];
@@ -125,16 +155,30 @@ export default function Dashboard() {
       all: list.length,
       waiting: list.filter(r => r.status === 'waiting').length,
       opened: list.filter(r => r.status === 'opened').length,
-      expired: list.filter(r => r.status === 'expired').length,
+      expired: list.filter(r => r.status === 'expired' || r.status === 'burned').length,
+      burned: list.filter(r => r.status === 'burned').length,
     };
   }, [rows]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return (rows || []).filter(r =>
-      (filter === 'all' || r.status === filter) &&
+      (filter === 'all' || r.status === filter || (filter === 'expired' && r.status === 'burned')) &&
       (!q || (r.recipient || '').toLowerCase().includes(q) || place(r).toLowerCase().includes(q)));
   }, [rows, filter, query]);
+
+  const points = useMemo<OpenPoint[]>(() => (rows || [])
+    .filter(r => r.opened_at && r.open_lat != null && r.open_lon != null)
+    .map(r => ({
+      id: r.id, lat: r.open_lat as number, lon: r.open_lon as number,
+      accuracy: r.open_accuracy_m ?? null, precise: r.open_source === 'device',
+      title: r.recipient ? `To ${r.recipient}` : 'Secret', place: place(r), when: r.last_opened_at || r.opened_at as string,
+    })), [rows]);
+
+  function jumpTo(id: string) {
+    setFilter('all'); setQuery(''); setOpenMap(id);
+    setTimeout(() => document.getElementById(`row-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+  }
 
   const meta = (user?.user_metadata || {}) as Record<string, string>;
   const name = meta.full_name || meta.name || (user?.email || '').split('@')[0];
@@ -164,6 +208,18 @@ export default function Dashboard() {
     await supabase.from('secret_log').delete().eq('id', id);
   }
 
+  async function burnNow(id: string) {
+    if (!supabase) return;
+    setConfirmBurn(null);
+    setBurnMsg('');
+    const { data, error } = await supabase.rpc('burn_secret', { p_id: id });
+    const res = (Array.isArray(data) ? data[0] : null) as { burned: boolean; file_path: string | null } | null;
+    if (error) { setBurnMsg('Couldn’t burn that secret. Please try again.'); return; }
+    if (res?.file_path) supabase.storage.from('secrets').remove([res.file_path]).catch(() => {});
+    if (!res?.burned) setBurnMsg('That link had already been opened or expired.');
+    loadHistory();
+  }
+
   async function clearAll() {
     if (!supabase || !userId) return;
     setConfirmClear(false);
@@ -180,9 +236,9 @@ export default function Dashboard() {
       </div>
 
       <header className="container dash-header">
-        <Link href="/" className="logo" aria-label="OnePass home">
+        <Link href="/" className="logo" aria-label="OnePeek home">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/onepass-logo.png" alt="OnePass" className="logo-img" width={139} height={56} />
+          <img src="/onepeek-logo.png" alt="OnePeek" className="logo-img" width={149} height={56} />
         </Link>
         {user && (
           <div className="dash-header-right">
@@ -243,12 +299,24 @@ export default function Dashboard() {
               </div>
               <div className="dash-card">
                 <span className="dash-label">Plan</span>
-                <strong className="dash-big">{quota?.plan === 'plus' ? 'OnePass+' : 'Free'}</strong>
-                {quota?.plan === 'plus' ? <span className="dash-muted">No limits</span> : <Link href="/plus" className="dash-link">Upgrade to OnePass+ →</Link>}
+                <strong className="dash-big">{quota?.plan === 'plus' ? 'OnePeek+' : 'Free'}</strong>
+                {quota?.plan === 'plus' ? <span className="dash-muted">No limits</span> : <Link href="/plus" className="dash-link">Upgrade to OnePeek+ →</Link>}
               </div>
             </section>
 
             <section className="dash-grid">
+              <div className="dash-main">
+              {points.length > 0 && (
+                <div className="dash-panel">
+                  <div className="dash-panel-head">
+                    <div>
+                      <h2>Where your secrets were opened</h2>
+                      <p className="dash-muted">{points.length} open{points.length === 1 ? '' : 's'} with a location. Nearby ones are grouped; click a number to zoom in, or a pin for details.</p>
+                    </div>
+                  </div>
+                  <OpensMap points={points} onSelect={jumpTo} />
+                </div>
+              )}
               <div className="dash-panel">
                 <div className="dash-panel-head">
                   <div>
@@ -263,7 +331,7 @@ export default function Dashboard() {
                     <div className="hist-filters" role="group" aria-label="Filter by status">
                       {(['all', 'waiting', 'opened', 'expired'] as Filter[]).map(f => (
                         <button key={f} type="button" className={filter === f ? 'on' : ''} aria-pressed={filter === f} onClick={() => setFilter(f)}>
-                          {f === 'all' ? 'All' : STATUS_LABEL[f]} <span>{counts[f]}</span>
+                          {f === 'all' ? 'All' : f === 'expired' ? 'Expired & burned' : STATUS_LABEL[f]} <span>{counts[f]}</span>
                         </button>
                       ))}
                     </div>
@@ -272,6 +340,7 @@ export default function Dashboard() {
                 )}
 
                 {loadErr && <p className="auth-msg err">{loadErr}</p>}
+                {burnMsg && <p className="auth-msg">{burnMsg}</p>}
 
                 {rows === null ? (
                   <p className="dash-muted" style={{ padding: '24px 0' }}>Loading history…</p>
@@ -287,12 +356,20 @@ export default function Dashboard() {
                   <ul className="dash-list">
                     {visible.map(r => {
                       const where = place(r);
-                      const hasMap = r.status === 'opened' && r.open_lat !== null && r.open_lon !== null;
+                      const hasMap = !!r.opened_at && r.open_lat != null && r.open_lon != null;
                       const fenced = !!(r.fence_radius_m && r.fence_lat != null && r.fence_lon != null);
                       const fenceRing = fenced ? { lat: r.fence_lat as number, lon: r.fence_lon as number, radiusMeters: (r.fence_radius_m as number) * 1.05 } : null;
                       const precise = r.open_source === 'device';
+                      const maxV = r.max_views || 1;
+                      const usedV = r.views_used ?? (r.opened_at ? 1 : 0);
+                      const extras = [
+                        r.lock_email ? `Locked to ${r.lock_email}` : null,
+                        r.open_after ? `Opens after ${fullDate(r.open_after)}` : null,
+                        r.window_start != null && r.window_end != null ? `Only ${hhmm(r.window_start)}–${hhmm(r.window_end)}${r.window_tz ? ` ${tzLabel(r.window_tz)}` : ''}` : null,
+                        r.allowed_countries?.length ? `Only from ${r.allowed_countries.map(c => countryName(c)).join(', ')}` : null,
+                      ].filter(Boolean) as string[];
                       return (
-                        <li key={r.id} className="hist-item">
+                        <li key={r.id} id={`row-${r.id}`} className="hist-item">
                           <div className="hist-row">
                             <span className={`dash-type ${r.kind}`}><Icon name={r.kind === 'file' ? 'image' : 'key'} size={17} /></span>
                             <div className="dash-item">
@@ -302,9 +379,14 @@ export default function Dashboard() {
                               <span title={fullDate(r.created_at)}>
                                 {r.kind === 'file' ? `File${r.size ? ` · ${formatBytes(r.size)}` : ''}` : 'Text'}
                                 {' · sent '}{rel(r.created_at)}
+                                {maxV > 1 && ` · ${usedV} of ${maxV} views`}
                                 {r.status === 'waiting' && ` · ${timeLeft(r.expires_at)}`}
-                                {r.status === 'opened' && r.opened_at && ` · opened ${rel(r.opened_at)}`}
+                                {r.status === 'opened' && r.opened_at && ` · opened ${rel(r.last_opened_at || r.opened_at)}`}
+                                {r.status === 'burned' && r.burned_at && ` · burned ${rel(r.burned_at)}`}
                               </span>
+                              {extras.length > 0 && (
+                                <span className="hist-extras">{extras.map(x => <em key={x}>{x}</em>)}</span>
+                              )}
                               {r.share_location && (
                                 hasMap ? (
                                   <button type="button" className="hist-place" onClick={() => setOpenMap(m => (m === r.id ? null : r.id))} aria-expanded={openMap === r.id}>
@@ -325,10 +407,22 @@ export default function Dashboard() {
                                 </button>
                               )}
                             </div>
+                            {r.status === 'waiting' && (
+                              confirmBurn === r.id ? (
+                                <span className="burn-confirm">
+                                  <button type="button" className="danger" onClick={() => burnNow(r.id)}>Burn</button>
+                                  <button type="button" onClick={() => setConfirmBurn(null)}>Keep</button>
+                                </span>
+                              ) : (
+                                <button type="button" className="burn-btn" onClick={() => setConfirmBurn(r.id)} title="Destroy this link now">
+                                  <Icon name="flame" size={13} strokeWidth={2.1} />Burn now
+                                </button>
+                              )
+                            )}
                             <span className={`dash-chip ${r.status}`}>
-                              {r.status === 'opened' && <Icon name="flame" size={13} strokeWidth={2.1} />}
+                              {(r.status === 'opened' || r.status === 'burned') && <Icon name="flame" size={13} strokeWidth={2.1} />}
                               {r.status === 'waiting' && <Icon name="clock" size={13} strokeWidth={2.1} />}
-                              {STATUS_LABEL[r.status]}
+                              {r.status === 'waiting' && usedV > 0 ? `Viewed ${usedV}/${maxV}` : STATUS_LABEL[r.status]}
                             </span>
                             <button type="button" className="hist-del" onClick={() => removeRow(r.id)} aria-label="Remove from history" title="Remove from history">
                               <Icon name="trash" size={15} />
@@ -360,7 +454,7 @@ export default function Dashboard() {
                 {rows && rows.length > 0 && (
                   confirmClear ? (
                     <div className="hist-confirm">
-                      <span>Delete your whole history? Live links keep working.</span>
+                      <span>Delete your whole history? Live links keep working (burn them first if needed).</span>
                       <button type="button" className="danger" onClick={clearAll}>Delete history</button>
                       <button type="button" onClick={() => setConfirmClear(false)}>Cancel</button>
                     </div>
@@ -370,7 +464,12 @@ export default function Dashboard() {
                 )}
               </div>
 
+              <RequestsPanel userId={user.id} onQuota={loadQuota} />
+              </div>
+
               <aside className="dash-side">
+                <AlertsPanel user={user} />
+
                 <div className="dash-panel">
                   <h2>Refer a friend</h2>
                   <p className="dash-muted">When a friend joins with your link, your limit goes up to 50 secrets.</p>
@@ -393,7 +492,7 @@ export default function Dashboard() {
                   <Icon name="shield" size={20} />
                   <div>
                     <h3>Zero-knowledge by design</h3>
-                    <p className="dash-muted">Secrets are encrypted in your browser with AES-256-GCM. OnePass can see whether a secret was opened, never what it says.</p>
+                    <p className="dash-muted">Secrets are encrypted in your browser with AES-256-GCM. OnePeek can see whether a secret was opened, never what it says.</p>
                   </div>
                 </div>
               </aside>

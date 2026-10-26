@@ -693,3 +693,26 @@ footer {
 .open-map-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #C9CED6; font-size: 14px; }
 .open-map-empty small { color: #6E7784; font-size: 12px; }
 @media (max-width: 520px) { .hist-map { margin-left: 0; } .hist-search { max-width: none; } }
+
+/* Precise location + geofence */
+.hist-acc { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10.5px; letter-spacing: .3px; padding: 2px 7px; border-radius: 99px; border: 1px solid #2E3540; color: #8A93A0; margin-left: 2px; }
+.hist-acc.precise { color: var(--gp-accent); border-color: color-mix(in srgb, var(--gp-accent) 40%, transparent); }
+.hist-place.fence { color: #C9A7FF; }
+.open-map-fence { position: absolute; transform: translate(-50%, -50%); border-radius: 50%; border: 2px dashed rgba(201,167,255,.85); background: rgba(201,167,255,.06); pointer-events: none; }
+.fence-box { display: flex; flex-direction: column; gap: 14px; padding: 16px; border: 1px solid #232831; border-radius: 12px; background: rgba(13,16,20,.6); }
+.fence-body { display: flex; flex-direction: column; gap: 14px; }
+.fence-where { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
+.fence-where .pill-btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.fence-search { position: relative; flex: 1 1 220px; min-width: 0; }
+.fence-search .field-input { margin-top: 0; }
+.fence-hits { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); list-style: none; margin: 0; padding: 4px; background: #11151A; border: 1px solid #262C35; border-radius: 10px; box-shadow: 0 16px 32px rgba(0,0,0,.5); }
+.fence-hits button { width: 100%; text-align: left; background: none; border: 0; border-radius: 7px; padding: 9px 10px; color: #E6E8EB; font-family: inherit; font-size: 13.5px; cursor: pointer; }
+.fence-hits button:hover { background: #1A1F26; }
+.fence-custom { display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid #2A3039; border-radius: 999px; color: #8A93A0; font-size: 13px; }
+.fence-custom input { width: 64px; background: transparent; border: 0; color: #E6E8EB; font-family: inherit; font-size: 14px; padding: 9px 0; }
+.fence-custom input:focus { outline: none; }
+.field-hint strong { color: #F4F5F6; font-weight: 400; }
+.loc-notice.fence { border-color: rgba(201,167,255,.35); background: rgba(201,167,255,.06); }
+.loc-notice.fence svg { color: #C9A7FF; }
+.loc-notice strong { color: #F4F5F6; font-weight: 400; }
+.reveal-actions { display: flex; flex-direction: column; gap: 10px; }

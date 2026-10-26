@@ -26,6 +26,7 @@ export default function RevealPage() {
   const [fileUrl, setFileUrl] = useState('');
   const [remaining, setRemaining] = useState(0);
   const [fading, setFading] = useState(false);
+  const [sharesLocation, setSharesLocation] = useState(false);
   const keyRef = useRef<CryptoKey | null>(null);
   const urlRef = useRef('');
 
@@ -59,6 +60,7 @@ export default function RevealPage() {
       }
       try {
         setHeader(await decryptJson<SecretHeader>(keyRef.current, row.header));
+        setSharesLocation(!!row.share_location);
         setPhase('ready');
       } catch {
         setError('This link’s key doesn’t match the secret. Ask the sender to share it again.');
@@ -73,8 +75,12 @@ export default function RevealPage() {
   async function reveal() {
     if (!supabase || !keyRef.current || !header) return;
     setPhase('opening');
-    const { data, error: openErr } = await supabase.rpc('open_secret', { p_id: id });
-    const row = Array.isArray(data) ? data[0] : null;
+    let row: { body?: string | null; file_path?: string | null } | null = null;
+    try {
+      const res = await fetch('/api/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+      if (res.ok) row = await res.json();
+    } catch { /* handled below */ }
+    const openErr = !row;
     // Drop the key from the address bar so it isn't left in history.
     history.replaceState(null, '', window.location.pathname);
     if (openErr || !row) {
@@ -181,11 +187,18 @@ export default function RevealPage() {
                   {header.type === 'file' && header.size ? <span className="reveal-chip">{formatBytes(header.size)}</span> : null}
                   {timer > 0 && <span className="reveal-chip accent"><Icon name="clock" size={13} strokeWidth={2} />vanishes {timer}s after opening</span>}
                   <span className="reveal-chip">1 view</span>
+                  {sharesLocation && <span className="reveal-chip loc"><Icon name="pin" size={13} strokeWidth={2} />shares location</span>}
                 </div>
                 <p style={{ color: '#C9CED6', margin: 0, fontSize: '0.95rem' }}>
                   It will be decrypted in your browser. As soon as you open it, it’s deleted from OnePass — this link won’t work again.
                   {timer > 0 && ` You’ll have ${timer} second${timer === 1 ? '' : 's'} to view it.`}
                 </p>
+                {sharesLocation && (
+                  <p className="loc-notice">
+                    <Icon name="pin" size={15} strokeWidth={2} />
+                    <span>The sender asked to see where this is opened. Revealing it shares your approximate city with them, based on your network. Your exact location is never collected.</span>
+                  </p>
+                )}
                 <button className="gp-btn" onClick={reveal} disabled={phase === 'opening'} style={{ width: '100%', justifyContent: 'center' }}>
                   {phase === 'opening' ? 'Decrypting…' : 'Reveal secret'}
                 </button>

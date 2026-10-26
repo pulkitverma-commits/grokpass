@@ -1,6 +1,7 @@
 // Anonymous per-browser identity used for the free quota and referrals.
 import { randomToken } from './crypto';
 
+// Storage keys keep the original names so existing browsers keep their free-secret count.
 const CLIENT_KEY = 'onepass.client';
 const REF_KEY = 'onepass.ref';
 

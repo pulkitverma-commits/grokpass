@@ -78,7 +78,62 @@ export type SecretHeader = {
   mime?: string;
   size?: number;
   timer?: number; // seconds the viewer gets before the secret vanishes; 0 = no timer
+  guard?: boolean; // blur until the viewer presses and holds, with a watermark
+  tpl?: 'wifi';    // text is JSON for a template (Wi-Fi network)
 };
 
-export const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
+export type WifiSecret = { ssid: string; password: string; security: 'WPA' | 'WEP' | 'nopass'; hidden?: boolean };
+
+/** Standard Wi-Fi QR payload understood by iOS and Android cameras. */
+export function wifiQrPayload(w: WifiSecret) {
+  const esc = (v: string) => v.replace(/([\\;,:"])/g, '\\$1');
+  return `WIFI:T:${w.security};S:${esc(w.ssid)};${w.security === 'nopass' ? '' : `P:${esc(w.password)};`}${w.hidden ? 'H:true;' : ''};`;
+}
+
+// ---- Requests: the responder encrypts to the requester's public key (ECDH P-256 + HKDF + AES-GCM).
+
+const ECDH = { name: 'ECDH', namedCurve: 'P-256' } as const;
+const REQ_INFO = new TextEncoder().encode('onepeek-request-v1');
+
+export async function newRequestKeys(): Promise<{ publicB64: string; privateB64: string }> {
+  const kp = await crypto.subtle.generateKey(ECDH, true, ['deriveBits']) as CryptoKeyPair;
+  const pub = await crypto.subtle.exportKey('raw', kp.publicKey);
+  const jwk = await crypto.subtle.exportKey('jwk', kp.privateKey);
+  return { publicB64: toB64Url(pub), privateB64: toB64Url(new TextEncoder().encode(JSON.stringify({ kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y, d: jwk.d }))) };
+}
+
+async function aesFromShared(bits: ArrayBuffer, salt: Uint8Array) {
+  const ikm = await crypto.subtle.importKey('raw', bits, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: salt as BufferSource, info: REQ_INFO }, ikm, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+/** Output: base64url( ephemeral public key (65 bytes) || iv (12) || ciphertext+tag ). */
+export async function encryptToPublicKey(publicB64: string, text: string): Promise<string> {
+  const recipient = await crypto.subtle.importKey('raw', fromB64Url(publicB64) as BufferSource, ECDH, false, []);
+  const eph = await crypto.subtle.generateKey(ECDH, true, ['deriveBits']) as CryptoKeyPair;
+  const bits = await crypto.subtle.deriveBits({ name: 'ECDH', public: recipient }, eph.privateKey, 256);
+  const ephRaw = new Uint8Array(await crypto.subtle.exportKey('raw', eph.publicKey));
+  const key = await aesFromShared(bits, ephRaw);
+  const sealed = await encryptBytes(key, new TextEncoder().encode(JSON.stringify({ v: 1, text })));
+  const out = new Uint8Array(ephRaw.length + sealed.length);
+  out.set(ephRaw, 0);
+  out.set(sealed, ephRaw.length);
+  return toB64Url(out);
+}
+
+export async function decryptWithPrivateKey(privateB64: string, blobB64: string): Promise<string> {
+  const jwk = JSON.parse(new TextDecoder().decode(fromB64Url(privateB64)));
+  const priv = await crypto.subtle.importKey('jwk', { ...jwk, ext: true, key_ops: ['deriveBits'] }, ECDH, false, ['deriveBits']);
+  const blob = fromB64Url(blobB64);
+  const ephRaw = blob.slice(0, 65);
+  const eph = await crypto.subtle.importKey('raw', ephRaw as BufferSource, ECDH, false, []);
+  const bits = await crypto.subtle.deriveBits({ name: 'ECDH', public: eph }, priv, 256);
+  const key = await aesFromShared(bits, ephRaw);
+  const plain = await decryptBytes(key, blob.slice(65));
+  const data = JSON.parse(new TextDecoder().decode(plain)) as { text?: string };
+  return data.text ?? '';
+}
+
+// 50 MB, minus room for the 28 bytes AES-GCM adds, so the encrypted file fits a 50 MB storage limit.
+export const MAX_FILE_BYTES = 50 * 1024 * 1024 - 1024;
 export const MAX_TEXT_CHARS = 50_000;

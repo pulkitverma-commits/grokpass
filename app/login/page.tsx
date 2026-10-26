@@ -98,9 +98,9 @@ export default function LoginPage() {
       </div>
 
       <header className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', position: 'relative', zIndex: 10 }}>
-        <Link href="/" className="logo" aria-label="OnePass home">
+        <Link href="/" className="logo" aria-label="OnePeek home">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/onepass-logo.png" alt="OnePass" className="logo-img" width={139} height={56} />
+          <img src="/onepeek-logo.png" alt="OnePeek" className="logo-img" width={149} height={56} />
         </Link>
         <Link href="/#send" className="gp-btn gp-ghost" style={{ textDecoration: 'none' }}>Send a secret →</Link>
       </header>
@@ -187,7 +187,7 @@ export default function LoginPage() {
           )}
 
           <p className="auth-switch">
-            {mode === 'login' ? 'New to OnePass? ' : 'Already have an account? '}
+            {mode === 'login' ? 'New to OnePeek? ' : 'Already have an account? '}
             <button type="button" onClick={() => switchMode(mode === 'login' ? 'signup' : 'login')}>
               {mode === 'login' ? 'Create an account' : 'Log in'}
             </button>

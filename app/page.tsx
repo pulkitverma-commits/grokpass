@@ -8,6 +8,7 @@ import LimitModal from './components/LimitModal';
 import Icon from './components/Icon';
 import TypeWord from './components/TypeWord';
 import { getClientId, captureRef, type Quota } from '@/lib/quota';
+import { addToHistory } from '@/lib/history';
 import {
   newKey, encryptBytes, encryptJson, encryptText, randomToken,
   MAX_FILE_BYTES, MAX_TEXT_CHARS, type SecretHeader,
@@ -137,6 +138,8 @@ export default function Home() {
       }
       if (rpcErr || !id) throw new Error('Could not create the link. Please try again.');
       setQuota(q => (q ? { ...q, used: q.used + 1 } : q));
+      const now = Date.now();
+      addToHistory({ id: String(id), type: header.type, size: header.size, timer: timerSeconds, createdAt: now, expiresAt: now + ttl * 1000 });
 
       setLink(`${window.location.origin}/s/${id}#${keyB64}`);
       setText('');

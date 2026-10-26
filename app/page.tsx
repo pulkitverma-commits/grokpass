@@ -8,6 +8,8 @@ import LimitModal from './components/LimitModal';
 import Icon from './components/Icon';
 import TypeWord from './components/TypeWord';
 import { getClientId, captureRef, type Quota } from '@/lib/quota';
+import { addToHistory } from '@/lib/history';
+import UserAvatar from './components/UserAvatar';
 import {
   newKey, encryptBytes, encryptJson, encryptText, randomToken,
   MAX_FILE_BYTES, MAX_TEXT_CHARS, type SecretHeader,
@@ -137,6 +139,8 @@ export default function Home() {
       }
       if (rpcErr || !id) throw new Error('Could not create the link. Please try again.');
       setQuota(q => (q ? { ...q, used: q.used + 1 } : q));
+      const now = Date.now();
+      addToHistory({ id: String(id), type: header.type, size: header.size, timer: timerSeconds, createdAt: now, expiresAt: now + ttl * 1000 });
 
       setLink(`${window.location.origin}/s/${id}#${keyB64}`);
       setText('');
@@ -196,8 +200,10 @@ export default function Home() {
           <a href="#how">How it works</a>
           <a href="#features">Features</a>
           <a href="#encryption">Encryption</a>
-          <Link href={user ? '/dashboard' : '/login'} className="nav-icon" aria-label={user ? 'Dashboard' : 'Log in'} title={user ? 'Dashboard' : 'Log in'}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>
+          <Link href={user ? '/dashboard' : '/login'} className={`nav-icon${user ? ' has-user' : ''}`} aria-label={user ? 'Dashboard' : 'Log in'} title={user ? 'Dashboard' : 'Log in'}>
+            {user ? <UserAvatar user={user} size={40} /> : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>
+            )}
           </Link>
           <a href="#send" className="gp-btn">Send a secret →</a>
         </nav>

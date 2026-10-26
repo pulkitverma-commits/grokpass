@@ -25,6 +25,13 @@ type LogRow = {
   open_country: string | null;
   open_lat: number | null;
   open_lon: number | null;
+  open_area?: string | null;
+  open_accuracy_m?: number | null;
+  open_source?: 'device' | 'network' | null;
+  fence_radius_m?: number | null;
+  fence_label?: string | null;
+  fence_lat?: number | null;
+  fence_lon?: number | null;
 };
 type Row = LogRow & { status: Status };
 type Filter = 'all' | Status;
@@ -58,7 +65,13 @@ function formatBytes(n?: number | null) {
 function place(r: LogRow) {
   let country = r.open_country || '';
   try { if (country) country = new Intl.DisplayNames(undefined, { type: 'region' }).of(country) || country; } catch { /* keep code */ }
-  return [r.open_city, r.open_region && r.open_region !== r.open_city ? r.open_region : null, country].filter(Boolean).join(', ');
+  const parts = [...(r.open_area ? r.open_area.split(', ') : []), r.open_city, r.open_region, country]
+    .filter((x): x is string => !!x);
+  return parts.filter((x, i) => parts.findIndex(y => y.toLowerCase() === x.toLowerCase()) === i).join(', ');
+}
+
+function dist(m: number) {
+  return m < 1000 ? `${Math.round(m)} m` : `${+(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`;
 }
 
 const STATUS_LABEL: Record<Status, string> = { waiting: 'Waiting', opened: 'Opened', expired: 'Expired' };
@@ -275,6 +288,9 @@ export default function Dashboard() {
                     {visible.map(r => {
                       const where = place(r);
                       const hasMap = r.status === 'opened' && r.open_lat !== null && r.open_lon !== null;
+                      const fenced = !!(r.fence_radius_m && r.fence_lat != null && r.fence_lon != null);
+                      const fenceRing = fenced ? { lat: r.fence_lat as number, lon: r.fence_lon as number, radiusMeters: (r.fence_radius_m as number) * 1.05 } : null;
+                      const precise = r.open_source === 'device';
                       return (
                         <li key={r.id} className="hist-item">
                           <div className="hist-row">
@@ -292,13 +308,21 @@ export default function Dashboard() {
                               {r.share_location && (
                                 hasMap ? (
                                   <button type="button" className="hist-place" onClick={() => setOpenMap(m => (m === r.id ? null : r.id))} aria-expanded={openMap === r.id}>
-                                    <Icon name="pin" size={13} strokeWidth={2} />{where || 'View on map'}<em>{openMap === r.id ? 'Hide map' : 'Show map'}</em>
+                                    <Icon name="pin" size={13} strokeWidth={2} />{where || 'View on map'}
+                                    <span className={`hist-acc ${precise ? 'precise' : ''}`}>{precise ? `precise ±${dist(r.open_accuracy_m || 110)}` : 'approx. city'}</span>
+                                    <em>{openMap === r.id ? 'Hide map' : 'Show map'}</em>
                                   </button>
                                 ) : (
                                   <span className="hist-place muted"><Icon name="pin" size={13} strokeWidth={2} />
                                     {r.status === 'waiting' ? 'Location will show when opened' : r.status === 'opened' ? 'Location unavailable' : 'Never opened'}
                                   </span>
                                 )
+                              )}
+                              {fenced && (
+                                <button type="button" className="hist-place fence" onClick={() => setOpenMap(m => (m === r.id ? null : r.id))} aria-expanded={openMap === r.id}>
+                                  <Icon name="lock" size={13} strokeWidth={2} />Geofenced · {dist(r.fence_radius_m as number)} around {r.fence_label || 'a set place'}
+                                  {!hasMap && <em>{openMap === r.id ? 'Hide map' : 'Show area'}</em>}
+                                </button>
                               )}
                             </div>
                             <span className={`dash-chip ${r.status}`}>
@@ -310,10 +334,21 @@ export default function Dashboard() {
                               <Icon name="trash" size={15} />
                             </button>
                           </div>
-                          {hasMap && openMap === r.id && (
+                          {openMap === r.id && (hasMap || fenceRing) && (
                             <div className="hist-map">
-                              <OpenMap lat={r.open_lat as number} lon={r.open_lon as number} label={where} />
-                              <p className="dash-muted">Approximate, based on the viewer’s network. Opened {r.opened_at ? fullDate(r.opened_at) : ''}.</p>
+                              {hasMap ? (
+                                <OpenMap lat={r.open_lat as number} lon={r.open_lon as number} label={where} radiusMeters={r.open_accuracy_m || (precise ? 110 : 10000)} fence={fenceRing} />
+                              ) : (
+                                <OpenMap lat={fenceRing!.lat} lon={fenceRing!.lon} label={r.fence_label || 'Geofence'} radiusMeters={fenceRing!.radiusMeters} />
+                              )}
+                              <p className="dash-muted">
+                                {hasMap
+                                  ? (precise
+                                    ? `From the viewer’s device, accurate to about ${dist(r.open_accuracy_m || 110)}. Opened ${r.opened_at ? fullDate(r.opened_at) : ''}.`
+                                    : `Approximate city from the viewer’s network. Opened ${r.opened_at ? fullDate(r.opened_at) : ''}.`)
+                                  : `Only opens within ${dist(r.fence_radius_m as number)} (+5%) of ${r.fence_label || 'this place'}.`}
+                                {hasMap && fenceRing ? ' Dashed ring: the geofence.' : ''}
+                              </p>
                             </div>
                           )}
                         </li>

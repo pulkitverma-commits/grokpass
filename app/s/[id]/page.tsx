@@ -9,6 +9,10 @@ import Icon from '@/app/components/Icon';
 
 type Phase = 'loading' | 'ready' | 'opening' | 'revealed' | 'vanished' | 'error';
 
+function formatDistance(m: number) {
+  return m < 1000 ? `${Math.max(1, Math.round(m))} m` : `${+(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`;
+}
+
 function formatBytes(n?: number) {
   if (!n && n !== 0) return '';
   if (n < 1024) return `${n} B`;
@@ -27,6 +31,9 @@ export default function RevealPage() {
   const [remaining, setRemaining] = useState(0);
   const [fading, setFading] = useState(false);
   const [sharesLocation, setSharesLocation] = useState(false);
+  const [fence, setFence] = useState<{ radius: number; label: string | null } | null>(null);
+  const [locating, setLocating] = useState(false);
+  const [geoMsg, setGeoMsg] = useState('');
   const keyRef = useRef<CryptoKey | null>(null);
   const urlRef = useRef('');
 
@@ -61,6 +68,7 @@ export default function RevealPage() {
       try {
         setHeader(await decryptJson<SecretHeader>(keyRef.current, row.header));
         setSharesLocation(!!row.share_location);
+        if (row.fence_radius_m) setFence({ radius: row.fence_radius_m, label: row.fence_label || null });
         setPhase('ready');
       } catch {
         setError('This link’s key doesn’t match the secret. Ask the sender to share it again.');
@@ -72,18 +80,52 @@ export default function RevealPage() {
   // Wipe decrypted data from memory when leaving the page.
   useEffect(() => () => { if (urlRef.current) URL.revokeObjectURL(urlRef.current); }, []);
 
-  async function reveal() {
+  function getDevicePosition(): Promise<{ lat: number; lon: number; accuracy: number }> {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) { reject(new Error('unsupported')); return; }
+      navigator.geolocation.getCurrentPosition(
+        pos => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy: pos.coords.accuracy }),
+        err => reject(err),
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 },
+      );
+    });
+  }
+
+  async function reveal(mode: 'precise' | 'approx' = 'approx') {
     if (!supabase || !keyRef.current || !header) return;
+    setGeoMsg('');
     setPhase('opening');
+    let precise: { lat: number; lon: number; accuracy: number } | null = null;
+    if (fence || mode === 'precise') {
+      setLocating(true);
+      try { precise = await getDevicePosition(); } catch { precise = null; }
+      setLocating(false);
+      if (!precise && fence) {
+        setGeoMsg('This secret only opens inside a set area, so we need your location. Allow location access for this site and try again. Nothing has been opened or deleted.');
+        setPhase('ready');
+        return;
+      }
+    }
     let row: { body?: string | null; file_path?: string | null } | null = null;
     try {
-      const res = await fetch('/api/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+      const res = await fetch('/api/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, precise }) });
+      if (res.status === 403) {
+        const info = await res.json().catch(() => ({})) as { error?: string; meters?: number | null };
+        if (info.error === 'geofence_outside') {
+          setGeoMsg(`You’re about ${formatDistance(info.meters || 0)} outside the area where this secret can be opened. Move closer and try again. Nothing has been opened or deleted.`);
+        } else if (info.error === 'geofence_imprecise') {
+          setGeoMsg(`Your location is too rough to check (±${formatDistance(info.meters || 0)}). Turn on precise location or GPS and try again.`);
+        } else {
+          setGeoMsg('We couldn’t confirm your location. Allow location access and try again.');
+        }
+        setPhase('ready');
+        return;
+      }
       if (res.ok) row = await res.json();
     } catch { /* handled below */ }
-    const openErr = !row;
     // Drop the key from the address bar so it isn't left in history.
     history.replaceState(null, '', window.location.pathname);
-    if (openErr || !row) {
+    if (!row) {
       setError('This secret has already been opened, or it has expired.');
       setPhase('error');
       return;
@@ -188,20 +230,39 @@ export default function RevealPage() {
                   {timer > 0 && <span className="reveal-chip accent"><Icon name="clock" size={13} strokeWidth={2} />vanishes {timer}s after opening</span>}
                   <span className="reveal-chip">1 view</span>
                   {sharesLocation && <span className="reveal-chip loc"><Icon name="pin" size={13} strokeWidth={2} />shares location</span>}
+                  {fence && <span className="reveal-chip loc"><Icon name="lock" size={13} strokeWidth={2} />geofenced · {formatDistance(fence.radius)}</span>}
                 </div>
                 <p style={{ color: '#C9CED6', margin: 0, fontSize: '0.95rem' }}>
                   It will be decrypted in your browser. As soon as you open it, it’s deleted from OnePass — this link won’t work again.
                   {timer > 0 && ` You’ll have ${timer} second${timer === 1 ? '' : 's'} to view it.`}
                 </p>
-                {sharesLocation && (
-                  <p className="loc-notice">
-                    <Icon name="pin" size={15} strokeWidth={2} />
-                    <span>The sender asked to see where this is opened. Revealing it shares your approximate city with them, based on your network. Your exact location is never collected.</span>
+                {fence && (
+                  <p className="loc-notice fence">
+                    <Icon name="lock" size={15} strokeWidth={2} />
+                    <span><strong>Locked to an area.</strong> This secret only opens within {formatDistance(fence.radius)} of {fence.label || 'a location set by the sender'}. Your browser will ask for your location to check.{sharesLocation ? ' The sender will also see where it was opened.' : ' Your location is only used for this check.'}</span>
                   </p>
                 )}
-                <button className="gp-btn" onClick={reveal} disabled={phase === 'opening'} style={{ width: '100%', justifyContent: 'center' }}>
-                  {phase === 'opening' ? 'Decrypting…' : 'Reveal secret'}
-                </button>
+                {sharesLocation && !fence && (
+                  <p className="loc-notice">
+                    <Icon name="pin" size={15} strokeWidth={2} />
+                    <span>The sender asked to see where this is opened. You choose how: your precise location (your browser will ask), or just an approximate city from your network.</span>
+                  </p>
+                )}
+                {geoMsg && <p className="warning" role="alert" style={{ margin: 0 }}>{geoMsg}</p>}
+                {sharesLocation && !fence ? (
+                  <div className="reveal-actions">
+                    <button className="gp-btn" onClick={() => reveal('precise')} disabled={phase === 'opening'} style={{ justifyContent: 'center' }}>
+                      {phase === 'opening' ? (locating ? 'Getting your location…' : 'Decrypting…') : 'Reveal & share precise location'}
+                    </button>
+                    <button className="gp-btn gp-ghost" onClick={() => reveal('approx')} disabled={phase === 'opening'} style={{ justifyContent: 'center' }}>
+                      Reveal with approximate location
+                    </button>
+                  </div>
+                ) : (
+                  <button className="gp-btn" onClick={() => reveal(fence ? 'precise' : 'approx')} disabled={phase === 'opening'} style={{ width: '100%', justifyContent: 'center' }}>
+                    {phase === 'opening' ? (locating ? 'Checking your location…' : 'Decrypting…') : fence ? 'Check my location & reveal' : 'Reveal secret'}
+                  </button>
+                )}
               </>
             )}
 

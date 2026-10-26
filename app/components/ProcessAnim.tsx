@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Icon from './Icon';
 
 const STEPS = [
   { name: 'Write', desc: 'You paste a password, API key or note — or drop in a photo. Nothing has left your device yet.' },
@@ -96,7 +97,7 @@ export default function ProcessAnim() {
           <div style={{ background: '#0A0C0F', border: '1px solid #1E232A', borderRadius: 8, padding: '12px 14px', fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 13.5, color: sender.bodyC, minHeight: 22, wordBreak: 'break-all' }}>{sender.body}</div>
           {sender.hasKey && (
             <span style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 12, color: ACCENT, border: `1px solid color-mix(in srgb, ${ACCENT} 40%, transparent)`, borderRadius: 999, padding: '3px 10px' }}>
-              🔑 key stays here
+              <Icon name="key" size={12} strokeWidth={2.2} />key stays here
             </span>
           )}
         </div>
@@ -121,7 +122,7 @@ export default function ProcessAnim() {
           <span style={{ fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 11.5, letterSpacing: 0.6, color: server.tagC }}>{server.tag}</span>
           <div style={{ background: '#0A0C0F', border: '1px solid #1E232A', borderRadius: 8, padding: '12px 14px', fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 13.5, color: server.bodyC, minHeight: 22, wordBreak: 'break-all' }}>{server.body}</div>
           <span style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 12, color: '#8A93A0', border: '1px solid #2A3039', borderRadius: 999, padding: '3px 10px' }}>
-            🚫 never sees the key
+            <Icon name="ban" size={12} strokeWidth={2.2} />never sees the key
           </span>
         </div>
 
@@ -146,7 +147,7 @@ export default function ProcessAnim() {
           <div style={{ background: '#0A0C0F', border: '1px solid #1E232A', borderRadius: 8, padding: '12px 14px', fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 13.5, color: recipient.bodyC, minHeight: 22, wordBreak: 'break-all' }}>{recipient.body}</div>
           {recipient.hasKey && (
             <span style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 12, color: ACCENT, border: `1px solid color-mix(in srgb, ${ACCENT} 40%, transparent)`, borderRadius: 999, padding: '3px 10px' }}>
-              🔑 key received
+              <Icon name="key" size={12} strokeWidth={2.2} />key received
             </span>
           )}
         </div>

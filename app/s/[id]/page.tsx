@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { importKey, decryptJson, decryptText, decryptBytes, type SecretHeader } from '@/lib/crypto';
+import Icon from '@/app/components/Icon';
 
 type Phase = 'loading' | 'ready' | 'opening' | 'revealed' | 'vanished' | 'error';
 
@@ -149,7 +150,7 @@ export default function RevealPage() {
           <div className="tool-header">
             <div className="dots"><span /><span /><span /></div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span>🔒</span>
+              <Icon name="lock" size={13} strokeWidth={2} />
               <span>one-time secret · AES-256-GCM</span>
             </div>
           </div>
@@ -178,7 +179,7 @@ export default function RevealPage() {
                 <div className="reveal-meta">
                   <span className="reveal-chip">{header.type === 'file' ? (isImage ? 'Image' : 'File') : 'Text'}</span>
                   {header.type === 'file' && header.size ? <span className="reveal-chip">{formatBytes(header.size)}</span> : null}
-                  {timer > 0 && <span className="reveal-chip accent">⏱ vanishes {timer}s after opening</span>}
+                  {timer > 0 && <span className="reveal-chip accent"><Icon name="clock" size={13} strokeWidth={2} />vanishes {timer}s after opening</span>}
                   <span className="reveal-chip">1 view</span>
                 </div>
                 <p style={{ color: '#C9CED6', margin: 0, fontSize: '0.95rem' }}>
@@ -223,7 +224,7 @@ export default function RevealPage() {
                   )}
                   {header.type === 'file' && fileUrl && !isImage && (
                     <div className="file-card">
-                      <span aria-hidden="true" style={{ fontSize: 22 }}>📄</span>
+                      <Icon name="file" size={24} style={{ color: '#A3ABB6' }} />
                       <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                         <span style={{ color: '#F4F5F6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{header.name}</span>
                         <span style={{ color: '#8A93A0', fontSize: 13 }}>{formatBytes(header.size)}</span>

@@ -5,6 +5,8 @@ import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
 import ProcessAnim from './components/ProcessAnim';
 import LimitModal from './components/LimitModal';
+import Icon from './components/Icon';
+import TypeWord from './components/TypeWord';
 import { getClientId, captureRef, type Quota } from '@/lib/quota';
 import {
   newKey, encryptBytes, encryptJson, encryptText, randomToken,
@@ -193,6 +195,7 @@ export default function Home() {
           <a href="#problem">Why OnePass</a>
           <a href="#how">How it works</a>
           <a href="#features">Features</a>
+          <a href="#encryption">Encryption</a>
           <Link href={user ? '/dashboard' : '/login'} className="nav-icon" aria-label={user ? 'Dashboard' : 'Log in'} title={user ? 'Dashboard' : 'Log in'}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg>
           </Link>
@@ -204,14 +207,14 @@ export default function Home() {
         <div className="hero-left anim-slide-left">
           <div className="pill anim-fade-up delay-1">
             <span className="dot" />
-            <span>AES-GCM · ZERO-KNOWLEDGE · ONE VIEW ONLY</span>
+            <span>AES-256-GCM · ZERO-KNOWLEDGE · ONE VIEW ONLY</span>
           </div>
-          <h1 className="anim-fade-up delay-2">Send secrets<br />that <span>disappear.</span></h1>
+          <h1 className="anim-fade-up delay-2">Send secrets<br />that <TypeWord word="disappear." /></h1>
           <p className="anim-fade-up delay-3">Zero-knowledge password and photo sharing. Encrypted in your browser. The key never touches our servers. Every secret burns after one view.</p>
           <ul className="checks anim-fade-up delay-4">
-            <li>✓ Encrypted on your device before anything is sent</li>
-            <li>✓ We store ciphertext only — never the key</li>
-            <li>✓ Opened once, then deleted for good</li>
+            <li><Icon name="check" className="ic-accent" />Encrypted on your device before anything is sent</li>
+            <li><Icon name="check" className="ic-accent" />We store ciphertext only — never the key</li>
+            <li><Icon name="check" className="ic-accent" />Opened once, then deleted for good</li>
           </ul>
         </div>
 
@@ -219,7 +222,7 @@ export default function Home() {
           <div className="tool-header">
             <div className="dots"><span /><span /><span /></div>
             <div style={{display:'flex', alignItems:'center', gap:8}}>
-              <span>🔒</span>
+              <Icon name="lock" size={13} strokeWidth={2} />
               <span>encrypted in this tab</span>
             </div>
           </div>
@@ -284,7 +287,7 @@ export default function Home() {
             )}
 
             <div className="burn-notice">
-              <span>🔥</span>
+              <Icon name="flame" size={16} className="ic-burn" />
               <span>Burns after one view — even if it hasn’t expired yet.</span>
             </div>
 
@@ -328,7 +331,7 @@ export default function Home() {
             <div className="leak-card"><div className="leak-head"><span>#devops · chat</span><span className="leak-tag bad">STILL SEARCHABLE</span></div><p>here’s the prod db login → <code>Pr0d!x92</code></p></div>
             <div className="leak-card"><div className="leak-head"><span>Re: server access · email</span><span className="leak-tag bad">FORWARDED 3×</span></div><p>Admin password is <code>Adm1n#2026</code> — don’t share it</p></div>
             <div className="leak-card"><div className="leak-head"><span>SUP-1042 · ticket</span><span className="leak-tag bad">IN EVERY BACKUP</span></div><p>API key for the vendor: <code>sk_live_9fA2…</code></p></div>
-            <div className="leak-card good"><div className="leak-head"><span style={{color:'var(--gp-accent)'}}>OnePass · secret</span><span className="leak-tag good">BURNED</span></div><p>Prod db login → <span style={{color:'#FF9F5A'}}>🔥 Read once. Gone.</span></p></div>
+            <div className="leak-card good"><div className="leak-head"><span style={{color:'var(--gp-accent)'}}>OnePass · secret</span><span className="leak-tag good">BURNED</span></div><p>Prod db login → <span style={{color:'#FF9F5A', display:'inline-flex', alignItems:'center', gap:6, verticalAlign:'middle'}}><Icon name="flame" size={14} />Read once. Gone.</span></p></div>
           </div>
         </div>
       </section>
@@ -356,24 +359,62 @@ export default function Home() {
 
           <div className="features-grid">
             <div className="feat">
-              <div className="feat-icon">🛡️</div>
+              <div className="feat-icon"><Icon name="shield" size={26} strokeWidth={1.8} /></div>
               <h3>Zero-knowledge</h3>
               <p>Encryption happens in your browser with AES-GCM. We only ever store ciphertext. The decryption key lives only in the link you share.</p>
             </div>
             <div className="feat">
-              <div className="feat-icon">🔥</div>
+              <div className="feat-icon ic-burn"><Icon name="flame" size={26} strokeWidth={1.8} /></div>
               <h3>Burn after reading</h3>
               <p>One-time links are destroyed the moment they are opened. Set automatic expiry for 1 hour, 24 hours, or 7 days.</p>
             </div>
             <div className="feat">
-              <div className="feat-icon">🖼️</div>
+              <div className="feat-icon"><Icon name="image" size={26} strokeWidth={1.8} /></div>
               <h3>Photos & files</h3>
               <p>Share screenshots, config files, or short notes. Everything is encrypted client-side before it leaves your device.</p>
             </div>
             <div className="feat wide">
-              <div className="feat-icon">👁️</div>
+              <div className="feat-icon"><Icon name="eye" size={26} strokeWidth={1.8} /></div>
               <h3>Know when it’s opened</h3>
               <p>Your dashboard shows every secret you’ve sent and whether it has been opened — without ever showing the secret itself.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="encryption" className="section-pad enc-section">
+        <div className="container">
+          <div className="enc-grid">
+            <div className="enc-copy">
+              <span className="eyebrow">END-TO-END ENCRYPTION</span>
+              <h2 className="section-title" style={{marginTop:12}}>Locked on your device.<br />Unreadable everywhere else.</h2>
+              <p className="section-sub" style={{marginBottom:0}}>Every password, API key, note, photo and file is encrypted with AES-256-GCM in your browser before a single byte is uploaded. OnePass only ever stores scrambled ciphertext — we couldn’t read your secrets even if we wanted to.</p>
+              <ul className="enc-list">
+                <li><Icon name="key" className="ic-accent" /><span><strong>A fresh 256-bit key for every secret.</strong> Generated in your browser, never reused.</span></li>
+                <li><Icon name="lock" className="ic-accent" /><span><strong>Key travels only in the link.</strong> It sits after the #, which browsers never send to any server.</span></li>
+                <li><Icon name="shield" className="ic-accent" /><span><strong>Tamper-proof.</strong> GCM authentication rejects any ciphertext that has been altered.</span></li>
+                <li><Icon name="flame" className="ic-burn" /><span><strong>Deleted on first view.</strong> The ciphertext is erased the moment it’s opened, or when it expires.</span></li>
+              </ul>
+            </div>
+            <div className="enc-visual" aria-hidden="true">
+              <div className="enc-row">
+                <span className="enc-label">YOU TYPE</span>
+                <code className="enc-plain">db_pass = Pr0d!x92</code>
+              </div>
+              <div className="enc-arrow"><Icon name="lock" size={16} strokeWidth={2} /><span>AES-256-GCM · in your browser</span></div>
+              <div className="enc-row">
+                <span className="enc-label">WE STORE</span>
+                <code className="enc-cipher">9f3a e1c0 77b2 04d9 c1b8 5e2f a07d 13c6 b94e 2d81 f6a3 …</code>
+              </div>
+              <div className="enc-row">
+                <span className="enc-label">WE NEVER SEE</span>
+                <code className="enc-none"><Icon name="ban" size={14} strokeWidth={2} />the key · the text · the file</code>
+              </div>
+              <div className="enc-stats">
+                <div><strong>256-bit</strong><span>key per secret</span></div>
+                <div><strong>0</strong><span>keys on our servers</span></div>
+                <div><strong>1</strong><span>view, then deleted</span></div>
+              </div>
             </div>
           </div>
         </div>
@@ -401,9 +442,9 @@ export default function Home() {
               <p>Zero-knowledge secret sharing. Encrypted in your browser.</p>
             </div>
             <div className="footer-navs">
-              <nav className="footer-nav"><span>PRODUCT</span><a href="#how">How it works</a><a href="#features">Features</a><a href="#send">Send a secret</a></nav>
+              <nav className="footer-nav"><span>PRODUCT</span><a href="#how">How it works</a><a href="#features">Features</a><a href="#encryption">Encryption</a><a href="#send">Send a secret</a></nav>
               <nav className="footer-nav"><span>ACCOUNT</span><Link href="/login">Login</Link><Link href="/dashboard">Dashboard</Link></nav>
-              <nav className="footer-nav"><span>LEGAL</span><a href="#">Privacy</a><a href="#">Terms</a></nav>
+              <nav className="footer-nav"><span>LEGAL</span><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link></nav>
             </div>
           </div>
           <div className="footer-bottom">

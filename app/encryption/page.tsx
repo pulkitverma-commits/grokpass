@@ -234,7 +234,7 @@ export default function EncryptionPage() {
             <p>Open your browser’s developer tools, go to the Network tab and send or open a secret. You’ll only see ciphertext going up or coming down, and the part of the link after <code>#</code> never appears in any request.</p>
           </div>
           <div className="ex-devtools ex-reveal" aria-hidden="true">
-            <div className="ex-dt-bar"><i /><i /><i /><span>Elements</span><span>Console</span><span className="on">Network</span></div>
+            <div className="ex-dt-bar"><span className="dots"><span /><span /><span /></span><span>Elements</span><span>Console</span><span className="on">Network</span></div>
             <div className="ex-dt-row" style={{ '--i': 0 } as React.CSSProperties}><b>POST</b><span>rpc/create_secret</span><code>p_body: &quot;Qm9x7Kd2…f8Zt&quot;</code></div>
             <div className="ex-dt-row" style={{ '--i': 1 } as React.CSSProperties}><b>GET</b><span>/s/Xy7Pq2mN4k</span><code>no #fragment sent</code></div>
             <div className="ex-dt-row" style={{ '--i': 2 } as React.CSSProperties}><b>POST</b><span>/api/open</span><code>body: &quot;Qm9x7Kd2…f8Zt&quot;</code></div>
@@ -247,7 +247,7 @@ export default function EncryptionPage() {
           <span className="ex-report-icon"><Icon name="shield" size={26} /></span>
           <div>
             <h2>Report a security issue</h2>
-            <p>If you find a vulnerability, please email <a href="mailto:pulkit.verma@foxnetglobal.com">pulkit.verma@foxnetglobal.com</a> with steps to reproduce it. Please give us a reasonable time to fix it before sharing it publicly, and don’t access other people’s data while testing. Our <a href="/.well-known/security.txt">security.txt</a> has the same details.</p>
+            <p>If you find a vulnerability, please email <a href="mailto:secret@onepeek.io">secret@onepeek.io</a> with steps to reproduce it. Please give us a reasonable time to fix it before sharing it publicly, and don’t access other people’s data while testing. Our <a href="/.well-known/security.txt">security.txt</a> has the same details.</p>
           </div>
         </section>
 

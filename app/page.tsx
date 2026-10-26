@@ -490,7 +490,7 @@ export default function Home() {
             <div className="leak-card"><div className="leak-head"><span>#devops · chat</span><span className="leak-tag bad">STILL SEARCHABLE</span></div><p>here’s the prod db login → <code>Pr0d!x92</code></p></div>
             <div className="leak-card"><div className="leak-head"><span>Re: server access · email</span><span className="leak-tag bad">FORWARDED 3×</span></div><p>Admin password is <code>Adm1n#2026</code> — don’t share it</p></div>
             <div className="leak-card"><div className="leak-head"><span>SUP-1042 · ticket</span><span className="leak-tag bad">IN EVERY BACKUP</span></div><p>API key for the vendor: <code>sk_live_9fA2…</code></p></div>
-            <div className="leak-card good"><div className="leak-head"><span style={{color:'var(--gp-accent)'}}>OnePeek · secret</span><span className="leak-tag good">BURNED</span></div><p>Prod db login → <span style={{color:'#FF9F5A', display:'inline-flex', alignItems:'center', gap:6, verticalAlign:'middle'}}><Icon name="flame" size={14} />Read once. Gone.</span></p></div>
+            <div className="leak-card good"><div className="leak-head"><span style={{color:'var(--gp-accent)'}}>OnePeek · secret</span><span className="leak-tag good">BURNED</span></div><p>Prod db login → <span className="grad-text" style={{display:'inline-flex', alignItems:'center', gap:6, verticalAlign:'middle'}}><Icon name="flame" size={14} className="ic-grad" />Read once. Gone.</span></p></div>
           </div>
         </div>
       </section>

@@ -537,3 +537,15 @@ footer {
 .enc-stats strong { font-size: 22px; font-weight: 400; color: var(--gp-accent); }
 .enc-stats span { font-size: 12.5px; color: #8A93A0; }
 @media (prefers-reduced-motion: reduce) { .enc-cipher { animation: none; } }
+
+/* Legal pages */
+.legal { max-width: 760px; padding-top: 48px; padding-bottom: 96px; }
+.legal h1 { font-size: clamp(2.2rem, 4.5vw, 3.2rem); font-weight: 400; letter-spacing: -1px; color: #F4F5F6; margin: 12px 0 8px; }
+.legal h2 { font-size: 1.25rem; font-weight: 400; color: #F4F5F6; margin: 36px 0 10px; }
+.legal p, .legal li { color: #A3ABB6; font-size: 15.5px; line-height: 1.7; }
+.legal ul { padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
+.legal strong { color: #E6E8EB; font-weight: 400; }
+.legal a { color: var(--gp-accent); }
+.legal code { font-family: 'Geist Mono', ui-monospace, monospace; color: #E6E8EB; }
+.legal-updated { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px !important; color: #6E7784 !important; margin: 0 0 28px; }
+.legal-links { margin-top: 48px; padding-top: 20px; border-top: 1px solid #262C35; font-size: 14px !important; }

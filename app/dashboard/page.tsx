@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import SiteFooter from '../components/SiteFooter';
 import { PlanCard } from '../pricing/PlanButton';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -516,6 +517,7 @@ export default function Dashboard() {
           </>
         )}
       </main>
+      <SiteFooter />
     </div>
   );
 }

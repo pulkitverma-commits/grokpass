@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import SiteFooter from '@/app/components/SiteFooter';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
@@ -580,12 +581,7 @@ export default function RevealPage() {
         </div>
       </main>
 
-      <footer style={{ position: 'relative', zIndex: 1, borderTop: '1px solid rgba(255,255,255,0.07)', background: 'rgba(10,12,15,0.85)', padding: '24px 0' }}>
-        <div className="container" style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, fontSize: 13.5, color: '#8A93A0' }}>
-          <span>© {new Date().getFullYear()} OnePeek</span>
-          <Link href="/encryption" style={{ color: '#8A93A0' }}>How our encryption works</Link>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import SiteFooter from '@/app/components/SiteFooter';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
@@ -125,6 +126,7 @@ export default function RespondPage() {
           </div>
         </div>
       </main>
+      <SiteFooter />
     </div>
   );
 }

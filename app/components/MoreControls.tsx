@@ -13,10 +13,12 @@ export type Controls = {
   windowEnd: string;
   countries: string[];
   guard: boolean;
+  allowCopy: boolean;    // viewer may copy the text
+  allowSave: boolean;    // viewer may download an image
 };
 
 export const DEFAULT_CONTROLS: Controls = {
-  lockEmail: '', openAfter: '', windowOn: false, windowStart: '09:00', windowEnd: '18:00', countries: [], guard: false,
+  lockEmail: '', openAfter: '', windowOn: false, windowStart: '09:00', windowEnd: '18:00', countries: [], guard: false, allowCopy: true, allowSave: true,
 };
 
 export { localTz } from '@/lib/time';
@@ -28,7 +30,7 @@ export function toMinutes(hhmm: string) {
 
 /** How many extra protections are on (for the collapsed summary). */
 export function activeCount(c: Controls, fenceOn: boolean) {
-  return [c.lockEmail.trim(), c.openAfter, c.windowOn, c.countries.length > 0, c.guard, fenceOn].filter(Boolean).length;
+  return [c.lockEmail.trim(), c.openAfter, c.windowOn, c.countries.length > 0, c.guard, !c.allowCopy, !c.allowSave, fenceOn].filter(Boolean).length;
 }
 
 function Toggle({ checked, onChange, title, hint, icon }: { checked: boolean; onChange: (v: boolean) => void; title: string; hint: string; icon: IconName }) {
@@ -80,7 +82,7 @@ export default function MoreControls({ value, onChange, fenceOn, children }: {
     <div className={`more-box ${open ? 'open' : ''}`}>
       <button type="button" className="more-head" onClick={() => setOpen(o => !o)} aria-expanded={open}>
         <span><Icon name="shield" size={16} strokeWidth={2} />More protection</span>
-        <span className="more-sum">{n > 0 ? `${n} on` : 'Recipient, time, place, screenshots'}<Icon name="chevron" size={14} strokeWidth={2} className="more-chev" /></span>
+        <span className="more-sum">{n > 0 ? `${n} on` : 'Recipient, time, place, copying'}<Icon name="chevron" size={14} strokeWidth={2} className="more-chev" /></span>
       </button>
 
       {open && (
@@ -153,6 +155,18 @@ export default function MoreControls({ value, onChange, fenceOn, children }: {
             <Toggle checked={value.guard} icon="eye" title="Blur until held"
               hint="The secret stays blurred until the viewer presses and holds it, with a faint watermark of their email or city. Discourages screenshots."
               onChange={v => set({ guard: v })} />
+          </div>
+
+          <div className="more-item">
+            <Toggle checked={!value.allowCopy} icon="copy" title="Turn off copying"
+              hint="Hides the Copy button and stops the text being selected. Someone could still retype what they see."
+              onChange={v => set({ allowCopy: !v })} />
+          </div>
+
+          <div className="more-item">
+            <Toggle checked={!value.allowSave} icon="image" title="Turn off downloading images"
+              hint="Images are shown on screen only, with no Download button. Other files need downloading to open, so they can always be downloaded."
+              onChange={v => set({ allowSave: !v })} />
           </div>
 
           {children}

@@ -7,7 +7,7 @@ import ProcessAnim from './components/ProcessAnim';
 import LimitModal from './components/LimitModal';
 import Icon from './components/Icon';
 import TypeWord from './components/TypeWord';
-import { getClientId, captureRef, type Quota } from '@/lib/quota';
+import { getClientId, captureRef, isPaid, PLAN_NAME, type Quota } from '@/lib/quota';
 import UserAvatar from './components/UserAvatar';
 import GeofencePicker, { type Geofence } from './components/GeofencePicker';
 import MoreControls, { DEFAULT_CONTROLS, toMinutes, type Controls } from './components/MoreControls';
@@ -75,6 +75,8 @@ export default function Home() {
   const [geofence, setGeofence] = useState<Geofence | null>(null);
   const [fenceOn, setFenceOn] = useState(false);
   const [lastSecret, setLastSecret] = useState<{ id: string; recipient: string } | null>(null);
+  const [canShare, setCanShare] = useState(false);
+  const [slackCopied, setSlackCopied] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -90,6 +92,8 @@ export default function Home() {
     if (q) setQuota(q);
     return q;
   }
+
+  useEffect(() => { setCanShare(typeof navigator !== 'undefined' && typeof navigator.share === 'function'); }, []);
 
   useEffect(() => {
     refCode.current = captureRef();
@@ -129,14 +133,14 @@ export default function Home() {
     if (fenceOn && !geofence) { setError('Choose a place for the geofence, or turn it off.'); return; }
 
     // Expiry and extra protections
-    const maxTtl = quota?.plan === 'plus' ? PLUS_MAX_TTL : FREE_MAX_TTL;
+    const maxTtl = isPaid(quota?.plan) ? PLUS_MAX_TTL : FREE_MAX_TTL;
     let ttl = EXPIRIES.find(e => e.id === expiry)?.seconds ?? 86400;
     if (expiry === 'custom') {
       const at = Date.parse(customExpiry);
       if (!customExpiry || !Number.isFinite(at)) { setError('Pick a date and time for the link to expire.'); return; }
       ttl = Math.round((at - Date.now()) / 1000);
       if (ttl < 300) { setError('The expiry needs to be at least 5 minutes from now.'); return; }
-      if (ttl > maxTtl) { setError(quota?.plan === 'plus' ? 'Links can last up to 30 days.' : 'Free links can last up to 7 days. OnePeek+ allows 30 days.'); return; }
+      if (ttl > maxTtl) { setError(isPaid(quota?.plan) ? 'Links can last up to 30 days.' : 'Free links can last up to 7 days. Plus and Pro allow 30 days.'); return; }
     }
     const lockEmail = controls.lockEmail.trim();
     if (lockEmail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(lockEmail)) { setError('Enter a valid recipient email, or turn off “Lock to a recipient”.'); return; }
@@ -162,6 +166,8 @@ export default function Home() {
         : mode === 'wifi'
           ? { v: 1, type: 'text', tpl: 'wifi', timer: timerSeconds, guard }
           : { v: 1, type: 'text', timer: timerSeconds, guard };
+      if (!controls.allowCopy) header.noCopy = true;
+      if (!controls.allowSave) header.noSave = true;
       const encHeader = await encryptJson(key, header);
 
       let body: string | null = null;
@@ -209,7 +215,12 @@ export default function Home() {
       if (rpcErr && /invalid geofence/.test(rpcErr.message || '')) throw new Error('Pick a place and a radius for the geofence.');
       if (rpcErr && geofence && /could not find the function|p_fence/i.test(rpcErr.message || '')) throw new Error('Geofencing isn’t switched on yet. Turn it off or try again later.');
       if (rpcErr && /could not find the function|p_max_views|p_lock_email|p_open_after|p_window|p_countries/i.test(rpcErr.message || '')) throw new Error('These protections aren’t switched on yet. Turn them off or try again later.');
-      if (rpcErr && /expiry_too_long/.test(rpcErr.message || '')) throw new Error('That expiry is longer than your plan allows.');
+      if (rpcErr && /expiry_too_long/.test(rpcErr.message || '')) throw new Error('That expiry is longer than your plan allows. See /pricing to upgrade.');
+      if (rpcErr && /plan_required:(plus|pro)/.test(rpcErr.message || '')) {
+        if (filePath) supabase.storage.from('secrets').remove([filePath]).catch(() => {});
+        const need = /plan_required:pro/.test(rpcErr.message || '') ? 'Pro' : 'Plus';
+        throw new Error(`That option is part of OnePeek ${need}. Turn it off, or upgrade at onepeek.io/pricing.`);
+      }
       if (rpcErr && /invalid recipient email/.test(rpcErr.message || '')) throw new Error('Enter a valid recipient email.');
       if (rpcErr && /invalid time window|open_after_past_expiry/.test(rpcErr.message || '')) throw new Error('Check the time lock settings.');
       if (rpcErr || !id) throw new Error('Could not create the link. Please try again.');
@@ -233,6 +244,20 @@ export default function Home() {
     navigator.clipboard.writeText(link).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  const shareText = 'I’ve sent you a secret on OnePeek. It opens once, then it’s deleted:';
+
+  async function shareNative() {
+    try { await navigator.share({ title: 'A secret for you', text: shareText, url: link }); } catch { /* cancelled */ }
+  }
+
+  function shareSlack() {
+    // Slack has no "share to" link, so copy the link and open Slack for the user to paste it into a DM.
+    navigator.clipboard.writeText(`${shareText} ${link}`).then(() => {
+      setSlackCopied(true);
+      setTimeout(() => setSlackCopied(false), 6000);
     });
   }
 
@@ -261,7 +286,7 @@ export default function Home() {
   }
 
   const canCreate = mode === 'text' ? !!text.trim() : mode === 'wifi' ? !!wifi.ssid.trim() : !!file;
-  const maxTtlNow = quota?.plan === 'plus' ? PLUS_MAX_TTL : FREE_MAX_TTL;
+  const maxTtlNow = isPaid(quota?.plan) ? PLUS_MAX_TTL : FREE_MAX_TTL;
 
   return (
     <div style={{position:'relative', minHeight:'100vh'}}>
@@ -279,9 +304,9 @@ export default function Home() {
           <img src="/onepeek-logo.png" alt="OnePeek" className="logo-img" width={149} height={56} />
         </Link>
         <nav>
-          <a href="#problem">Why OnePeek</a>
           <a href="#how">How it works</a>
-          <a href="#features">Features</a>
+          <Link href="/use-cases">Use cases</Link>
+          <Link href="/pricing">Pricing</Link>
           <Link href="/encryption">Encryption</Link>
           <Link href={user ? '/dashboard' : '/login'} className={`nav-icon${user ? ' has-user' : ''}`} aria-label={user ? 'Dashboard' : 'Log in'} title={user ? 'Dashboard' : 'Log in'}>
             {user ? <UserAvatar user={user} size={40} /> : (
@@ -370,7 +395,7 @@ export default function Home() {
                 <div className="timer-custom">
                   <label htmlFor="gp-exp">Expires on</label>
                   <input id="gp-exp" type="datetime-local" className="field-input" min={toLocalInput(Date.now() + 5 * 60_000)} max={toLocalInput(Date.now() + maxTtlNow * 1000)} value={customExpiry} onChange={e => setCustomExpiry(e.target.value)} />
-                  <span>{quota?.plan === 'plus' ? 'up to 30 days' : 'up to 7 days · 30 with OnePeek+'}</span>
+                  <span>{isPaid(quota?.plan) ? 'up to 30 days' : 'up to 7 days · 30 with Plus or Pro'}</span>
                 </div>
               )}
             </div>
@@ -434,8 +459,8 @@ export default function Home() {
 
             {quota && (
               <div className="quota-row">
-                <span>{quota.plan === 'plus' ? 'OnePeek+ · unlimited secrets' : `${secretsLeft} of ${quota.quota} free secrets left`}</span>
-                {quota.plan !== 'plus' && <button type="button" onClick={() => setShowLimit(true)}>Get more</button>}
+                <span>{isPaid(quota.plan) ? `${PLAN_NAME[quota.plan]} · ${secretsLeft ?? '∞'} of ${quota.quota ?? '∞'} secrets left this month` : `${secretsLeft} of ${quota.quota} free secrets left this month`}</span>
+                {quota.plan !== 'pro' && <button type="button" onClick={() => setShowLimit(true)}>Get more</button>}
               </div>
             )}
 
@@ -462,6 +487,20 @@ export default function Home() {
                     <QrCode value={link} size={220} label="Scan with a phone camera to open. Works for in-person handovers." />
                   </div>
                 )}
+                <div className="share-row">
+                  <span className="field-label">Send it with</span>
+                  <div className="share-btns">
+                    {canShare && <button type="button" className="share-btn" onClick={shareNative}><Icon name="send" size={14} strokeWidth={2} />Share…</button>}
+                    <a className="share-btn" href={`https://teams.microsoft.com/share?href=${encodeURIComponent(link)}&msgText=${encodeURIComponent(shareText)}&preview=false`} target="_blank" rel="noopener noreferrer">Microsoft Teams</a>
+                    <button type="button" className="share-btn" onClick={shareSlack}>Slack</button>
+                    <a className="share-btn" href={`https://wa.me/?text=${encodeURIComponent(`${shareText} ${link}`)}`} target="_blank" rel="noopener noreferrer">WhatsApp</a>
+                  </div>
+                  {slackCopied && (
+                    <p className="field-hint" role="status" style={{marginTop:6}}>
+                      Copied. Paste it into a Slack direct message. <a href="slack://open">Open Slack</a> · <a href="https://app.slack.com/client" target="_blank" rel="noopener noreferrer">Slack in browser</a>
+                    </p>
+                  )}
+                </div>
                 <div style={{marginTop:14}}>
                   <label className="field-label" htmlFor="gp-email">Email the link</label>
                   <div style={{display:'flex', gap:8}}>
@@ -510,7 +549,7 @@ export default function Home() {
         <div className="container">
           <div className="features-head">
             <div>
-              <span className="eyebrow">WHY TEAMS CHOOSE ONEPASS</span>
+              <span className="eyebrow">WHY TEAMS CHOOSE ONEPEEK</span>
               <h2 className="section-title" style={{marginTop:12}}>Built so there’s nothing to leak.</h2>
             </div>
             <p className="features-sub">Every design decision removes something an attacker — or a careless inbox — could get hold of.</p>
@@ -525,7 +564,7 @@ export default function Home() {
             <div className="feat">
               <div className="feat-icon ic-burn"><Icon name="flame" size={26} strokeWidth={1.8} /></div>
               <h3>Burn after reading</h3>
-              <p>Links are destroyed the moment they’re opened, or after the number of views you choose. Set expiry from 5 minutes up to 7 days (30 with OnePeek+).</p>
+              <p>Links are destroyed the moment they’re opened, or after the number of views you choose. Set expiry from 5 minutes up to 7 days (30 with Plus or Pro).</p>
             </div>
             <div className="feat">
               <div className="feat-icon"><Icon name="image" size={26} strokeWidth={1.8} /></div>
@@ -611,8 +650,9 @@ export default function Home() {
               <p>Zero-knowledge secret sharing. Encrypted in your browser.</p>
             </div>
             <div className="footer-navs">
-              <nav className="footer-nav"><span>PRODUCT</span><a href="#how">How it works</a><a href="#features">Features</a><a href="#encryption">Encryption</a><a href="#send">Send a secret</a></nav>
-              <nav className="footer-nav"><span>ACCOUNT</span><Link href="/login">Login</Link><Link href="/dashboard">Dashboard</Link></nav>
+              <nav className="footer-nav"><span>PRODUCT</span><a href="#how">How it works</a><a href="#features">Features</a><Link href="/pricing">Pricing</Link><Link href="/integrations">Integrations</Link><Link href="/developers">Developers &amp; API</Link><a href="#send">Send a secret</a></nav>
+              <nav className="footer-nav"><span>USE CASES</span><Link href="/use-cases/hr">HR teams</Link><Link href="/use-cases/developers">Developers</Link><Link href="/use-cases/support">Support teams</Link><Link href="/playbooks">Playbooks</Link><Link href="/share-passwords-securely">Share passwords securely</Link></nav>
+              <nav className="footer-nav"><span>ACCOUNT</span><Link href="/login">Login</Link><Link href="/dashboard">Dashboard</Link><Link href="/refer">Refer a friend</Link></nav>
               <nav className="footer-nav"><span>TRUST</span><Link href="/encryption">How encryption works</Link><a href="/.well-known/security.txt">security.txt</a><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link></nav>
             </div>
           </div>

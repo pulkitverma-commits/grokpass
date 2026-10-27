@@ -71,6 +71,7 @@ export default function RevealPage() {
   const [finalView, setFinalView] = useState(true);
   const [watermark, setWatermark] = useState('');
   const [holding, setHolding] = useState(false);
+  const [shielded, setShielded] = useState(false);
   const [copied, setCopied] = useState(false);
   const keyRef = useRef<CryptoKey | null>(null);
   const urlRef = useRef('');
@@ -133,6 +134,40 @@ export default function RevealPage() {
     document.addEventListener('visibilitychange', off);
     return () => { window.removeEventListener('blur', off); document.removeEventListener('visibilitychange', off); };
   }, [header]);
+
+  // Screen shield: while a secret is on screen, hide it whenever the page loses focus, the tab
+  // is hidden (app switcher, screen recorders that steal focus) or a screenshot shortcut is
+  // pressed. A website can't block screenshots outright; this makes them much harder.
+  useEffect(() => {
+    if (phase !== 'revealed') return;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const hide = (ms?: number) => { setShielded(true); if (t) clearTimeout(t); if (ms) t = setTimeout(() => { if (document.hasFocus()) setShielded(false); }, ms); };
+    const onBlur = () => hide();
+    const onFocus = () => setShielded(false);
+    const onVis = () => (document.hidden ? hide() : document.hasFocus() && setShielded(false));
+    const onKey = (e: KeyboardEvent) => {
+      const k = e.key;
+      const shot = k === 'PrintScreen' || k === 'Snapshot'
+        || ((e.metaKey || k === 'Meta' || k === 'OS') && e.shiftKey)   // macOS Cmd+Shift+3/4/5, Windows Win+Shift+S
+        || (e.ctrlKey && e.shiftKey && /^[sS]$/.test(k));
+      if (!shot) return;
+      hide(3000);
+      if (k === 'PrintScreen' || k === 'Snapshot') navigator.clipboard?.writeText('').catch(() => {});
+    };
+    window.addEventListener('blur', onBlur);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('keyup', onKey, true);
+    return () => {
+      if (t) clearTimeout(t);
+      window.removeEventListener('blur', onBlur);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('keyup', onKey, true);
+    };
+  }, [phase]);
 
   const sharesLocation = !!peek?.share_location;
   const fence = peek?.fence_radius_m ? { radius: peek.fence_radius_m, label: peek.fence_label || null } : null;
@@ -284,6 +319,9 @@ export default function RevealPage() {
   const timer = header?.timer || 0;
   const low = timer > 0 && remaining <= Math.min(5, Math.ceil(timer / 3));
   const guard = !!header?.guard;
+  const noCopy = !!header?.noCopy;
+  const noSave = !!header?.noSave && !!header?.mime?.startsWith('image/');
+  const blockCopy = noCopy ? { onCopy: (e: React.ClipboardEvent) => e.preventDefault(), onCut: (e: React.ClipboardEvent) => e.preventDefault(), onContextMenu: (e: React.MouseEvent) => e.preventDefault(), onDragStart: (e: React.DragEvent) => e.preventDefault() } : {};
   const needsCode = !!lockHint && !unlockToken;
   let wifi: WifiSecret | null = null;
   if (header?.tpl === 'wifi' && text) { try { wifi = JSON.parse(text) as WifiSecret; } catch { wifi = null; } }
@@ -483,22 +521,36 @@ export default function RevealPage() {
                 )}
 
                 <div className={fading ? 'vanishing' : ''} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {guard ? (
-                    <div className={`guard ${holding ? 'show' : ''}`} {...holdProps}>
-                      <div className="guard-content">{content}</div>
-                      <div className="guard-mark" aria-hidden="true">
-                        {Array.from({ length: 18 }).map((_, i) => <span key={i}>{watermark}</span>)}
-                      </div>
-                      {!holding && <div className="guard-hint"><Icon name="eye" size={16} strokeWidth={2} />Press and hold to view</div>}
+                  <div className={`shield${shielded ? ' shielded' : ''}${noCopy ? ' no-copy' : ''}`} {...blockCopy}>
+                    <div className="shield-inner">
+                      {guard ? (
+                        <div className={`guard ${holding ? 'show' : ''}`} {...holdProps}>
+                          <div className="guard-content">{content}</div>
+                          <div className="guard-mark" aria-hidden="true">
+                            {Array.from({ length: 18 }).map((_, i) => <span key={i}>{watermark}</span>)}
+                          </div>
+                          {!holding && <div className="guard-hint"><Icon name="eye" size={16} strokeWidth={2} />Press and hold to view</div>}
+                        </div>
+                      ) : content}
                     </div>
-                  ) : content}
+                    <div className="shield-cover" aria-live="polite" onClick={() => setShielded(false)}>
+                      <Icon name="eye" size={16} strokeWidth={2} />
+                      <span>Hidden while this page isn’t in front. Click here to show it again.</span>
+                    </div>
+                  </div>
 
-                  {header.type === 'text' && (
+                  {(noCopy || noSave) && (
+                    <p className="field-hint" style={{ margin: 0 }}>
+                      The sender turned off {noCopy && noSave ? 'copying and downloading' : noCopy ? 'copying' : 'downloading'} for this secret.
+                    </p>
+                  )}
+
+                  {header.type === 'text' && !noCopy && (
                     <button className="gp-btn gp-ghost" onClick={() => { navigator.clipboard.writeText(wifi ? (wifi.password || wifi.ssid) : text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }} style={{ justifyContent: 'center' }}>
                       <Icon name="copy" size={15} strokeWidth={2} />{copied ? 'Copied' : wifi ? 'Copy password' : 'Copy secret'}
                     </button>
                   )}
-                  {header.type === 'file' && fileUrl && !(guard && isImage) && (
+                  {header.type === 'file' && fileUrl && !(guard && isImage) && !noSave && (
                     <a href={fileUrl} download={header.name || 'secret-file'} className="gp-btn" style={{ justifyContent: 'center', textDecoration: 'none' }}>
                       Download {isImage ? 'image' : 'file'}
                     </a>

@@ -39,13 +39,21 @@ function webglOk() {
 
 export function addBasemap(L: L, map: Leaflet.Map) {
   const maplibre = (L as unknown as { maplibreGL?: (o: object) => Leaflet.Layer }).maplibreGL;
+  const raster = () => L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
+  }).addTo(map);
   if (maplibre && webglOk()) {
-    maplibre({ style: STYLE, attribution: ATTRIBUTION, interactive: false }).addTo(map);
+    const layer = maplibre({ style: STYLE, attribution: ATTRIBUTION, interactive: false }).addTo(map) as Leaflet.Layer & { getMaplibreMap?: () => any };
+    // If the vector style fails or is too slow (blocked network, flaky connection), switch to
+    // plain OpenStreetMap tiles so the map is never blank.
+    let swapped = false;
+    const swap = () => { if (swapped || !map.hasLayer(layer)) return; swapped = true; map.removeLayer(layer); raster(); };
+    const gl = layer.getMaplibreMap?.();
+    gl?.on?.('error', (e: { error?: { status?: number }; sourceId?: string }) => { if (!gl.isStyleLoaded?.()) swap(); else if (e?.error?.status && e.error.status >= 400) swap(); });
+    setTimeout(() => { try { if (gl && !gl.isStyleLoaded?.()) swap(); } catch { swap(); } }, 8000);
   } else {
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
-    }).addTo(map);
+    raster();
   }
   map.attributionControl.setPrefix(false);
 }

@@ -80,6 +80,8 @@ export type SecretHeader = {
   timer?: number; // seconds the viewer gets before the secret vanishes; 0 = no timer
   guard?: boolean; // blur until the viewer presses and holds, with a watermark
   tpl?: 'wifi';    // text is JSON for a template (Wi-Fi network)
+  noCopy?: boolean; // sender turned off copying the text
+  noSave?: boolean; // sender turned off downloading an image
 };
 
 export type WifiSecret = { ssid: string; password: string; security: 'WPA' | 'WEP' | 'nopass'; hidden?: boolean };

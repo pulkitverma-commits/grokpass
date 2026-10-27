@@ -38,9 +38,9 @@ export default function LimitModal({ quota, onClose }: { quota: Quota | null; on
 
         {step === 'choose' ? (
           <>
-            <h2 id="lm-title" className="lm-title">Free limit reached</h2>
+            <h2 id="lm-title" className="lm-title">Monthly limit reached</h2>
             <p className="lm-sub">
-              You’ve used all {quota?.quota ?? 10} free secrets.<br />
+              You’ve used all {quota?.quota ?? 10} secrets for this month.<br />
               Pick a way to keep sharing.
             </p>
 
@@ -52,13 +52,13 @@ export default function LimitModal({ quota, onClose }: { quota: Quota | null; on
               </button>
               <button type="button" role="radio" aria-checked={choice === 'plus'} className={`lm-option ${choice === 'plus' ? 'on' : ''}`} onClick={() => setChoice('plus')}>
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /><path d="M12 8v6M9 11h6" /></svg>
-                <strong>OnePeek+</strong>
-                <span>Unlimited secrets, no limits</span>
+                <strong>Upgrade</strong>
+                <span>Plus: 250 a month · Pro: 1,000</span>
               </button>
             </div>
 
             {choice === 'plus' ? (
-              <Link href="/plus" className="lm-continue">Continue</Link>
+              <Link href="/pricing" className="lm-continue">See plans</Link>
             ) : (
               <button type="button" className="lm-continue" onClick={() => setStep('refer')}>Continue</button>
             )}
@@ -68,7 +68,7 @@ export default function LimitModal({ quota, onClose }: { quota: Quota | null; on
             <h2 id="lm-title" className="lm-title">Refer a friend</h2>
             <p className="lm-sub">
               Share your link. When a friend starts using OnePeek through it,<br />
-              your limit goes up to {REFERRAL_SECRETS} secrets.
+              your free limit goes up to {REFERRAL_SECRETS} secrets a month.
             </p>
             <div className="lm-ref">
               <span>{referLink}</span>

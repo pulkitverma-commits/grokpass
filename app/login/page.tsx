@@ -8,6 +8,15 @@ import { supabase } from '@/lib/supabase';
 type Mode = 'login' | 'signup';
 type Method = 'password' | 'magic';
 
+// Where to go after signing in: ?next=/pricing (same-site paths only), else the dashboard.
+function nextPath() {
+  try {
+    const n = new URLSearchParams(window.location.search).get('next') || '';
+    if (/^\/(?!\/)[A-Za-z0-9/_-]*$/.test(n)) return n;
+  } catch { /* ignore */ }
+  return '/dashboard';
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -35,7 +44,7 @@ export default function LoginPage() {
     setLoading(true);
     const { error } = await supabase.auth.signInWithOtp({
       email: to,
-      options: { emailRedirectTo: `${window.location.origin}/dashboard`, shouldCreateUser: true },
+      options: { emailRedirectTo: `${window.location.origin}${nextPath()}`, shouldCreateUser: true },
     });
     setLoading(false);
     if (error) { setMsg({ kind: 'err', text: error.message }); return; }
@@ -55,7 +64,7 @@ export default function LoginPage() {
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) setMsg({ kind: 'err', text: error.message });
-      else { router.push('/dashboard'); return; }
+      else { router.push(nextPath()); return; }
     }
     setLoading(false);
   }
@@ -67,7 +76,7 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        redirectTo: `${window.location.origin}/dashboard`,
+        redirectTo: `${window.location.origin}${nextPath()}`,
         scopes: provider === 'azure' ? 'email openid profile User.Read' : undefined,
       },
     });

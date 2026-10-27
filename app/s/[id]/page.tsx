@@ -217,7 +217,17 @@ export default function RevealPage() {
         return;
       }
       if (res.ok) row = await res.json();
-    } catch { /* handled below */ }
+      else if (res.status !== 404) {
+        // Server or network trouble: nothing was opened or burned, so keep the key and let them retry.
+        setGeoMsg('We couldn’t open this secret right now. Nothing has been opened or deleted. Please try again in a moment.');
+        setPhase('ready');
+        return;
+      }
+    } catch {
+      setGeoMsg('We couldn’t reach OnePeek. Check your connection and try again. Nothing has been opened or deleted.');
+      setPhase('ready');
+      return;
+    }
     // Drop the key from the address bar so it isn't left in history.
     history.replaceState(null, '', window.location.pathname);
     if (!row) {

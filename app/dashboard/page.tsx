@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { PlanCard } from '../pricing/PlanButton';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { User } from '@supabase/supabase-js';
@@ -119,6 +120,8 @@ export default function Dashboard() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmBurn, setConfirmBurn] = useState<string | null>(null);
   const [burnMsg, setBurnMsg] = useState('');
+  const [burnRow, setBurnRow] = useState<{ id: string; msg: string } | null>(null);
+  const [burning, setBurning] = useState<string | null>(null);
 
   useEffect(() => {
     if (!supabase) { setReady(true); return; }
@@ -212,11 +215,24 @@ export default function Dashboard() {
     if (!supabase) return;
     setConfirmBurn(null);
     setBurnMsg('');
+    setBurnRow(null);
+    setBurning(id);
+    // Make sure the sign-in is fresh: an expired session would look like "not yours".
+    await supabase.auth.getSession();
     const { data, error } = await supabase.rpc('burn_secret', { p_id: id });
-    const res = (Array.isArray(data) ? data[0] : null) as { burned: boolean; file_path: string | null } | null;
-    if (error) { setBurnMsg('Couldn’t burn that secret. Please try again.'); return; }
+    setBurning(null);
+    const res = (Array.isArray(data) ? data[0] : null) as { burned: boolean; file_path: string | null; reason?: string } | null;
+    if (error) {
+      setBurnRow({ id, msg: /plan_required/.test(error.message || '') ? 'Burn now is part of OnePeek Pro.' : 'Couldn’t burn that secret. Please try again.' });
+      return;
+    }
     if (res?.file_path) supabase.storage.from('secrets').remove([res.file_path]).catch(() => {});
-    if (!res?.burned) setBurnMsg('That link had already been opened or expired.');
+    if (!res?.burned) {
+      const why = res?.reason === 'not_signed_in' ? 'Your sign-in has expired. Refresh the page, sign in again and try once more.'
+        : res?.reason === 'not_found' ? 'This secret isn’t in your account.'
+        : 'That link was already opened, expired or removed, so there was nothing left to burn.';
+      setBurnRow({ id, msg: why });
+    }
     loadHistory();
   }
 
@@ -299,8 +315,7 @@ export default function Dashboard() {
               </div>
               <div className="dash-card">
                 <span className="dash-label">Plan</span>
-                <strong className="dash-big">{quota?.plan === 'plus' ? 'OnePeek+' : 'Free'}</strong>
-                {quota?.plan === 'plus' ? <span className="dash-muted">No limits</span> : <Link href="/plus" className="dash-link">Upgrade to OnePeek+ →</Link>}
+                <PlanCard />
               </div>
             </section>
 
@@ -406,11 +421,12 @@ export default function Dashboard() {
                                   {!hasMap && <em>{openMap === r.id ? 'Hide map' : 'Show area'}</em>}
                                 </button>
                               )}
+                              {burnRow?.id === r.id && <p className="burn-note" role="status">{burnRow.msg}</p>}
                             </div>
                             {r.status === 'waiting' && (
                               confirmBurn === r.id ? (
                                 <span className="burn-confirm">
-                                  <button type="button" className="danger" onClick={() => burnNow(r.id)}>Burn</button>
+                                  <button type="button" className="danger" onClick={() => burnNow(r.id)} disabled={burning === r.id}>{burning === r.id ? 'Burning…' : 'Burn'}</button>
                                   <button type="button" onClick={() => setConfirmBurn(null)}>Keep</button>
                                 </span>
                               ) : (

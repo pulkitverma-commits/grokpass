@@ -8,7 +8,11 @@ const REF_KEY = 'onepass.ref';
 export const FREE_SECRETS = 10;
 export const REFERRAL_SECRETS = 50;
 
-export type Quota = { used: number; quota: number | null; plan: 'free' | 'plus'; ref_code: string; referred: number };
+export type Plan = 'free' | 'plus' | 'pro';
+export type Quota = { used: number; quota: number | null; plan: Plan; ref_code: string; referred: number };
+
+export const PLAN_NAME: Record<Plan, string> = { free: 'Free', plus: 'Plus', pro: 'Pro' };
+export const isPaid = (p?: Plan | null) => p === 'plus' || p === 'pro';
 
 function safeGet(k: string) { try { return localStorage.getItem(k); } catch { return null; } }
 function safeSet(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* ignore */ } }

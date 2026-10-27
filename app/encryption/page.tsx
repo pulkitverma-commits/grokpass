@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import SiteFooter from '../components/SiteFooter';
 import Link from 'next/link';
 import Icon, { type IconName } from '../components/Icon';
 import CryptoDemo from './CryptoDemo';
@@ -251,8 +252,8 @@ export default function EncryptionPage() {
           </div>
         </section>
 
-        <p className="legal-links"><Link href="/encryption">How our encryption works</Link> · <Link href="/privacy">Privacy Policy</Link> · <Link href="/terms">Terms of Service</Link> · <Link href="/">Home</Link></p>
       </main>
+      <SiteFooter />
     </div>
   );
 }

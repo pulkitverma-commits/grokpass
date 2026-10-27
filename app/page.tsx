@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import SiteFooter from './components/SiteFooter';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
 import ProcessAnim from './components/ProcessAnim';
@@ -639,29 +640,7 @@ export default function Home() {
         </div>
       </section>
 
-      <footer className="anim-fade-up">
-        <div className="footer-inner">
-          <div className="footer-top">
-            <div className="footer-brand">
-              <div className="logo">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/onepeek-logo.png" alt="OnePeek" className="logo-img logo-img-sm" width={128} height={48} />
-              </div>
-              <p>Zero-knowledge secret sharing. Encrypted in your browser.</p>
-            </div>
-            <div className="footer-navs">
-              <nav className="footer-nav"><span>PRODUCT</span><a href="#how">How it works</a><a href="#features">Features</a><Link href="/pricing">Pricing</Link><Link href="/integrations">Integrations</Link><Link href="/developers">Developers &amp; API</Link><a href="#send">Send a secret</a></nav>
-              <nav className="footer-nav"><span>USE CASES</span><Link href="/use-cases/hr">HR teams</Link><Link href="/use-cases/developers">Developers</Link><Link href="/use-cases/support">Support teams</Link><Link href="/playbooks">Playbooks</Link><Link href="/share-passwords-securely">Share passwords securely</Link></nav>
-              <nav className="footer-nav"><span>ACCOUNT</span><Link href="/login">Login</Link><Link href="/dashboard">Dashboard</Link><Link href="/refer">Refer a friend</Link></nav>
-              <nav className="footer-nav"><span>TRUST</span><Link href="/encryption">How encryption works</Link><a href="/.well-known/security.txt">security.txt</a><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link></nav>
-            </div>
-          </div>
-          <div className="footer-bottom">
-            <span>© {new Date().getFullYear()} OnePeek</span>
-            <span>encrypted in your browser · AES-GCM</span>
-          </div>
-        </div>
-      </footer>
+      <SiteFooter />
 
       {showLimit && <LimitModal quota={quota} onClose={() => setShowLimit(false)} />}
     </div>

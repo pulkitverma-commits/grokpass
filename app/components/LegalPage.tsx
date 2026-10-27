@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import SiteFooter from './SiteFooter';
 
 export default function LegalPage({ title, updated, children, eyebrow = 'LEGAL' }: { title: string; updated: string; children: React.ReactNode; eyebrow?: string }) {
   return (
@@ -21,8 +22,8 @@ export default function LegalPage({ title, updated, children, eyebrow = 'LEGAL' 
         <h1>{title}</h1>
         <p className="legal-updated">Last updated {updated}</p>
         {children}
-        <p className="legal-links"><Link href="/encryption">How our encryption works</Link> · <Link href="/privacy">Privacy Policy</Link> · <Link href="/terms">Terms of Service</Link> · <Link href="/">Home</Link></p>
       </main>
+      <SiteFooter />
     </div>
   );
 }

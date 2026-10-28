@@ -91,6 +91,21 @@ describe('Secret Chat MLS adapter', () => {
     expect(m.kind === 'message' && m.payload.t === 'text' && m.payload.body).toBe('persisted');
   });
 
+  it('keeps one signing identity per device across key packages', async () => {
+    const signing = await mls.newSigningKey();
+    const a = await mls.newKeyPackage('dev-x', signing);
+    const b = await mls.newKeyPackage('dev-x', signing);
+    expect(a.publicPackage.leafNode.signaturePublicKey).toEqual(signing.publicKey);
+    expect(b.publicPackage.leafNode.signaturePublicKey).toEqual(signing.publicKey);
+    expect(a.publicBytes).not.toEqual(b.publicBytes);
+    const restored = mls.restoreKeyPackage(a.publicBytes, a.privatePackage);
+    const owner = await mls.newKeyPackage('dev-owner');
+    let room = await mls.createRoom('room-x', owner);
+    const added = await mls.addMembers(room, [restored.publicBytes]);
+    const joined = await mls.joinRoom(added.welcome!, restored);
+    expect(mls.welcomeSignature(joined, 'dev-x')).toEqual(signing.publicKey);
+  });
+
   it('lists members by device id', async () => {
     const { alice } = await room(true);
     expect(mls.memberLeaves(alice).map(m => m.deviceId).sort()).toEqual(['dev-alice', 'dev-bob', 'dev-carol']);

@@ -15,6 +15,7 @@ import {
   getCiphersuiteImpl,
   getCiphersuiteFromName,
   generateKeyPackage,
+  generateKeyPackageWithKey,
   encodeMlsMessage,
   decodeMlsMessage,
   encodeGroupState,
@@ -59,11 +60,35 @@ const dec = new TextDecoder();
 /** A device's one-time join material. `publicBytes` is uploaded; `privatePackage` never leaves the device. */
 export type DeviceKeyPackage = { publicPackage: KeyPackage; privatePackage: PrivateKeyPackage; publicBytes: Uint8Array };
 
-/** Identity inside MLS is the opaque device id (a UUID), never an email or name. */
-export async function newKeyPackage(deviceId: string): Promise<DeviceKeyPackage> {
-  const kp = await generateKeyPackage({ credentialType: 'basic', identity: enc.encode(deviceId) }, defaultCapabilities(), defaultLifetime, [], await suite());
+/** A device's long-term Ed25519 signing key. Its public half is what safety numbers verify. */
+export type SigningKey = { publicKey: Uint8Array; signKey: Uint8Array };
+
+export async function newSigningKey(): Promise<SigningKey> {
+  return (await suite()).signature.keygen();
+}
+
+/**
+ * Identity inside MLS is the opaque device id (a UUID), never an email or name.
+ * Every KeyPackage reuses the device's signing key so its identity is stable across rooms.
+ */
+export async function newKeyPackage(deviceId: string, signing?: SigningKey): Promise<DeviceKeyPackage> {
+  const cred = { credentialType: 'basic' as const, identity: enc.encode(deviceId) };
+  const kp = signing
+    ? await generateKeyPackageWithKey(cred, defaultCapabilities(), defaultLifetime, [], signing, await suite())
+    : await generateKeyPackage(cred, defaultCapabilities(), defaultLifetime, [], await suite());
   const publicBytes = encodeMlsMessage({ keyPackage: kp.publicPackage, wireformat: 'mls_key_package', version: 'mls10' });
   return { publicPackage: kp.publicPackage, privatePackage: kp.privatePackage, publicBytes };
+}
+
+/** Rebuilds a stored KeyPackage from its uploaded bytes and private half. */
+export function restoreKeyPackage(publicBytes: Uint8Array, privatePackage: PrivateKeyPackage): DeviceKeyPackage {
+  const m = decodeOne(publicBytes);
+  if (m.wireformat !== 'mls_key_package') throw new Error('not_key_package');
+  return { publicPackage: m.keyPackage, privatePackage, publicBytes };
+}
+
+export function welcomeSignature(state: ClientState, deviceId: string) {
+  return memberLeaves(state).find(m => m.deviceId === deviceId)?.signaturePublicKey ?? null;
 }
 
 export async function createRoom(roomId: string, own: DeviceKeyPackage): Promise<ClientState> {

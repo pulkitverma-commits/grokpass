@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import SiteFooter from './components/SiteFooter';
-import { supabase } from '@/lib/supabase';
+import { supabase, accountUser } from '@/lib/supabase';
 import Link from 'next/link';
 import ProcessAnim from './components/ProcessAnim';
 import LimitModal from './components/LimitModal';
@@ -82,7 +82,7 @@ export default function Home() {
 
   useEffect(() => {
     if (supabase) {
-      supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+      supabase.auth.getSession().then(({ data }) => setUser(accountUser(data.session)));
     }
   }, []);
 

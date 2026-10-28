@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { supabase } from '@/lib/supabase';
+import { supabase, accountUser } from '@/lib/supabase';
 import { startCheckout, billingCall } from '@/lib/checkout';
 import { getClientId, type Plan } from '@/lib/quota';
 
@@ -15,7 +15,7 @@ function useAccount() {
       if (!supabase) { setSignedIn(false); return; }
       const { data } = await supabase.auth.getSession();
       if (!live) return;
-      setSignedIn(!!data.session);
+      setSignedIn(!!accountUser(data.session));
       const { data: q } = await supabase.rpc('get_quota', { p_client_id: getClientId(), p_ref: null });
       const row = Array.isArray(q) ? q[0] : null;
       if (live && row?.plan) setPlan(row.plan as Plan);

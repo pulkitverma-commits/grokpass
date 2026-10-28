@@ -16,13 +16,14 @@ export function anonClient(): SupabaseClient | null {
   return url && anonKey ? createClient(url, anonKey, opts) : null;
 }
 
-/** The signed-in user behind a request's "Authorization: Bearer <access token>" header. */
+/** The signed-in (non-guest) user behind a request's "Authorization: Bearer <access token>" header. */
 export async function userFromRequest(req: Request) {
   const token = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
   const sb = anonClient();
   if (!token || !sb) return null;
   const { data, error } = await sb.auth.getUser(token);
-  return error ? null : data.user;
+  // Secret Chat guests sign in anonymously; they don't get account features.
+  return error || data.user.is_anonymous ? null : data.user;
 }
 
 export function siteUrl(req?: Request) {

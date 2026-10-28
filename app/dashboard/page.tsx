@@ -6,7 +6,7 @@ import { PlanCard } from '../pricing/PlanButton';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { User } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabase';
+import { supabase, accountUser } from '@/lib/supabase';
 import { getClientId, type Quota } from '@/lib/quota';
 import Icon from '@/app/components/Icon';
 import { tzLabel } from '@/lib/time';
@@ -126,8 +126,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!supabase) { setReady(true); return; }
-    supabase.auth.getSession().then(({ data }) => { setUser(data.session?.user ?? null); setReady(true); });
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => setUser(session?.user ?? null));
+    supabase.auth.getSession().then(({ data }) => { setUser(accountUser(data.session)); setReady(true); });
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => setUser(accountUser(session)));
     return () => sub.subscription.unsubscribe();
   }, []);
 

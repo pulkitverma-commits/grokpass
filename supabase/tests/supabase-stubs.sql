@@ -15,7 +15,8 @@ do $$ begin
 
 grant usage on schema public, extensions, auth, storage, realtime to anon, authenticated, service_role;
 
-create table auth.users (id uuid primary key, email text, is_anonymous boolean default false);
+create table auth.users (id uuid primary key, email text, is_anonymous boolean default false,
+  raw_user_meta_data jsonb default '{}', raw_app_meta_data jsonb default '{}', created_at timestamptz default now());
 
 -- Supabase reads the caller from the JWT; tests set it with set_config('request.jwt.claim.sub', ...).
 create function auth.uid() returns uuid language sql stable as $$
@@ -39,4 +40,9 @@ $$;
 create function realtime.send(payload jsonb, event text, topic text, private boolean default true) returns void
 language sql as $$
   insert into realtime.messages(topic, extension, event, payload, private) values (topic, 'broadcast', event, payload, private)
+$$;
+
+-- JWT claims; tests set request.jwt.claims to '{"is_anonymous": true}' for guest sessions.
+create function auth.jwt() returns jsonb language sql stable as $$
+  select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb
 $$;

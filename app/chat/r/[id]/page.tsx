@@ -41,10 +41,10 @@ export default function ConversationPage() {
     syncing.current = true;
     try {
       const r = await chat.sync(roomId);
-      if (r.removed) { setEnded('This chat has ended, or you were removed.'); return; }
+      if (r.removed) { setEnded(e => e ?? 'This chat has ended, or you were removed.'); return; }
       const rooms = await chat.myRooms();
       const current = rooms.find(x => x.id === roomId) ?? null;
-      if (!current) { setEnded('This chat has ended.'); await chat.forgetRoom(roomId); return; }
+      if (!current) { setEnded(e => e ?? 'This chat has ended.'); await chat.forgetRoom(roomId); return; }
       setRoom(current);
       setJoined(current.memberState === 'active' && !!(await chat.keystore.get(`room:${roomId}:state`)));
       if (current.role === 'owner') {
@@ -68,7 +68,7 @@ export default function ConversationPage() {
     chat.ensureDevice().then(d => alive && setMe(d.id)).catch(() => router.replace('/chat'));
     refresh();
     const off = chat.subscribe(roomId, (event) => {
-      if (event === 'burned') { setEnded('The owner burned this chat.'); chat.forgetRoom(roomId); return; }
+      if (event === 'burned') { setEnded(e => e ?? 'The owner burned this chat.'); chat.forgetRoom(roomId); return; }
       refresh();
     });
     const poll = setInterval(refresh, 8000);

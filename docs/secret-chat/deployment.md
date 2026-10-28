@@ -51,3 +51,21 @@ Merge `feature/onepeek-secret-chat` into `main`; Vercel deploys onepeek.io. Chat
 3. Empty the `chat-attachments` bucket (Storage), then run `supabase/migrations/006_secret_chat_down.sql`.
    This deletes all chat data. Existing OnePeek tables are untouched.
 4. Leave 007 in place (it only adds a guest check), or re-run `create_request` from 005 to undo it.
+
+## Security headers and locked cleanup (2026-10-28)
+
+What ships:
+- Every page: `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`, `Cross-Origin-Opener-Policy`.
+- `/chat`: strict, enforced CSP with a per-request nonce (`middleware.ts`); `/chat` is rendered per request.
+- Rest of the site: CSP in **report-only** mode (`lib/security-headers.js`). Nothing is blocked; violations
+  show in the browser console as `[Report Only]`. Once a few days pass with none (check checkout with
+  Razorpay especially), rename the header to `Content-Security-Policy` in `next.config.js` to enforce it.
+- `/api/cleanup` and `/api/chat/cleanup` only run for Vercel Cron and use the service role.
+
+Order:
+1. **Vercel → grokpass → Settings → Environment Variables:** add `CRON_SECRET` for Production, a random
+   value of at least 32 characters (`openssl rand -hex 32`). Vercel sends it to cron routes automatically.
+   Without it the cleanup routes refuse every call (secrets still expire on read; rows just linger).
+2. Deploy (merge to `main`).
+3. Supabase SQL editor: run `supabase/migrations/008_lock_cleanup.sql` (stops the public from triggering cleanup).

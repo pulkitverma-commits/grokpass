@@ -33,6 +33,7 @@ describe('production schema history', () => {
   it('applies every migration in order, including Secret Chat', async () => {
     expect(migrations).toContain('006_secret_chat.sql');
     expect(migrations).toContain('007_block_anonymous_accounts.sql');
+    expect(migrations).toContain('008_lock_cleanup.sql');
     const n = (await db.query<any>(`select count(*)::int n from pg_tables where schemaname = 'public' and tablename like 'chat_%'`)).rows[0].n;
     expect(n).toBe(12);
   });
@@ -49,6 +50,15 @@ describe('production schema history', () => {
 
   it('refuses a chat guest (anonymous user)', async () => {
     await expect(asUser(GUEST, true, `select public.create_request('x', $1, 3600, 'client-guest-00001')`, [KEY])).rejects.toThrow(/login_required/);
+  });
+
+  it('008: only the server can run secret cleanup', async () => {
+    await expect(asUser(USER, false, `select public.reap_expired_secrets()`)).rejects.toThrow(/permission denied/);
+    await db.exec(`reset role; set role anon;`);
+    await expect(db.query(`select public.reap_expired_secrets()`)).rejects.toThrow(/permission denied/);
+    await db.exec(`reset role; set role service_role;`);
+    await db.query(`select public.reap_expired_secrets()`);
+    await db.exec('reset role;');
   });
 
   it('still lets a chat guest use Secret Chat', async () => {

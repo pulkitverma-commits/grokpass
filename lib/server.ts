@@ -45,3 +45,18 @@ export function randomUrlToken(bytes = 32) {
 export function escapeHtml(s: string) {
   return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 }
+
+/**
+ * True only for Vercel Cron, which sends "Authorization: Bearer <CRON_SECRET>".
+ * Fails closed: with no CRON_SECRET configured, nobody may trigger cron routes.
+ */
+export function isCronRequest(req: Request) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || secret.length < 16) return false;
+  const got = req.headers.get('authorization') || '';
+  const want = `Bearer ${secret}`;
+  if (got.length !== want.length) return false;
+  let diff = 0;
+  for (let i = 0; i < want.length; i++) diff |= got.charCodeAt(i) ^ want.charCodeAt(i);
+  return diff === 0;
+}

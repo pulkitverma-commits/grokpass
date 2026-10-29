@@ -211,3 +211,25 @@ a.c-row:hover { background: var(--c-fill); }
 /* Notifications toggle and admin ----------------------------------------- */
 .c-switch-row { display: flex; align-items: center; gap: 12px; }
 .c-badge-admin { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--c-line); color: var(--c-muted); }
+
+/* Screenshot protection ------------------------------------------------------ */
+.c-msgs-wrap { position: relative; overflow: hidden; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.c-msgs-wrap > .c-msgs { flex: 1; }
+.c-wm { position: absolute; inset: -30%; z-index: 2; pointer-events: none; display: flex; flex-wrap: wrap; align-content: space-around; justify-content: space-around;
+  gap: 54px 80px; transform: rotate(-22deg); opacity: .05; overflow: hidden; }
+.c-wm span { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #fff; white-space: nowrap; user-select: none; }
+.c-convo.is-secret .c-wm { opacity: .1; }
+.c-convo.is-secret .c-msgs, .c-convo.is-secret .c-bubble { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.c-bubble.guarded { cursor: pointer; touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.c-bubble.guarded.hidden { filter: none; background: repeating-linear-gradient(135deg, var(--c-theirs) 0 8px, color-mix(in srgb, var(--c-theirs) 70%, #000) 8px 16px); }
+.c-hold { display: inline-flex; align-items: center; gap: 6px; color: var(--c-muted); font-size: 13.5px; }
+.c-hold.big { font-size: 15px; color: var(--c-text); padding: 60px 40px; }
+.c-alert { display: inline-flex; align-items: center; gap: 6px; color: var(--c-danger); background: var(--c-danger-soft); }
+.c-viewer-body { position: relative; overflow: hidden; border-radius: 12px; display: flex; align-items: center; justify-content: center; }
+.c-viewer-body.guarded { cursor: pointer; min-width: min(80vw, 420px); min-height: 200px; background: var(--c-surface); border: 1px solid var(--c-line);
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: none; }
+.c-viewer-body .c-wm { opacity: .12; }
+/* Shielded: screenshot shortcut pressed, or (Secret Chat) the pointer left the window. */
+.c-convo.c-shielded .c-msgs, .c-convo.c-shielded .c-viewer-body { filter: blur(18px); transition: filter .08s; }
+.chat.c-veiled .c-viewer-body { filter: blur(18px); }
+@media print { .chat { display: none !important; } }

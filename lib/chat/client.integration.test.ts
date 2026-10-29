@@ -288,6 +288,25 @@ describe('Secret Chat end to end (two browsers)', () => {
     expect((await on(b, c => c.messages(roomId))).some(m => m.id === 'd3000000-0000-4000-8000-0000000000b3')).toBe(true);
   });
 
+  it('a screenshot alert reaches the room encrypted and shows as a notice, not a message', async () => {
+    const a = await browser('sa', 'a0000000-0000-4000-8000-00000000000a');
+    const b = await browser('sb', 'b0000000-0000-4000-8000-00000000000b');
+    const roomId = await on(a, c => c.createRoom({ kind: 'secret', ttl: 30, mode: 'on_open', lifetime: 3600, accessCode: 'river-blue-4471' }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    await on(b, c => c.redeemInvite(tokenOf(link), 'Bea', 'river-blue-4471'));
+    await on(a, c => c.admitPending(roomId));
+    await on(b, c => c.sync(roomId));
+
+    lastSql = [];
+    const sent = await on(b, c => c.sendScreenshotAlert(roomId, 30));
+    expect(sent.alert).toBe('screenshot');
+    expect(JSON.stringify(lastSql)).not.toContain('screenshot');   // the server only sees ciphertext
+    await on(a, c => c.sync(roomId));
+    const got = (await on(a, c => c.messages(roomId))).find(m => m.id === sent.id)!;
+    expect(got).toMatchObject({ alert: 'screenshot', mine: false, body: '' });
+    expect(got.expiresAt).not.toBeNull();   // it disappears on the room timer without being opened
+  });
+
   it('a duplicate send with the same id is stored once', async () => {
     const a = await browser('dup', '80000000-0000-4000-8000-000000000008');
     const roomId = await on(a, c => c.createRoom({ kind: 'quick', ttl: 60, mode: 'on_open', lifetime: 3600 }));

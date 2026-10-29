@@ -2,9 +2,14 @@
 
 Plain statements of what Secret Chat does not do. The public page (/secret-chat) says the same.
 
-1. **Screenshots and cameras.** No website or app can stop someone from screenshotting or photographing a
-   chat. Content blurs when the tab or app loses focus and Secret Chat messages stay blurred until tapped,
-   but anyone in the chat can still keep what they see.
+1. **Screenshots and cameras.** A website can't block screenshots outright; only native apps can (Android
+   `FLAG_SECURE`, iOS capture detection). What Secret Chat does: someone else's Secret Chat message is only in
+   the page while it is pressed and held; screenshot shortcuts (Print Screen, Cmd+Shift, Win+Shift+S,
+   Ctrl+Shift+S) blur the chat for 3 seconds, clear a Print Screen copy and send an encrypted
+   "may have taken a screenshot" notice to the room; Secret Chat also blurs when the pointer leaves the
+   window; content blurs when the tab or app loses focus; printing, copying and dragging are blocked; and a
+   faint watermark (viewer's name, device code, time) covers every screen. A phone's hardware screenshot
+   buttons, screen recorders and cameras are not detectable from a browser.
 2. **Unaudited MLS library.** Encryption uses MLS (RFC 9420) through `ts-mls`, an open-source TypeScript
    implementation. It has not had an independent security audit. It sits behind `lib/chat/mls.ts` so it
    can be swapped (for example for a WASM build of `mls-rs`).

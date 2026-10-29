@@ -143,7 +143,8 @@ export async function joinRoom(welcome: Uint8Array, own: DeviceKeyPackage): Prom
 export type ChatPayload =
   | { t: 'text'; id: string; body: string; ttl: number; replyTo?: string }
   | { t: 'file'; id: string; ttl: number; viewOnce: boolean; objectPath: string; key: string; name: string; mime: string; size: number }
-  | { t: 'nick'; name: string };
+  | { t: 'nick'; name: string }
+  | { t: 'alert'; id: string; kind: 'screenshot'; ttl: number };
 
 export async function encrypt(state: ClientState, payload: ChatPayload) {
   const r = await createApplicationMessage(state, enc.encode(JSON.stringify(payload)), await suite());
@@ -172,7 +173,8 @@ export async function receive(state: ClientState, bytes: Uint8Array, ownDeviceId
 
 function parsePayload(bytes: Uint8Array): ChatPayload {
   const v = JSON.parse(dec.decode(bytes));
-  if (!v || typeof v !== 'object' || !['text', 'file', 'nick'].includes(v.t)) throw new Error('bad_payload');
+  if (!v || typeof v !== 'object' || !['text', 'file', 'nick', 'alert'].includes(v.t)) throw new Error('bad_payload');
+  if (v.t === 'alert' && v.kind !== 'screenshot') throw new Error('bad_payload');
   return v as ChatPayload;
 }
 

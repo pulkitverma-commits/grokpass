@@ -27,6 +27,7 @@ export type LocalMessage = {
   replyTo?: string;
   file?: Extract<mls.ChatPayload, { t: 'file' }>;
   viewed?: boolean;          // a view-once file this device has already opened
+  pending?: boolean;         // shown on screen while it is still being sent (never stored)
 };
 
 export type RoomSummary = {
@@ -83,18 +84,22 @@ export async function ensureSession(guest = false) {
   return anon.session;
 }
 
+let deviceCache: DeviceRecord | null = null;
+
 /** This browser's chat device for the current user, registering one on first use. */
 export async function ensureDevice(): Promise<DeviceRecord> {
   const session = await ensureSession(false);
   if (!session) throw new ChatError('not_signed_in');
+  if (deviceCache && deviceCache.userId === session.user.id) return deviceCache;
   const key = `device:${session.user.id}`;
   const existing = await ks.get<DeviceRecord>(key);
-  if (existing) return existing;
+  if (existing) { deviceCache = existing; return existing; }
   const signing = await mls.newSigningKey();
   const label = deviceLabel();
   const id = await rpc<string>('chat_register_device', { p_signature_pub: toBytea(signing.publicKey), p_label: label });
   const rec: DeviceRecord = { id, signing, userId: session.user.id };
   await ks.put(key, rec);
+  deviceCache = rec;
   return rec;
 }
 
@@ -120,6 +125,19 @@ export async function revokeDevice(id: string) {
 // ---------------------------------------------------------------------------- local room data
 
 const roomKey = (id: string, part: string) => `room:${id}:${part}`;
+
+// One change to a room's MLS state at a time in this tab. Sending and syncing both load,
+// advance and save the state; if they overlapped, one save would undo the other's ratchet step
+// and later messages would fail to decrypt for everyone else.
+const roomLocks = new Map<string, Promise<unknown>>();
+function withRoomLock<T>(roomId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = roomLocks.get(roomId) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  const tail = run.then(() => undefined, () => undefined);
+  roomLocks.set(roomId, tail);
+  void tail.then(() => { if (roomLocks.get(roomId) === tail) roomLocks.delete(roomId); });
+  return run;
+}
 
 async function loadState(roomId: string) {
   const b = await ks.get<Uint8Array>(roomKey(roomId, 'state'));
@@ -233,7 +251,10 @@ export async function members(roomId: string) {
 }
 
 /** Owner only: admits pending joiners by committing an MLS add and sending each a Welcome. */
-export async function admitPending(roomId: string, only?: string[]) {
+export function admitPending(roomId: string, only?: string[]) {
+  return withRoomLock(roomId, () => admitPendingLocked(roomId, only));
+}
+async function admitPendingLocked(roomId: string, only?: string[]) {
   const dev = await ensureDevice();
   let state = await loadState(roomId);
   if (!state) return 0;
@@ -258,7 +279,10 @@ export async function admitPending(roomId: string, only?: string[]) {
 }
 
 /** Owner only: commits the MLS removal of devices the server already marked removed (left or revoked). */
-export async function commitRemovals(roomId: string) {
+export function commitRemovals(roomId: string) {
+  return withRoomLock(roomId, () => commitRemovalsLocked(roomId));
+}
+async function commitRemovalsLocked(roomId: string) {
   const dev = await ensureDevice();
   let state = await loadState(roomId);
   if (!state) return 0;
@@ -277,7 +301,10 @@ export async function commitRemovals(roomId: string) {
 }
 
 /** Owner removes a member: the server revokes access, then the MLS commit locks them out cryptographically. */
-export async function removeMember(roomId: string, deviceId: string) {
+export function removeMember(roomId: string, deviceId: string) {
+  return withRoomLock(roomId, () => removeMemberLocked(roomId, deviceId));
+}
+async function removeMemberLocked(roomId: string, deviceId: string) {
   const dev = await ensureDevice();
   let state = await loadState(roomId);
   if (!state) throw new ChatError('no_local_state');
@@ -291,14 +318,20 @@ export async function removeMember(roomId: string, deviceId: string) {
 
 // ---------------------------------------------------------------------------- messaging
 
-export async function send(roomId: string, body: string, ttl: number, replyTo?: string) {
+/** Sends a text message. Pass `id` to match a message already shown on screen while sending. */
+export async function send(roomId: string, body: string, ttl: number, replyTo?: string, id: string = crypto.randomUUID()) {
   const text = body.trim();
   if (!text) return null;
   if (text.length > 4000) throw new ChatError('too_long');
   const dev = await ensureDevice();
+  const mine = await withRoomLock(roomId, () => sendTextLocked(roomId, dev, id, text, ttl, replyTo));
+  void notifyRoom(roomId);
+  return mine;
+}
+
+async function sendTextLocked(roomId: string, dev: DeviceRecord, id: string, text: string, ttl: number, replyTo?: string) {
   const state = await loadState(roomId);
   if (!state) throw new ChatError('no_local_state');
-  const id = crypto.randomUUID();
   const enc = await mls.encrypt(state, { t: 'text', id, body: text, ttl, replyTo });
   // Save the advanced state first: reusing a ratchet generation would break forward secrecy.
   await saveState(roomId, enc.state);
@@ -309,7 +342,6 @@ export async function send(roomId: string, body: string, ttl: number, replyTo?: 
   const now = Date.now();
   const mine: LocalMessage = { id, seq: Number(seq), mine: true, sender: dev.id, body: text, ttl, sentAt: now, expiresAt: now + ttl * 1000, replyTo };
   await storeMessage(roomId, mine);
-  void notifyRoom(roomId);
   return mine;
 }
 
@@ -341,23 +373,26 @@ export async function sendFile(roomId: string, file: File, ttl: number, viewOnce
   });
   if (up.error) throw new ChatError('upload_failed');
 
-  // Load the state again after the upload: a sync may have advanced it in the meantime.
-  const state = await loadState(roomId);
-  if (!state) throw new ChatError('no_local_state');
   const id = crypto.randomUUID();
   const payload = {
     t: 'file' as const, id, ttl, viewOnce, objectPath, key: keyB64,
     name: file.name.slice(0, 120) || 'file', mime: (file.type || 'application/octet-stream').slice(0, 100), size: file.size,
   };
-  const enc = await mls.encrypt(state, payload);
-  await saveState(roomId, enc.state);
-  const seq = await rpc<number>('chat_send', {
-    p_room: roomId, p_device: dev.id, p_id: id, p_kind: 'app', p_epoch: Number(mls.epoch(state)),
-    p_ciphertext: toBytea(enc.ciphertext), p_ttl_s: ttl,
+  // The state is loaded only now, under the room lock: a sync may have advanced it during the upload.
+  const mine = await withRoomLock(roomId, async () => {
+    const state = await loadState(roomId);
+    if (!state) throw new ChatError('no_local_state');
+    const enc = await mls.encrypt(state, payload);
+    await saveState(roomId, enc.state);
+    const seq = await rpc<number>('chat_send', {
+      p_room: roomId, p_device: dev.id, p_id: id, p_kind: 'app', p_epoch: Number(mls.epoch(state)),
+      p_ciphertext: toBytea(enc.ciphertext), p_ttl_s: ttl,
+    });
+    const now = Date.now();
+    const m: LocalMessage = { id, seq: Number(seq), mine: true, sender: dev.id, body: '', ttl, sentAt: now, expiresAt: now + ttl * 1000, file: payload };
+    await storeMessage(roomId, m);
+    return m;
   });
-  const now = Date.now();
-  const mine: LocalMessage = { id, seq: Number(seq), mine: true, sender: dev.id, body: '', ttl, sentAt: now, expiresAt: now + ttl * 1000, file: payload };
-  await storeMessage(roomId, mine);
   void notifyRoom(roomId);
   return mine;
 }
@@ -418,7 +453,11 @@ async function sendControl(roomId: string, payload: mls.ChatPayload) {
 export type SyncResult = { joined: boolean; removed: boolean; newMessages: number };
 
 /** Pulls everything after the last processed sequence number and applies it in order. */
-export async function sync(roomId: string): Promise<SyncResult> {
+export function sync(roomId: string): Promise<SyncResult> {
+  return withRoomLock(roomId, () => syncLocked(roomId));
+}
+
+async function syncLocked(roomId: string): Promise<SyncResult> {
   const dev = await ensureDevice();
   const local = await roomLocal(roomId);
   let rows: any[];

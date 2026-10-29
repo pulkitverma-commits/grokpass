@@ -15,6 +15,7 @@ import OpenMap from '@/app/components/OpenMap';
 import OpensMap, { type OpenPoint } from '@/app/components/OpensMap';
 import RequestsPanel from '@/app/components/RequestsPanel';
 import AlertsPanel from '@/app/components/AlertsPanel';
+import DashboardChat from '@/app/components/DashboardChat';
 import { countryName } from '@/lib/countries';
 
 type Status = 'waiting' | 'opened' | 'expired' | 'burned';
@@ -259,6 +260,7 @@ export default function Dashboard() {
         </Link>
         {user && (
           <div className="dash-header-right">
+            <Link href="/chat/new" className="dash-ghost dash-chat-cta" style={{ textDecoration: 'none' }}><Icon name="lock" size={14} /> Start chat</Link>
             <Link href="/#send" className="gp-btn" style={{ textDecoration: 'none' }}>New secret →</Link>
             <div className="dash-user">
               <button type="button" className="dash-avatar" onClick={() => setMenuOpen(o => !o)} aria-expanded={menuOpen} aria-label="Account menu">
@@ -485,6 +487,7 @@ export default function Dashboard() {
               </div>
 
               <aside className="dash-side">
+                <DashboardChat />
                 <AlertsPanel user={user} />
 
                 <div className="dash-panel">

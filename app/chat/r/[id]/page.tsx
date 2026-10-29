@@ -41,15 +41,35 @@ export default function ConversationPage() {
   const [fileBusy, setFileBusy] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const syncing = useRef(false);
+  // Messages shown on screen while they are still being sent, by id.
+  const outgoing = useRef(new Map<string, LocalMessage>());
 
   const isOwner = room?.role === 'owner';
   const secret = room?.kind === 'secret';
   const keyWarnings = members.filter(chat.keyChanged);
 
-  const refresh = useCallback(async () => {
-    if (syncing.current) return;
-    syncing.current = true;
+  /** Shows stored messages plus any still on their way out. */
+  const showStored = useCallback(async () => {
+    const stored = await chat.messages(roomId);
+    const ids = new Set(stored.map(m => m.id));
+    for (const id of Array.from(outgoing.current.keys())) if (ids.has(id)) outgoing.current.delete(id);
+    setMsgs([...stored, ...Array.from(outgoing.current.values())]);
+  }, [roomId]);
+
+  /** Fast path for a new-message ping: one fetch, decrypt, show. */
+  const pullOnce = useCallback(async () => {
+    try {
+      const r = await chat.sync(roomId);
+      if (r.removed) { setEnded(e => e ?? 'This chat has ended, or you were removed.'); return; }
+      if (r.newMessages || r.joined) await showStored();
+      if (r.joined) void refresh();
+    } catch (e) {
+      if (e instanceof chat.ChatError && e.code === 'not_signed_in') router.replace('/chat');
+    }
+  }, [roomId, router, showStored]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Full refresh: room details, members, and the owner's admit/remove duties. */
+  const refreshOnce = useCallback(async () => {
     try {
       const r = await chat.sync(roomId);
       if (r.removed) { setEnded(e => e ?? 'This chat has ended, or you were removed.'); return; }
@@ -66,27 +86,38 @@ export default function ConversationPage() {
         await chat.commitRemovals(roomId);
       }
       setMembers(await chat.members(roomId));
-      setMsgs(await chat.messages(roomId));
+      await showStored();
     } catch (e) {
       if (e instanceof chat.ChatError && e.code === 'not_signed_in') router.replace('/chat');
-    } finally {
-      syncing.current = false;
     }
-  }, [roomId, router]);
+  }, [roomId, router, showStored]);
 
-  // First load, Realtime pings, and a slow poll as a fallback for missed pings.
+  // A ping that arrives mid-sync is queued, not dropped, so no message waits for the next poll.
+  const pull = useCoalesced(pullOnce);
+  const refresh = useCoalesced(refreshOnce);
+
+  // First load, Realtime pings, and a poll as a fallback for missed pings.
   useEffect(() => {
     let alive = true;
     chat.ensureDevice().then(d => alive && setMe(d.id)).catch(() => router.replace('/chat'));
     refresh();
     const off = chat.subscribe(roomId, (event) => {
       if (event === 'burned') { setEnded(e => e ?? 'The owner burned this chat.'); chat.forgetRoom(roomId); return; }
-      refresh();
+      if (event === 'msg') pull(); else refresh();
     });
-    const poll = setInterval(refresh, 8000);
+    const visible = () => document.visibilityState === 'visible';
+    const fast = setInterval(() => { if (visible()) pull(); }, 4000);
+    const slow = setInterval(() => { if (visible()) refresh(); }, 15000);
+    const back = () => { if (visible()) pull(); };
+    document.addEventListener('visibilitychange', back);
+    window.addEventListener('focus', back);
     const tick = setInterval(() => setNow(Date.now()), 1000);
-    return () => { alive = false; off(); clearInterval(poll); clearInterval(tick); };
-  }, [roomId, refresh, router]);
+    return () => {
+      alive = false; off(); clearInterval(fast); clearInterval(slow); clearInterval(tick);
+      document.removeEventListener('visibilitychange', back);
+      window.removeEventListener('focus', back);
+    };
+  }, [roomId, refresh, pull, router]);
 
   useEffect(() => { if (room) setTtl(room.ttl); }, [room?.ttl]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -124,13 +155,26 @@ export default function ConversationPage() {
     if (!text.trim()) return;
     setErr('');
     const body = text;
+    const reply = replyTo;
+    // Show it straight away; it is encrypted and sent in the background.
+    const id = crypto.randomUUID();
+    const draft: LocalMessage = {
+      id, seq: Number.MAX_SAFE_INTEGER, mine: true, sender: me, body: body.trim(), ttl,
+      sentAt: Date.now(), expiresAt: null, replyTo: reply?.id, pending: true,
+    };
+    outgoing.current.set(id, draft);
+    setMsgs(list => [...list, draft]);
     setText('');
+    setReplyTo(null);
     try {
-      const m = await chat.send(roomId, body, ttl, replyTo?.id);
-      setReplyTo(null);
-      if (m) setMsgs(list => [...list, m]);
+      const m = await chat.send(roomId, body, ttl, reply?.id, id);
+      outgoing.current.delete(id);
+      if (m) setMsgs(list => list.some(x => x.id === id) ? list.map(x => x.id === id ? m : x) : [...list, m]);
     } catch (e) {
-      setText(body);
+      outgoing.current.delete(id);
+      setMsgs(list => list.filter(x => x.id !== id));
+      setText(t => t || body);
+      setReplyTo(r => r ?? reply);
       setErr(friendlyError(e instanceof chat.ChatError ? e.code : ''));
     }
   }
@@ -217,7 +261,7 @@ export default function ConversationPage() {
           const parent = m.replyTo ? byId.get(m.replyTo) : undefined;
           return (
             <div key={m.id} data-id={m.id} {...(!m.mine && m.expiresAt === null ? { 'data-unread': '' } : {})}
-              className={`c-msg ${m.mine ? 'mine' : 'theirs'}${left !== null && left <= 0 ? ' leaving' : ''}`}>
+              className={`c-msg ${m.mine ? 'mine' : 'theirs'}${m.pending ? ' pending' : ''}${left !== null && left <= 0 ? ' leaving' : ''}`}>
               <div className={`c-bubble${hidden ? ' hidden' : ''}`} onClick={() => hidden && open(m)} role={hidden ? 'button' : undefined} aria-label={hidden ? 'Tap to reveal message' : undefined}>
                 {parent && <div className="c-reply">{parent.file ? parent.file.name : parent.body}</div>}
                 {hidden ? 'Tap to reveal' : m.file ? (
@@ -235,10 +279,12 @@ export default function ConversationPage() {
               </div>
               <div className="c-meta">
                 {!m.mine && members.length > 2 && <span>{nameOf(m.sender)}</span>}
-                <span className={`c-timer${left !== null && left < 10_000 ? ' soon' : ''}`}>
-                  {left === null ? `${ttlLabel(m.ttl)} once read` : countdown(left)}
-                </span>
-                {!hidden && <button onClick={() => setReplyTo(m)}>Reply</button>}
+                {m.pending ? <span>Sending…</span> : <>
+                  <span className={`c-timer${left !== null && left < 10_000 ? ' soon' : ''}`}>
+                    {left === null ? `${ttlLabel(m.ttl)} once read` : countdown(left)}
+                  </span>
+                  {!hidden && <button onClick={() => setReplyTo(m)}>Reply</button>}
+                </>}
               </div>
             </div>
           );
@@ -494,4 +540,19 @@ function ConfirmSheet({ title, body, danger, onConfirm, onCancel }: { title: str
       {err && <p className="c-error">{err}</p>}
     </>
   );
+}
+
+/** Runs `fn` one at a time. Calls made while it runs collapse into one more run afterwards. */
+function useCoalesced(fn: () => Promise<void>) {
+  const running = useRef(false);
+  const again = useRef(false);
+  const latest = useRef(fn);
+  latest.current = fn;
+  return useCallback(async () => {
+    if (running.current) { again.current = true; return; }
+    running.current = true;
+    try {
+      do { again.current = false; await latest.current(); } while (again.current);
+    } finally { running.current = false; }
+  }, []);
 }

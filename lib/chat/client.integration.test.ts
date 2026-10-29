@@ -16,6 +16,17 @@ let lastSql: { fn: string; args: Record<string, unknown> }[] = [];
 function hexToBytes(s: string) { return new Uint8Array(Buffer.from(s.slice(2), 'hex')); }
 function bytesToHex(b: Uint8Array) { return '\\x' + Buffer.from(b).toString('hex'); }
 
+const objects = new Map<string, Uint8Array>();
+
+async function asUser(userId: string, sql: string, params: unknown[]) {
+  try {
+    await db.exec(`reset role; select set_config('request.jwt.claim.sub', '${userId}', false); set role authenticated;`);
+    return (await db.query<{ ok: boolean }>(sql, params)).rows[0]?.ok ?? false;
+  } finally {
+    await db.exec('reset role;');
+  }
+}
+
 /** A stand-in for the browser Supabase client, bound to one user. */
 function fakeSupabase(user: { id: string; is_anonymous?: boolean }) {
   return {
@@ -25,6 +36,23 @@ function fakeSupabase(user: { id: string; is_anonymous?: boolean }) {
       passkey: { list: async () => ({ data: [] }) },
     },
     realtime: { setAuth: async () => {} },
+    // Storage stand-in that applies the same checks as the bucket's RLS policies.
+    storage: {
+      from: (bucket: string) => ({
+        async upload(name: string, body: Blob) {
+          const ok = await asUser(user.id, `select public.chat_attachment_writable($1) ok`, [name]);
+          if (bucket !== 'chat-attachments' || !ok || objects.has(name)) return { data: null, error: { message: 'denied' } };
+          objects.set(name, new Uint8Array(await body.arrayBuffer()));
+          return { data: { path: name }, error: null };
+        },
+        async download(name: string) {
+          const ok = await asUser(user.id, `select public.chat_attachment_readable($1) ok`, [name]);
+          const bytes = objects.get(name);
+          if (!ok || !bytes) return { data: null, error: { message: 'not found' } };
+          return { data: new Blob([bytes as BlobPart]), error: null };
+        },
+      }),
+    },
     channel: () => ({ on() { return this; }, subscribe() { return this; } }),
     removeChannel: () => {},
     async rpc(fn: string, args: Record<string, unknown>) {
@@ -188,6 +216,51 @@ describe('Secret Chat end to end (two browsers)', () => {
     expect((await db.query<any>(`select count(*)::int n from public.chat_messages where room_id = $1`, [roomId])).rows[0].n).toBe(0);
     expect((await on(m2, c => c.sync(roomId))).removed).toBe(true);
     expect(await on(m2, c => c.keystore.keys(`room:${roomId}:`))).toEqual([]);
+  });
+
+  it('files are encrypted before upload, and view-once files open only once', async () => {
+    const a = await browser('fa', 'a0000000-0000-4000-8000-00000000000a');
+    const b = await browser('fb', 'b0000000-0000-4000-8000-00000000000b');
+    await db.query(`insert into auth.users(id) values ('c0000000-0000-4000-8000-00000000000c') on conflict do nothing`);
+    const roomId = await on(a, c => c.createRoom({ kind: 'quick', ttl: 300, mode: 'on_open', lifetime: 3600 }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    await on(b, c => c.redeemInvite(tokenOf(link), 'Bea'));
+    await on(a, c => c.admitPending(roomId));
+    await on(b, c => c.sync(roomId));
+
+    const secret = 'passport scan: P1234567';
+    const file = new File([secret], 'passport.txt', { type: 'text/plain' });
+    lastSql = [];
+    const sent = await on(a, c => c.sendFile(roomId, file, 300, false));
+    expect(sent.file?.name).toBe('passport.txt');
+    // Neither the RPC calls nor the stored object contain the file, its name or its key.
+    const wire = JSON.stringify(lastSql);
+    expect(wire).not.toContain('passport');
+    expect(wire).not.toContain(sent.file!.key);
+    const stored = Buffer.from(objects.get(sent.file!.objectPath)!).toString('latin1');
+    expect(stored).not.toContain('passport');
+
+    await on(b, c => c.sync(roomId));
+    const got = (await on(b, c => c.messages(roomId))).find(m => m.file)!;
+    expect(got.file!.name).toBe('passport.txt');
+    const blob = await on(b, c => c.openFile(roomId, got));
+    expect(await blob.text()).toBe(secret);
+    // Not a member: the storage policy refuses the download.
+    expect(await asUser('c0000000-0000-4000-8000-00000000000c', `select public.chat_attachment_readable($1) ok`, [sent.file!.objectPath])).toBe(false);
+
+    // View once: the recipient can open it once; the sender can't use up the view.
+    const once = await on(a, c => c.sendFile(roomId, new File(['one look'], 'once.txt', { type: 'text/plain' }), 300, true));
+    await expect(on(a, c => c.openFile(roomId, once))).rejects.toMatchObject({ code: 'view_once_sent' });
+    await on(b, c => c.sync(roomId));
+    const onceMsg = (await on(b, c => c.messages(roomId))).find(m => m.file?.viewOnce)!;
+    expect(await (await on(b, c => c.openFile(roomId, onceMsg))).text()).toBe('one look');
+    const after = (await on(b, c => c.messages(roomId))).find(m => m.id === onceMsg.id)!;
+    expect(after.viewed).toBe(true);
+    await expect(on(b, c => c.openFile(roomId, after))).rejects.toMatchObject({ code: 'gone' });
+    // Even replaying the claim from a fresh copy is refused by the server.
+    await expect(on(b, c => c.openFile(roomId, { ...onceMsg, viewed: false }))).rejects.toMatchObject({ code: 'gone' });
+
+    await expect(on(a, c => c.sendFile(roomId, new File([], 'empty.txt'), 300, false))).rejects.toMatchObject({ code: 'empty_file' });
   });
 
   it('a duplicate send with the same id is stored once', async () => {

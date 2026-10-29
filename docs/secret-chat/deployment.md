@@ -30,12 +30,23 @@ select count(*) from pg_tables where schemaname = 'public' and tablename like 'c
 select jobname, schedule from cron.job where jobname = 'chat-reap';                       -- * * * * *
 ```
 
-## 2. Deploy
+5. **Make yourself a chat admin** (optional, for /chat/admin):
+   `insert into public.chat_admins(user_id) select id from auth.users where email = 'you@example.com';`
+
+## 2. Vercel
+
+- `CRON_SECRET` (Production): a long random string. Vercel sends it to `/api/chat/cleanup`, which
+  then refuses any other caller. Without it the route still works but anyone can trigger it (harmless:
+  it only deletes already-expired data).
+- `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`: already set; they power new-message notifications.
+
+## 3. Deploy
 
 Merge `feature/onepeek-secret-chat` into `main`; Vercel deploys onepeek.io. Chat lives at
-`/chat`, is not linked from the rest of the site yet, and is `noindex`.
+`/chat` (noindex) and is introduced on the public page `/secret-chat`, linked from the header,
+footer and homepage.
 
-## 3. Verify on onepeek.io
+## 4. Verify on onepeek.io
 
 - Two different browsers (or one normal + one private window): create a Quick Chat in one,
   open the invite in the other, exchange messages both ways, watch a message disappear.
@@ -43,6 +54,8 @@ Merge `feature/onepeek-secret-chat` into `main`; Vercel deploys onepeek.io. Chat
 - Settings: add a passkey, sign out, sign back in with the passkey.
 - Burn a chat: the other browser shows "The owner burned this chat."
 - As a guest, open `/dashboard`: it must show the signed-out view.
+- Send a file, and a view-once file: the second browser opens it once; a second open is refused.
+- Chat → Settings → New message notifications: turn on in one browser, send from the other.
 
 ## Rollback
 

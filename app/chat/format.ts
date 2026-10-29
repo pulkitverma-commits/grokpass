@@ -34,6 +34,11 @@ export function friendlyError(code: string) {
     case 'room_closed': return 'This chat has ended.';
     case 'weak_code': return 'Use an access code of at least 6 characters.';
     case 'not_configured': return 'Chat isn’t configured on this deployment yet.';
+    case 'file_too_large': return 'Files can be up to 50 MB.';
+    case 'empty_file': return 'That file is empty.';
+    case 'upload_failed': return 'The file couldn’t be uploaded. Try again.';
+    case 'view_once_sent': return 'You sent this as view once, so it can’t be opened on your side.';
+    case 'gone': return 'That file has already been opened or has expired.';
     default: return 'Something went wrong. Try again.';
   }
 }

@@ -11,7 +11,12 @@ import type { LocalMessage, RoomSummary } from '@/lib/chat/client';
 import { KIND_NAME, TIMERS, countdown, friendlyError, shortId, ttlLabel } from '../../format';
 
 type Member = Awaited<ReturnType<typeof chat.members>>[number];
-type Sheet = null | 'menu' | 'invite' | 'timer' | 'members' | 'verify' | 'burn' | 'leave';
+type Sheet = null | 'menu' | 'invite' | 'timer' | 'members' | 'verify' | 'burn' | 'leave' | 'file';
+type Viewer = { url: string; name: string; mime: string; size: number; viewOnce: boolean; text?: string };
+
+function fileSize(n: number) {
+  return n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+}
 
 export default function ConversationPage() {
   const { id: roomId } = useParams<{ id: string }>();
@@ -29,6 +34,10 @@ export default function ConversationPage() {
   const [sheet, setSheet] = useState<Sheet>(search.get('invite') ? 'invite' : null);
   const [now, setNow] = useState(Date.now());
   const [err, setErr] = useState('');
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [viewer, setViewer] = useState<Viewer | null>(null);
+  const [fileBusy, setFileBusy] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const syncing = useRef(false);
 
@@ -123,6 +132,47 @@ export default function ConversationPage() {
     }
   }
 
+  function pickFile(f: File | undefined) {
+    if (!f) return;
+    setErr('');
+    if (f.size > chat.MAX_ATTACHMENT_BYTES) { setErr('Files can be up to 50 MB.'); return; }
+    setPendingFile(f);
+    setSheet('file');
+  }
+
+  async function sendPendingFile(viewOnce: boolean) {
+    if (!pendingFile) return;
+    const f = pendingFile;
+    setSheet(null); setPendingFile(null); setErr(''); setFileBusy('sending');
+    try {
+      const m = await chat.sendFile(roomId, f, ttl, viewOnce);
+      setMsgs(list => [...list, m]);
+    } catch (e) {
+      setErr(friendlyError(e instanceof chat.ChatError ? e.code : ''));
+    } finally { setFileBusy(null); }
+  }
+
+  async function openFile(m: LocalMessage) {
+    if (!m.file || fileBusy) return;
+    setErr(''); setFileBusy(m.id);
+    try {
+      const blob = await chat.openFile(roomId, m);
+      const f = m.file;
+      const text = f.mime.startsWith('text/') && blob.size < 200_000 ? await blob.text() : undefined;
+      setViewer({ url: URL.createObjectURL(blob), name: f.name, mime: f.mime, size: f.size, viewOnce: f.viewOnce, text });
+      if (f.viewOnce) setMsgs(list => list.map(x => x.id === m.id ? { ...x, viewed: true } : x));
+    } catch (e) {
+      const code = e instanceof chat.ChatError ? e.code : '';
+      if (code === 'gone' && m.file.viewOnce) setMsgs(list => list.map(x => x.id === m.id ? { ...x, viewed: true } : x));
+      setErr(code === 'gone' ? 'That file has already been opened or has expired.' : friendlyError(code));
+    } finally { setFileBusy(null); }
+  }
+
+  function closeViewer() {
+    if (viewer) URL.revokeObjectURL(viewer.url);
+    setViewer(null);
+  }
+
   const nameOf = useCallback((device: string) => {
     if (device === me) return 'You';
     const m = members.find(x => x.deviceId === device);
@@ -166,8 +216,19 @@ export default function ConversationPage() {
             <div key={m.id} data-id={m.id} {...(!m.mine && m.expiresAt === null ? { 'data-unread': '' } : {})}
               className={`c-msg ${m.mine ? 'mine' : 'theirs'}${left !== null && left <= 0 ? ' leaving' : ''}`}>
               <div className={`c-bubble${hidden ? ' hidden' : ''}`} onClick={() => hidden && open(m)} role={hidden ? 'button' : undefined} aria-label={hidden ? 'Tap to reveal message' : undefined}>
-                {parent && <div className="c-reply">{parent.body}</div>}
-                {hidden ? 'Tap to reveal' : m.body}
+                {parent && <div className="c-reply">{parent.file ? parent.file.name : parent.body}</div>}
+                {hidden ? 'Tap to reveal' : m.file ? (
+                  <button type="button" className="c-file" onClick={() => openFile(m)}
+                    disabled={(m.file.viewOnce && (m.mine || m.viewed)) || fileBusy === m.id}>
+                    <span className="c-file-icon"><Icon name={m.file.mime.startsWith('image/') ? 'image' : 'file'} size={18} /></span>
+                    <span className="c-file-main">
+                      <strong>{m.file.viewOnce ? (m.mine ? 'View-once file' : m.viewed ? 'Opened' : 'View-once file') : m.file.name}</strong>
+                      <small>{fileBusy === m.id ? 'Decrypting…' : m.file.viewOnce
+                        ? (m.mine ? `Sent · ${fileSize(m.file.size)}` : m.viewed ? 'Already viewed' : `Tap to view once · ${fileSize(m.file.size)}`)
+                        : `${fileSize(m.file.size)} · tap to open`}</small>
+                    </span>
+                  </button>
+                ) : m.body}
               </div>
               <div className="c-meta">
                 {!m.mine && members.length > 2 && <span>{nameOf(m.sender)}</span>}
@@ -185,12 +246,17 @@ export default function ConversationPage() {
         {replyTo && <div className="c-replying"><span>Replying to “{replyTo.body.slice(0, 40)}”</span><button className="c-link" onClick={() => setReplyTo(null)}>Cancel</button></div>}
         <div className="c-compose-row">
           <button className="c-ttl" onClick={() => setSheet('timer')} aria-label={`Message timer: ${ttlLabel(ttl)}`}><Icon name="clock" size={13} /> {ttlLabel(ttl)}</button>
+          <button className="c-attach" onClick={() => fileInput.current?.click()} disabled={!joined || !!fileBusy} aria-label="Send an encrypted file" title="Send a file">
+            <Icon name="file" size={17} />
+          </button>
+          <input ref={fileInput} type="file" hidden onChange={e => { pickFile(e.target.files?.[0]); e.target.value = ''; }} />
           <textarea rows={1} value={text} placeholder={joined ? 'Message' : 'Waiting to be let in…'} disabled={!joined} maxLength={4000}
             autoComplete="off" autoCorrect="on" spellCheck
             onChange={e => setText(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
           <button className="c-send" onClick={send} disabled={!joined || !text.trim()} aria-label="Send"><Icon name="send" size={17} /></button>
         </div>
+        {fileBusy === 'sending' && <p className="c-hint">Encrypting and sending the file…</p>}
         {err && <p className="c-error">{err}</p>}
       </div>
 
@@ -216,6 +282,7 @@ export default function ConversationPage() {
                 </ul>
               </>
             )}
+            {sheet === 'file' && pendingFile && <FileSheet file={pendingFile} ttl={ttl} secret={secret} onSend={sendPendingFile} onCancel={() => { setPendingFile(null); setSheet(null); }} />}
             {sheet === 'timer' && room && <TimerSheet room={room} ttl={ttl} setTtl={setTtl} isOwner={isOwner} close={() => setSheet(null)} />}
             {sheet === 'invite' && room && <InviteSheet room={room} />}
             {sheet === 'members' && room && <MembersSheet room={room} members={members} me={me} nameOf={nameOf} isOwner={isOwner} onChange={refresh} />}
@@ -229,7 +296,46 @@ export default function ConversationPage() {
           </div>
         </div>
       )}
+
+      {viewer && (
+        <div className="c-viewer" role="dialog" aria-modal="true" aria-label={viewer.name} onContextMenu={e => viewer.viewOnce && e.preventDefault()}>
+          {viewer.mime.startsWith('image/') ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={viewer.url} alt={viewer.name} draggable={false} />
+          ) : viewer.text !== undefined ? <pre>{viewer.text}</pre> : (
+            <div className="c-empty"><Icon name="file" size={34} /><p>{viewer.name}<br /><small>{fileSize(viewer.size)}</small></p></div>
+          )}
+          {viewer.viewOnce && <p>View once: this is the only time it opens. Closing it removes it from this device.</p>}
+          <div className="c-viewer-bar">
+            {!viewer.viewOnce && <a className="c-btn" href={viewer.url} download={viewer.name}>Save to device</a>}
+            {viewer.viewOnce && !viewer.mime.startsWith('image/') && viewer.text === undefined && <a className="c-btn" href={viewer.url} download={viewer.name}>Save to device</a>}
+            <button className="c-btn ghost" onClick={closeViewer}>Close</button>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function FileSheet({ file, ttl, secret, onSend, onCancel }: { file: File; ttl: number; secret: boolean; onSend: (viewOnce: boolean) => void; onCancel: () => void }) {
+  const [viewOnce, setViewOnce] = useState(secret);
+  return (
+    <>
+      <h2>Send a file</h2>
+      <div className="c-pending-file">
+        <span className="c-file-icon" style={{ background: 'var(--c-seg-on)', color: 'var(--c-accent)' }}><Icon name={file.type.startsWith('image/') ? 'image' : 'file'} size={18} /></span>
+        <span className="c-file-main"><strong>{file.name}</strong><small style={{ color: 'var(--c-muted)' }}>{fileSize(file.size)} · disappears {ttlLabel(ttl)} after it’s read</small></span>
+      </div>
+      <label className="c-check">
+        <input type="checkbox" checked={viewOnce} onChange={e => setViewOnce(e.target.checked)} />
+        <span>View once<small>It can be opened one time, then it’s gone for everyone. You won’t be able to open it either.</small></span>
+      </label>
+      <p className="c-hint">Encrypted on this device before upload. OnePeek never sees the file, its name or its key.</p>
+      <div style={{ height: 14 }} />
+      <button className="c-btn block" onClick={() => onSend(viewOnce)}>Encrypt and send</button>
+      <div style={{ height: 8 }} />
+      <button className="c-btn ghost block" onClick={onCancel}>Cancel</button>
+    </>
   );
 }
 

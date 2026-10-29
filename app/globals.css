@@ -884,6 +884,8 @@ input[type="datetime-local"].field-input, input[type="time"].field-input { color
 .share-btns { display: flex; flex-wrap: wrap; gap: 8px; }
 .share-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 8px; border: 1px solid #343B46; background: transparent; color: #E6E8EB; font: inherit; font-size: 13.5px; cursor: pointer; text-decoration: none; transition: border-color .2s, color .2s; }
 .share-btn:hover { border-color: var(--gp-accent); color: var(--gp-accent); }
+.share-btn { gap: 8px; }
+.share-btn .brand-icon { flex: none; display: block; }
 .field-hint a { color: var(--gp-accent); }
 .burn-note { flex-basis: 100%; margin: 6px 0 0; font-size: 13px; color: #FFB4B4; }
 

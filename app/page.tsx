@@ -7,6 +7,7 @@ import Link from 'next/link';
 import ProcessAnim from './components/ProcessAnim';
 import LimitModal from './components/LimitModal';
 import Icon from './components/Icon';
+import BrandIcon from './components/BrandIcon';
 import TypeWord from './components/TypeWord';
 import { getClientId, captureRef, isPaid, PLAN_NAME, type Quota } from '@/lib/quota';
 import UserAvatar from './components/UserAvatar';
@@ -493,9 +494,9 @@ export default function Home() {
                   <span className="field-label">Send it with</span>
                   <div className="share-btns">
                     {canShare && <button type="button" className="share-btn" onClick={shareNative}><Icon name="send" size={14} strokeWidth={2} />Share…</button>}
-                    <a className="share-btn" href={`https://teams.microsoft.com/share?href=${encodeURIComponent(link)}&msgText=${encodeURIComponent(shareText)}&preview=false`} target="_blank" rel="noopener noreferrer">Microsoft Teams</a>
-                    <button type="button" className="share-btn" onClick={shareSlack}>Slack</button>
-                    <a className="share-btn" href={`https://wa.me/?text=${encodeURIComponent(`${shareText} ${link}`)}`} target="_blank" rel="noopener noreferrer">WhatsApp</a>
+                    <a className="share-btn" href={`https://teams.microsoft.com/share?href=${encodeURIComponent(link)}&msgText=${encodeURIComponent(shareText)}&preview=false`} target="_blank" rel="noopener noreferrer"><BrandIcon brand="teams" />Microsoft Teams</a>
+                    <button type="button" className="share-btn" onClick={shareSlack}><BrandIcon brand="slack" />Slack</button>
+                    <a className="share-btn" href={`https://wa.me/?text=${encodeURIComponent(`${shareText} ${link}`)}`} target="_blank" rel="noopener noreferrer"><BrandIcon brand="whatsapp" />WhatsApp</a>
                   </div>
                   {slackCopied && (
                     <p className="field-hint" role="status" style={{marginTop:6}}>

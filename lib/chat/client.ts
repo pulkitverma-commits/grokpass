@@ -452,22 +452,32 @@ async function sendControl(roomId: string, payload: mls.ChatPayload) {
 
 export type SyncResult = { joined: boolean; removed: boolean; newMessages: number };
 
-/** Pulls everything after the last processed sequence number and applies it in order. */
-export function sync(roomId: string): Promise<SyncResult> {
-  return withRoomLock(roomId, () => syncLocked(roomId));
-}
-
-async function syncLocked(roomId: string): Promise<SyncResult> {
+/**
+ * Pulls everything after the last processed sequence number and applies it in order.
+ * The download happens outside the room lock so a send never waits on the network for it;
+ * only the local decrypt-and-save step is serialized.
+ */
+export async function sync(roomId: string): Promise<SyncResult> {
   const dev = await ensureDevice();
-  const local = await roomLocal(roomId);
+  const { lastSeq: after } = await roomLocal(roomId);
   let rows: any[];
   try {
-    rows = await rpc<any[]>('chat_fetch', { p_room: roomId, p_device: dev.id, p_after: local.lastSeq, p_limit: 200 });
+    rows = await rpc<any[]>('chat_fetch', { p_room: roomId, p_device: dev.id, p_after: after, p_limit: 200 });
   } catch (e) {
     // Removed, burned or expired: the server is authoritative, so drop our keys and copies too.
-    if (e instanceof ChatError && e.code === 'not_a_member') { await forgetRoom(roomId); return { joined: false, removed: true, newMessages: 0 }; }
+    if (e instanceof ChatError && e.code === 'not_a_member') {
+      await withRoomLock(roomId, () => forgetRoom(roomId));
+      return { joined: false, removed: true, newMessages: 0 };
+    }
     throw e;
   }
+  return withRoomLock(roomId, () => applyRows(roomId, dev, rows));
+}
+
+async function applyRows(roomId: string, dev: DeviceRecord, fetched: any[]): Promise<SyncResult> {
+  const local = await roomLocal(roomId);
+  // Another sync may have applied some of these while we were downloading.
+  const rows = fetched.filter(r => Number(r.seq) > local.lastSeq);
   let state = await loadState(roomId);
   let lastSeq = local.lastSeq;
   const nicknames = { ...local.nicknames };

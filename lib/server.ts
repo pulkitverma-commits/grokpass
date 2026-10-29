@@ -26,6 +26,15 @@ export async function userFromRequest(req: Request) {
   return error || data.user.is_anonymous ? null : data.user;
 }
 
+/** Any signed-in user, including Secret Chat guests (anonymous sessions). Chat routes only. */
+export async function sessionUserFromRequest(req: Request) {
+  const token = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
+  const sb = anonClient();
+  if (!token || !sb) return null;
+  const { data, error } = await sb.auth.getUser(token);
+  return error ? null : data.user;
+}
+
 export function siteUrl(req?: Request) {
   const env = process.env.NEXT_PUBLIC_SITE_URL;
   if (env) return env.replace(/\/$/, '');

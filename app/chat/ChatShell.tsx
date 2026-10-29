@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import Icon from '../components/Icon';
+import SiteFooter from '../components/SiteFooter';
 import { isLocked, lock, unlock } from '@/lib/chat/client';
 
 const NAV = [
@@ -84,9 +85,19 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       ) : inConvo ? children : (
+        <>
+        <div className="bg-layer" aria-hidden="true">
+          <div className="gp-grid" />
+          <div className="gp-glow gp-glow-a" />
+          <div className="gp-glow gp-glow-b" />
+        </div>
         <div className="c-shell">
           <header className="c-top">
-            <Link href="/chat" className="c-brand"><Icon name="shield" size={18} /><span>OnePeek Chat</span></Link>
+            <Link href="/" className="c-brand" aria-label="OnePeek home">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/onepeek-logo.png" alt="OnePeek" width={96} height={36} />
+              <span className="c-brand-tag">Chat</span>
+            </Link>
             <nav className="c-nav" aria-label="Chat">
               {NAV.map(n => (
                 <Link key={n.href} href={n.href} aria-current={(n.href === '/chat' ? path === '/chat' : path.startsWith(n.href)) ? 'page' : undefined}>{n.label}</Link>
@@ -96,6 +107,8 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
           </header>
           <main className="c-main">{children}</main>
         </div>
+        <SiteFooter />
+        </>
       )}
     </div>
   );

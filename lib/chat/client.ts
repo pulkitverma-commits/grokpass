@@ -8,7 +8,7 @@
 
 import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import { supabase } from '../supabase';
-import { randomToken } from '../crypto';
+import { randomToken, newKey, importKey, encryptBytes, decryptBytes } from '../crypto';
 import * as mls from './mls';
 import * as ks from './keystore';
 
@@ -26,6 +26,7 @@ export type LocalMessage = {
   expiresAt: number | null;  // ms; null = countdown not started (unopened)
   replyTo?: string;
   file?: Extract<mls.ChatPayload, { t: 'file' }>;
+  viewed?: boolean;          // a view-once file this device has already opened
 };
 
 export type RoomSummary = {
@@ -308,7 +309,98 @@ export async function send(roomId: string, body: string, ttl: number, replyTo?: 
   const now = Date.now();
   const mine: LocalMessage = { id, seq: Number(seq), mine: true, sender: dev.id, body: text, ttl, sentAt: now, expiresAt: now + ttl * 1000, replyTo };
   await storeMessage(roomId, mine);
+  void notifyRoom(roomId);
   return mine;
+}
+
+// ---------------------------------------------------------------------------- attachments
+
+/** Files are capped by the storage bucket (50 MB, including 28 bytes of encryption overhead). */
+export const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024 - 1024;
+const BUCKET = 'chat-attachments';
+
+/**
+ * Sends a file. It is encrypted on this device with a fresh AES-256-GCM key; only the
+ * ciphertext is uploaded. The key, name and type travel inside the MLS message, so the
+ * server never learns them. View-once files can be opened once per chat, then access ends.
+ */
+export async function sendFile(roomId: string, file: File, ttl: number, viewOnce: boolean) {
+  if (!file.size) throw new ChatError('empty_file');
+  if (file.size > MAX_ATTACHMENT_BYTES) throw new ChatError('file_too_large');
+  const dev = await ensureDevice();
+  if (!(await loadState(roomId))) throw new ChatError('no_local_state');
+
+  const { key, keyB64 } = await newKey();
+  const blob = await encryptBytes(key, await file.arrayBuffer());
+  const attachmentId = crypto.randomUUID();
+  const objectPath = await rpc<string>('chat_register_attachment', {
+    p_room: roomId, p_device: dev.id, p_id: attachmentId, p_size: blob.byteLength, p_view_once: viewOnce, p_ttl_s: ttl,
+  });
+  const up = await sb().storage.from(BUCKET).upload(objectPath, new Blob([blob as BlobPart], { type: 'application/octet-stream' }), {
+    contentType: 'application/octet-stream', upsert: false,
+  });
+  if (up.error) throw new ChatError('upload_failed');
+
+  // Load the state again after the upload: a sync may have advanced it in the meantime.
+  const state = await loadState(roomId);
+  if (!state) throw new ChatError('no_local_state');
+  const id = crypto.randomUUID();
+  const payload = {
+    t: 'file' as const, id, ttl, viewOnce, objectPath, key: keyB64,
+    name: file.name.slice(0, 120) || 'file', mime: (file.type || 'application/octet-stream').slice(0, 100), size: file.size,
+  };
+  const enc = await mls.encrypt(state, payload);
+  await saveState(roomId, enc.state);
+  const seq = await rpc<number>('chat_send', {
+    p_room: roomId, p_device: dev.id, p_id: id, p_kind: 'app', p_epoch: Number(mls.epoch(state)),
+    p_ciphertext: toBytea(enc.ciphertext), p_ttl_s: ttl,
+  });
+  const now = Date.now();
+  const mine: LocalMessage = { id, seq: Number(seq), mine: true, sender: dev.id, body: '', ttl, sentAt: now, expiresAt: now + ttl * 1000, file: payload };
+  await storeMessage(roomId, mine);
+  void notifyRoom(roomId);
+  return mine;
+}
+
+/**
+ * Downloads and decrypts an attachment. For someone else's view-once file this claims it
+ * first: the server then allows a short download window and revokes it for good.
+ * The sender can't open their own view-once file (that would use up the one view).
+ */
+export async function openFile(roomId: string, m: LocalMessage): Promise<Blob> {
+  const f = m.file;
+  if (!f) throw new ChatError('not_a_file');
+  if (f.viewOnce && m.mine) throw new ChatError('view_once_sent');
+  if (f.viewOnce && m.viewed) throw new ChatError('gone');
+  const attachmentId = f.objectPath.split('/').pop() || '';
+  const path = await rpc<string>('chat_claim_attachment', { p_id: attachmentId });
+  if (f.viewOnce) await storeMessage(roomId, { ...m, viewed: true });
+  const dl = await sb().storage.from(BUCKET).download(path);
+  if (dl.error || !dl.data) throw new ChatError('gone');
+  const plain = await decryptBytes(await importKey(f.key), new Uint8Array(await dl.data.arrayBuffer()));
+  return new Blob([plain], { type: f.mime || 'application/octet-stream' });
+}
+
+export async function markViewed(roomId: string, m: LocalMessage) {
+  const viewed = { ...m, viewed: true };
+  await storeMessage(roomId, viewed);
+  return viewed;
+}
+
+// ---------------------------------------------------------------------------- notifications
+
+/** Asks the server to send a content-free "new message" push to the room's other members. */
+export async function notifyRoom(roomId: string) {
+  try {
+    const { data } = await sb().auth.getSession();
+    const token = data.session?.access_token;
+    if (!token || typeof fetch === 'undefined' || typeof window === 'undefined') return;
+    await fetch('/api/chat/notify', {
+      method: 'POST', keepalive: true,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ room: roomId }),
+    });
+  } catch { /* best effort */ }
 }
 
 async function sendControl(roomId: string, payload: mls.ChatPayload) {

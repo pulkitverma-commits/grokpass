@@ -993,3 +993,22 @@ section[id] { scroll-margin-top: 90px; }
 .op-footer-bottom span:last-child { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12.5px; }
 @media (max-width: 1040px) { .op-footer-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } .op-footer-brand { grid-column: 1 / -1; } }
 @media (max-width: 760px) { .op-footer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px 24px; } .op-footer-inner { padding: 44px 16px 28px; } }
+
+/* Homepage: Secret Chat promo */
+.chat-promo { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 48px; align-items: center; padding: 40px; border-radius: 22px; border: 1px solid rgba(69,189,235,.28); background: var(--op-grad-soft); }
+.chat-promo .checks { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.chat-promo .checks li { display: flex; gap: 10px; align-items: flex-start; color: #C9CED6; }
+.chat-promo-demo { display: flex; flex-direction: column; gap: 10px; padding: 18px; border-radius: 18px; background: #0D1014; border: 1px solid #262C35; box-shadow: 0 30px 80px -40px rgba(137,219,150,.45); }
+.cpd-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding-bottom: 10px; border-bottom: 1px solid #1E232A; margin-bottom: 4px; }
+.cpd-head strong { font-weight: 400; color: #F4F5F6; }
+.cpd-head small { flex-basis: 100%; color: #89DB96; font-size: 12px; }
+.cpd-dot { width: 8px; height: 8px; border-radius: 50%; background: #89DB96; box-shadow: 0 0 10px #89DB96; }
+.cpd-msg { max-width: 78%; padding: 9px 13px; border-radius: 18px; font-size: 14.5px; display: flex; flex-direction: column; gap: 3px; animation: cpdIn .5s ease both; }
+.cpd-msg em { font-style: normal; font-size: 11px; opacity: .7; font-family: 'Geist Mono', ui-monospace, monospace; }
+.cpd-msg.theirs { align-self: flex-start; background: #1A1F26; color: #E6E8EB; border-bottom-left-radius: 6px; }
+.cpd-msg.mine { align-self: flex-end; background: var(--op-grad); color: #0A0C0F; border-bottom-right-radius: 6px; animation-delay: .3s; }
+.cpd-msg.blurred { filter: blur(3px); animation-delay: .6s; }
+.cpd-burn { align-self: center; display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 13px; color: #FF8A8A; border: 1px solid rgba(255,107,107,.35); padding: 6px 12px; border-radius: 999px; }
+@keyframes cpdIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .cpd-msg { animation: none; } }
+@media (max-width: 860px) { .chat-promo { grid-template-columns: 1fr; padding: 24px 20px; gap: 28px; } }

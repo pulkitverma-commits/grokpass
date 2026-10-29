@@ -17,6 +17,7 @@ export default function SiteShell({ children, wide = true }: { children: React.R
           <img src="/onepeek-logo.png" alt="OnePeek" className="logo-img" width={149} height={56} />
         </Link>
         <nav className="site-nav" aria-label="Main">
+          <Link href="/secret-chat">Secret Chat</Link>
           <Link href="/use-cases">Use cases</Link>
           <Link href="/pricing">Pricing</Link>
           <Link href="/encryption">Security</Link>

@@ -19,6 +19,8 @@ export default function SiteFooter() {
 
           <nav className="op-footer-col" aria-label="Product">
             <span>Product</span>
+            <Link href="/#send">Send a secret</Link>
+            <Link href="/secret-chat">Secret Chat</Link>
             <Link href="/#how">How it works</Link>
             <Link href="/#features">Features</Link>
             <Link href="/pricing">Pricing</Link>

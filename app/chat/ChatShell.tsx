@@ -13,6 +13,17 @@ const NAV = [
   { href: '/chat/settings', label: 'Settings' },
 ];
 
+/** Fired on window when a screenshot shortcut is pressed; the open conversation tells the room. */
+export const SHOT_EVENT = 'onepeek:screenshot';
+
+/** True for the usual screenshot shortcuts: Print Screen, macOS Cmd+Shift(+3/4/5), Windows Win+Shift+S, Ctrl+Shift+S. */
+function isScreenshotKey(e: KeyboardEvent) {
+  const k = e.key;
+  return k === 'PrintScreen' || k === 'Snapshot'
+    || ((e.metaKey || k === 'Meta' || k === 'OS') && e.shiftKey)
+    || (e.ctrlKey && e.shiftKey && /^[sS]$/.test(k));
+}
+
 /** Panic Exit: lock this browser's chats and leave for a neutral page, replacing history. */
 export function panicExit() {
   lock();
@@ -41,9 +52,23 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
     const focus = () => setVeiled(false);
     // Coming back via the back/forward cache must not show old content.
     const show = (e: PageTransitionEvent) => { if (e.persisted) window.location.reload(); };
+    // Screenshot shortcuts: blur everything at once (the keys reach the page before the capture
+    // when they're held down), clear a Print Screen copy, and let the conversation tell the room.
+    let unveil: ReturnType<typeof setTimeout> | undefined;
+    let lastShot = 0;
+    const shot = (e: KeyboardEvent) => {
+      if (!isScreenshotKey(e)) return;
+      setVeiled(true);
+      if (unveil) clearTimeout(unveil);
+      unveil = setTimeout(() => setVeiled(document.visibilityState !== 'visible' || !document.hasFocus()), 3000);
+      if (e.key === 'PrintScreen' || e.key === 'Snapshot') navigator.clipboard?.writeText('').catch(() => {});
+      const now = Date.now();
+      if (e.type === 'keydown' && now - lastShot > 2000) { lastShot = now; window.dispatchEvent(new Event(SHOT_EVENT)); }
+    };
     // Shift + Escape twice quickly = Panic Exit.
     let lastEsc = 0;
     const key = (e: KeyboardEvent) => {
+      shot(e);
       if (e.key !== 'Escape' || !e.shiftKey) return;
       const now = Date.now();
       if (now - lastEsc < 600) panicExit();
@@ -53,14 +78,17 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
     window.addEventListener('blur', blur);
     window.addEventListener('focus', focus);
     window.addEventListener('pageshow', show);
-    window.addEventListener('keydown', key);
+    window.addEventListener('keydown', key, true);
+    window.addEventListener('keyup', shot, true);
     return () => {
+      if (unveil) clearTimeout(unveil);
+      window.removeEventListener('keyup', shot, true);
       bc?.close();
       document.removeEventListener('visibilitychange', vis);
       window.removeEventListener('blur', blur);
       window.removeEventListener('focus', focus);
       window.removeEventListener('pageshow', show);
-      window.removeEventListener('keydown', key);
+      window.removeEventListener('keydown', key, true);
     };
   }, []);
 

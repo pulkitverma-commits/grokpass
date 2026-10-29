@@ -22,7 +22,8 @@ const FEATURES: { icon: IconName; title: string; body: string }[] = [
   { icon: 'key', title: 'Access codes and approvals', body: 'Secret Chats add an access code that you share another way. Business Rooms let you approve each person before they can read anything.' },
   { icon: 'shield', title: 'Verify who you’re talking to', body: 'Compare a 60-digit safety number or scan a QR code. If someone’s key ever changes, the chat warns you.' },
   { icon: 'flame', title: 'Burn the chat', body: 'One tap deletes every message, invite and file from OnePeek’s servers and makes every device forget the chat’s keys.' },
-  { icon: 'eye', title: 'Panic Exit and privacy screen', body: 'Press Shift + Esc twice to lock chats and jump away. Content blurs whenever you switch away from the tab or app.' },
+  { icon: 'eye', title: 'Screenshot shield', body: 'Secret Chat messages appear only while you press and hold them. Screenshot shortcuts blur the chat and tell everyone, and each screen carries a faint watermark of who is viewing.' },
+  { icon: 'ban', title: 'Panic Exit and privacy screen', body: 'Press Shift + Esc twice to lock chats and jump away. Content blurs whenever you switch away from the tab or app.' },
   { icon: 'bell', title: 'Notifications without content', body: 'Optional alerts say only “You have a new message”. Never the text, the sender or the chat name.' },
 ];
 
@@ -44,7 +45,7 @@ const FAQ = [
   { q: 'Can OnePeek read my chats?', a: 'No. Messages and files are encrypted on your device before they’re sent, and the keys stay on the devices in the chat. OnePeek stores and forwards ciphertext, and deletes it when the timer runs out.' },
   { q: 'Does the other person need an account?', a: 'No. Guests join from the invite link as a temporary, anonymous session that only works for that chat. Anyone can start a Quick Chat as a guest; Secret Chats and Business Rooms need a free OnePeek account.' },
   { q: 'What happens when a message disappears?', a: 'The server deletes it at the time it set when the message was read or sent, and each device removes its decrypted copy. A database job checks every minute.' },
-  { q: 'Can someone take a screenshot?', a: 'Yes. No website or app can fully stop screenshots or a camera pointed at the screen. OnePeek blurs content when you switch away and hides Secret Chat messages until tapped, but anyone you chat with can still save what they see.' },
+  { q: 'Can someone take a screenshot?', a: 'OnePeek makes it hard, but no website can fully stop it. Secret Chat messages are only on screen while they are held down, screenshot shortcuts blur the chat and tell everyone in it, content blurs when you switch away, and each screen is watermarked with who is viewing. A phone’s screenshot buttons and a camera pointed at the screen can’t be blocked by a browser, so share accordingly.' },
   { q: 'What encryption does it use?', a: 'MLS (Messaging Layer Security, RFC 9420) with X25519, AES-128-GCM, SHA-256 and Ed25519, which gives forward secrecy and post-compromise security. Files use a separate AES-256-GCM key each. The MLS library we use (ts-mls) has not yet had an independent audit.' },
   { q: 'Is it free?', a: 'Yes. Secret Chat is included on every plan while it’s in early access.' },
 ];

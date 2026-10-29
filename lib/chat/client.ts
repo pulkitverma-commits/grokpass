@@ -28,6 +28,7 @@ export type LocalMessage = {
   file?: Extract<mls.ChatPayload, { t: 'file' }>;
   viewed?: boolean;          // a view-once file this device has already opened
   pending?: boolean;         // shown on screen while it is still being sent (never stored)
+  alert?: 'screenshot';      // a notice that someone pressed a screenshot shortcut, not a message
 };
 
 export type RoomSummary = {
@@ -345,6 +346,29 @@ async function sendTextLocked(roomId: string, dev: DeviceRecord, id: string, tex
   return mine;
 }
 
+/**
+ * Tells everyone in the room that this device pressed a screenshot shortcut. It travels as an
+ * encrypted MLS message like any other, so the server can't tell it apart from chat text.
+ */
+export async function sendScreenshotAlert(roomId: string, ttl: number) {
+  const dev = await ensureDevice();
+  const id = crypto.randomUUID();
+  return withRoomLock(roomId, async () => {
+    const state = await loadState(roomId);
+    if (!state) throw new ChatError('no_local_state');
+    const enc = await mls.encrypt(state, { t: 'alert', id, kind: 'screenshot', ttl });
+    await saveState(roomId, enc.state);
+    const seq = await rpc<number>('chat_send', {
+      p_room: roomId, p_device: dev.id, p_id: id, p_kind: 'app', p_epoch: Number(mls.epoch(state)),
+      p_ciphertext: toBytea(enc.ciphertext), p_ttl_s: ttl,
+    });
+    const now = Date.now();
+    const mine: LocalMessage = { id, seq: Number(seq), mine: true, sender: dev.id, body: '', ttl, sentAt: now, expiresAt: now + ttl * 1000, alert: 'screenshot' };
+    await storeMessage(roomId, mine);
+    return mine;
+  });
+}
+
 // ---------------------------------------------------------------------------- attachments
 
 /** Files are capped by the storage bucket (50 MB, including 28 bytes of encryption overhead). */
@@ -513,6 +537,15 @@ async function applyRows(roomId: string, dev: DeviceRecord, fetched: any[]): Pro
       await saveState(roomId, state);
       const p = got.payload;
       if (p.t === 'nick') { nicknames[row.sender_device] = p.name.slice(0, 40); continue; }
+      if (p.t === 'alert') {
+        const sentAt = new Date(row.created_at).getTime();
+        await storeMessage(roomId, {
+          id: p.id, seq: Number(row.seq), mine: false, sender: row.sender_device, body: '', ttl: p.ttl,
+          sentAt, expiresAt: sentAt + p.ttl * 1000, alert: 'screenshot',
+        });
+        res.newMessages++;
+        continue;
+      }
       const expiresAt = row.expires_at ? new Date(row.expires_at).getTime() : null;
       await storeMessage(roomId, {
         id: p.id, seq: Number(row.seq), mine: false, sender: row.sender_device,

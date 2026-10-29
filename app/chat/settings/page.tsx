@@ -107,7 +107,7 @@ export default function ChatSettingsPage() {
           <li className="c-row"><div className="c-row-main"><div className="c-row-title">Panic Exit</div>
             <div className="c-row-meta">Press Shift + Esc twice, or tap Exit. Chats lock on this device until you unlock them.</div></div></li>
           <li className="c-row"><div className="c-row-main"><div className="c-row-title">Screenshots</div>
-            <div className="c-row-meta">Content blurs when you switch away, but no browser can fully block screenshots or cameras.</div></div></li>
+            <div className="c-row-meta">Screenshot shortcuts blur the chat and tell everyone in it. Secret Chat messages show only while you hold them, and every screen carries a faint watermark of who is viewing. No browser can block a phone’s screenshot buttons or a camera.</div></div></li>
         </ul>
       </section>
 

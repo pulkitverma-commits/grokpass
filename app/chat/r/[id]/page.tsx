@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Icon from '../../../components/Icon';
 import QrCode from '../../../components/QrCode';
-import { panicExit } from '../../ChatShell';
+import { SHOT_EVENT, panicExit } from '../../ChatShell';
 import * as chat from '@/lib/chat/client';
 import type { LocalMessage, RoomSummary } from '@/lib/chat/client';
 import { KIND_NAME, TIMERS, countdown, friendlyError, shortId, ttlLabel } from '../../format';
@@ -40,6 +40,14 @@ export default function ConversationPage() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [fileBusy, setFileBusy] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  // Screenshot protection: Secret Chat shows someone else's message only while it is held down,
+  // and everything blurs on screenshot shortcuts (and, in Secret Chat, when the pointer leaves).
+  const [held, setHeld] = useState<string | null>(null);
+  const [viewerHeld, setViewerHeld] = useState(false);
+  const [shotShield, setShotShield] = useState(false);   // a screenshot shortcut was just pressed
+  const [outside, setOutside] = useState(false);         // Secret Chat: the pointer left the window
+  const shield = shotShield || outside;
+  const lastAlert = useRef(0);
   const listRef = useRef<HTMLDivElement>(null);
   // Messages shown on screen while they are still being sent, by id.
   const outgoing = useRef(new Map<string, LocalMessage>());
@@ -132,6 +140,51 @@ export default function ConversationPage() {
 
   useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' }); }, [msgs.length]);
 
+  // A screenshot shortcut blurs the chat for a moment and tells everyone in it.
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const onShot = () => {
+      setHeld(null); setViewerHeld(false); setShotShield(true);
+      if (t) clearTimeout(t);
+      t = setTimeout(() => setShotShield(false), 3000);
+      const now = Date.now();
+      if (!joined || ended || now - lastAlert.current < 10_000) return;
+      lastAlert.current = now;
+      chat.sendScreenshotAlert(roomId, room?.ttl ?? ttl)
+        .then(m => setMsgs(list => list.some(x => x.id === m.id) ? list : [...list, m]))
+        .catch(() => { /* best effort */ });
+    };
+    window.addEventListener(SHOT_EVENT, onShot);
+    return () => { if (t) clearTimeout(t); window.removeEventListener(SHOT_EVENT, onShot); };
+  }, [roomId, joined, ended, room?.ttl, ttl]);
+
+  // Let go of anything held when the page loses focus; in Secret Chat also blur when the pointer
+  // leaves the window (on the way to a screenshot tool or another app).
+  useEffect(() => {
+    const release = () => { setHeld(null); setViewerHeld(false); };
+    const out = (e: MouseEvent) => { if (secret && !e.relatedTarget) { release(); setOutside(true); } };
+    const back = () => setOutside(false);
+    window.addEventListener('blur', release);
+    document.addEventListener('visibilitychange', release);
+    document.addEventListener('mouseout', out);
+    document.addEventListener('mouseover', back);
+    return () => {
+      window.removeEventListener('blur', release);
+      document.removeEventListener('visibilitychange', release);
+      document.removeEventListener('mouseout', out);
+      document.removeEventListener('mouseover', back);
+    };
+  }, [secret]);
+
+  /** Press and hold to see a Secret Chat message; the first hold starts its timer. */
+  const hold = (m: LocalMessage) => {
+    if (shield || document.visibilityState !== 'visible') return;
+    setHeld(m.id);
+    if (m.expiresAt === null) void open(m);
+  };
+  const release = () => setHeld(null);
+  const noCopy = (e: React.SyntheticEvent) => { if (secret) e.preventDefault(); };
+
   const open = useCallback(async (m: LocalMessage) => {
     if (m.mine || m.expiresAt || document.visibilityState !== 'visible') return;
     const opened = await chat.markOpened(roomId, m);
@@ -201,7 +254,8 @@ export default function ConversationPage() {
 
   async function openFile(m: LocalMessage) {
     if (!m.file || fileBusy) return;
-    setErr(''); setFileBusy(m.id);
+    setErr(''); setFileBusy(m.id); setViewerHeld(false);
+    if (secret && !m.mine && m.expiresAt === null) void open(m);
     try {
       const blob = await chat.openFile(roomId, m);
       const f = m.file;
@@ -236,8 +290,12 @@ export default function ConversationPage() {
     </div></div>
   );
 
+  const myName = members.find(x => x.deviceId === me)?.nickname || `Device ${me ? shortId(me) : '…'}`;
+  const stamp = new Date(now).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const mark = `${myName} · ${me ? shortId(me) : ''} · ${stamp}`;
+
   return (
-    <div className="c-convo">
+    <div className={`c-convo${secret ? ' is-secret' : ''}${shield ? ' c-shielded' : ''}`}>
       <header className="c-chead">
         <Link href="/chat" className="c-back" aria-label="Back to chats">‹</Link>
         <div className="c-chead-title">
@@ -247,8 +305,12 @@ export default function ConversationPage() {
         <button className="c-icon-btn" aria-label="Room menu" onClick={() => setSheet('menu')}>⋯</button>
       </header>
 
-      <div className="c-msgs" ref={listRef} aria-live="polite">
-        <p className="c-notice">Messages are encrypted on each device and disappear on a timer. Anyone in the chat can still take a screenshot or photo.</p>
+      <div className="c-msgs-wrap">
+      <Watermark text={mark} />
+      <div className="c-msgs" ref={listRef} aria-live="polite" onCopy={noCopy} onCut={noCopy} onContextMenu={noCopy} onDragStart={noCopy}>
+        <p className="c-notice">{secret
+          ? 'Press and hold a message to read it. Screenshot shortcuts blur the chat and everyone is told. No website can stop a camera, so share carefully.'
+          : 'Messages are encrypted on each device and disappear on a timer. Screenshot shortcuts blur the chat and everyone is told.'}</p>
         {keyWarnings.map(m => (
           <p key={m.deviceId} className="c-notice" style={{ color: 'var(--c-danger)' }}>
             {nameOf(m.deviceId)}’s security key changed. <button className="c-link" onClick={() => setSheet('verify')}>Verify again</button>
@@ -257,19 +319,32 @@ export default function ConversationPage() {
         {synced && !joined && <p className="c-notice">Waiting for the owner to let you in. Messages will appear once you’re admitted.</p>}
         {msgs.map(m => {
           const left = m.expiresAt === null ? null : m.expiresAt - now;
-          const hidden = secret && !m.mine && m.expiresAt === null;
+          if (m.alert) return (
+            <p key={m.id} className={`c-notice c-alert${left !== null && left <= 0 ? ' leaving' : ''}`}>
+              <Icon name="eye" size={12} /> {m.mine ? 'You pressed a screenshot shortcut. Everyone in the chat was told.' : `${nameOf(m.sender)} may have taken a screenshot.`}
+            </p>
+          );
+          // Secret Chat: someone else's text is only in the page while it is being held.
+          const guarded = secret && !m.mine && !m.file;
+          const hidden = guarded && held !== m.id;
           const parent = m.replyTo ? byId.get(m.replyTo) : undefined;
+          const guardProps = guarded ? {
+            role: 'button', tabIndex: 0, 'aria-label': 'Press and hold to read this message',
+            onPointerDown: () => hold(m), onPointerUp: release, onPointerLeave: release, onPointerCancel: release,
+            onKeyDown: (e: React.KeyboardEvent) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); hold(m); } },
+            onKeyUp: release, onBlur: release,
+          } : {};
           return (
-            <div key={m.id} data-id={m.id} {...(!m.mine && m.expiresAt === null ? { 'data-unread': '' } : {})}
+            <div key={m.id} data-id={m.id} {...(!m.mine && m.expiresAt === null && !secret ? { 'data-unread': '' } : {})}
               className={`c-msg ${m.mine ? 'mine' : 'theirs'}${m.pending ? ' pending' : ''}${left !== null && left <= 0 ? ' leaving' : ''}`}>
-              <div className={`c-bubble${hidden ? ' hidden' : ''}`} onClick={() => hidden && open(m)} role={hidden ? 'button' : undefined} aria-label={hidden ? 'Tap to reveal message' : undefined}>
-                {parent && <div className="c-reply">{parent.file ? parent.file.name : parent.body}</div>}
-                {hidden ? 'Tap to reveal' : m.file ? (
+              <div className={`c-bubble${hidden ? ' hidden' : ''}${guarded ? ' guarded' : ''}`} {...guardProps}>
+                {parent && !hidden && <div className="c-reply">{parent.file ? (secret ? 'File' : parent.file.name) : parent.body}</div>}
+                {hidden ? <span className="c-hold"><Icon name="eye" size={14} /> Hold to read</span> : m.file ? (
                   <button type="button" className="c-file" onClick={() => openFile(m)}
                     disabled={(m.file.viewOnce && (m.mine || m.viewed)) || fileBusy === m.id}>
                     <span className="c-file-icon"><Icon name={m.file.mime.startsWith('image/') ? 'image' : 'file'} size={18} /></span>
                     <span className="c-file-main">
-                      <strong>{m.file.viewOnce ? (m.mine ? 'View-once file' : m.viewed ? 'Opened' : 'View-once file') : m.file.name}</strong>
+                      <strong>{m.file.viewOnce ? (m.mine ? 'View-once file' : m.viewed ? 'Opened' : 'View-once file') : secret && !m.mine ? 'Encrypted file' : m.file.name}</strong>
                       <small>{fileBusy === m.id ? 'Decrypting…' : m.file.viewOnce
                         ? (m.mine ? `Sent · ${fileSize(m.file.size)}` : m.viewed ? 'Already viewed' : `Tap to view once · ${fileSize(m.file.size)}`)
                         : `${fileSize(m.file.size)} · tap to open`}</small>
@@ -289,6 +364,7 @@ export default function ConversationPage() {
             </div>
           );
         })}
+      </div>
       </div>
 
       <div className="c-composer">
@@ -347,13 +423,29 @@ export default function ConversationPage() {
       )}
 
       {viewer && (
-        <div className="c-viewer" role="dialog" aria-modal="true" aria-label={viewer.name} onContextMenu={e => viewer.viewOnce && e.preventDefault()}>
-          {viewer.mime.startsWith('image/') ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={viewer.url} alt={viewer.name} draggable={false} />
-          ) : viewer.text !== undefined ? <pre>{viewer.text}</pre> : (
-            <div className="c-empty"><Icon name="file" size={34} /><p>{viewer.name}<br /><small>{fileSize(viewer.size)}</small></p></div>
-          )}
+        <div className="c-viewer" role="dialog" aria-modal="true" aria-label={viewer.name}
+          onContextMenu={e => (viewer.viewOnce || secret) && e.preventDefault()} onCopy={noCopy} onDragStart={noCopy}>
+          {(() => {
+            const shown = viewer.mime.startsWith('image/') ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={viewer.url} alt={viewer.name} draggable={false} />
+            ) : viewer.text !== undefined ? <pre>{viewer.text}</pre> : (
+              <div className="c-empty"><Icon name="file" size={34} /><p>{viewer.name}<br /><small>{fileSize(viewer.size)}</small></p></div>
+            );
+            const preview = viewer.mime.startsWith('image/') || viewer.text !== undefined;
+            // In Secret Chat a picture or text file is only on screen while it is held.
+            if (!secret || !preview) return <div className="c-viewer-body"><Watermark text={mark} />{shown}</div>;
+            return (
+              <div className={`c-viewer-body guarded${viewerHeld ? '' : ' hidden'}`} role="button" tabIndex={0} aria-label="Press and hold to view"
+                onPointerDown={() => !shield && setViewerHeld(true)} onPointerUp={() => setViewerHeld(false)}
+                onPointerLeave={() => setViewerHeld(false)} onPointerCancel={() => setViewerHeld(false)}
+                onKeyDown={e => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); if (!shield) setViewerHeld(true); } }}
+                onKeyUp={() => setViewerHeld(false)}>
+                <Watermark text={mark} />
+                {viewerHeld ? shown : <span className="c-hold big"><Icon name="eye" size={18} /> Press and hold to view</span>}
+              </div>
+            );
+          })()}
           {viewer.viewOnce && <p>View once: this is the only time it opens. Closing it removes it from this device.</p>}
           <div className="c-viewer-bar">
             {!viewer.viewOnce && <a className="c-btn" href={viewer.url} download={viewer.name}>Save to device</a>}
@@ -555,4 +647,13 @@ function useCoalesced(fn: () => Promise<void>) {
       do { again.current = false; await latest.current(); } while (again.current);
     } finally { running.current = false; }
   }, []);
+}
+
+/** A faint, repeated stamp of who is looking and when, so a photo or screenshot shows its source. */
+function Watermark({ text }: { text: string }) {
+  return (
+    <div className="c-wm" aria-hidden="true">
+      {Array.from({ length: 24 }, (_, i) => <span key={i}>{text}</span>)}
+    </div>
+  );
 }

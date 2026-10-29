@@ -84,14 +84,14 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
             {err && <p className="c-error">{err}</p>}
           </div>
         </div>
-      ) : inConvo ? children : (
+      ) : (
         <>
         <div className="bg-layer" aria-hidden="true">
           <div className="gp-grid" />
           <div className="gp-glow gp-glow-a" />
           <div className="gp-glow gp-glow-b" />
         </div>
-        <div className="c-shell">
+        <div className={`c-shell${inConvo ? ' is-convo' : ''}`}>
           <header className="c-top">
             <Link href="/" className="c-brand" aria-label="OnePeek home">
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -105,9 +105,9 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
             </nav>
             <button className="c-panic" onClick={panicExit} title="Panic Exit (Shift+Esc twice)">Exit</button>
           </header>
-          <main className="c-main">{children}</main>
+          <main className={inConvo ? 'c-main c-window' : 'c-main'}>{children}</main>
         </div>
-        <SiteFooter />
+        {!inConvo && <SiteFooter />}
         </>
       )}
     </div>

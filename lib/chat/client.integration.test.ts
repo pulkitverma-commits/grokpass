@@ -263,6 +263,31 @@ describe('Secret Chat end to end (two browsers)', () => {
     await expect(on(a, c => c.sendFile(roomId, new File([], 'empty.txt'), 300, false))).rejects.toMatchObject({ code: 'empty_file' });
   });
 
+  it('sending while a sync is running keeps the encryption state consistent', async () => {
+    const a = await browser('ra', 'a0000000-0000-4000-8000-00000000000a');
+    const b = await browser('rb', 'b0000000-0000-4000-8000-00000000000b');
+    const roomId = await on(a, c => c.createRoom({ kind: 'quick', ttl: 300, mode: 'on_open', lifetime: 3600 }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    await on(b, c => c.redeemInvite(tokenOf(link), 'Bea'));
+    await on(a, c => c.admitPending(roomId));
+    await on(b, c => c.sync(roomId));
+
+    await on(a, c => Promise.all([c.send(roomId, 'a1', 300), c.send(roomId, 'a2', 300)]));
+    // Bea receives and sends at the same moment, several times over.
+    await on(b, c => Promise.all([
+      c.sync(roomId), c.send(roomId, 'b1', 300), c.sync(roomId), c.send(roomId, 'b2', 300), c.send(roomId, 'b3', 300, undefined, 'd3000000-0000-4000-8000-0000000000b3'),
+    ]));
+    await on(a, c => Promise.all([c.sync(roomId), c.send(roomId, 'a3', 300), c.sync(roomId)]));
+    await on(b, c => c.sync(roomId));
+    await on(a, c => c.sync(roomId));
+
+    const seenByA = (await on(a, c => c.messages(roomId))).map(m => m.body).sort();
+    const seenByB = (await on(b, c => c.messages(roomId))).map(m => m.body).sort();
+    expect(seenByA).toEqual(['a1', 'a2', 'a3', 'b1', 'b2', 'b3']);
+    expect(seenByB).toEqual(['a1', 'a2', 'a3', 'b1', 'b2', 'b3']);
+    expect((await on(b, c => c.messages(roomId))).some(m => m.id === 'd3000000-0000-4000-8000-0000000000b3')).toBe(true);
+  });
+
   it('a duplicate send with the same id is stored once', async () => {
     const a = await browser('dup', '80000000-0000-4000-8000-000000000008');
     const roomId = await on(a, c => c.createRoom({ kind: 'quick', ttl: 60, mode: 'on_open', lifetime: 3600 }));

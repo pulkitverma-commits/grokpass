@@ -29,6 +29,11 @@ export default function NewChatPage() {
   const [guestOk, setGuestOk] = useState(false);
 
   useEffect(() => { ensureSession(false).then(s => setSignedIn(!!s)).catch(() => setSignedIn(false)); }, []);
+  // Started from the dashboard: /chat/new?kind=secret preselects the chat type.
+  useEffect(() => {
+    const k = new URLSearchParams(window.location.search).get('kind');
+    if (k === 'quick' || k === 'secret' || k === 'business') setKind(k);
+  }, []);
   useEffect(() => { setTtl(kind === 'secret' ? 30 : kind === 'business' ? 3600 : 60); setMode(kind === 'business' ? 'on_send' : 'on_open'); }, [kind]);
 
   async function create() {

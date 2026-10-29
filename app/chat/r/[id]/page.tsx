@@ -26,7 +26,9 @@ export default function ConversationPage() {
   const [msgs, setMsgs] = useState<LocalMessage[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [me, setMe] = useState<string>('');
-  const [joined, setJoined] = useState(true);
+  // Off until the first sync confirms we've been let in and hold the room's keys.
+  const [joined, setJoined] = useState(false);
+  const [synced, setSynced] = useState(false);
   const [ended, setEnded] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [ttl, setTtl] = useState(60);
@@ -56,6 +58,7 @@ export default function ConversationPage() {
       if (!current) { setEnded(e => e ?? 'This chat has ended.'); await chat.forgetRoom(roomId); return; }
       setRoom(current);
       setJoined(current.memberState === 'active' && !!(await chat.keystore.get(`room:${roomId}:state`)));
+      setSynced(true);
       if (current.role === 'owner') {
         // Owner's device keeps the group in step: admit joiners (Business rooms wait for approval)
         // and cryptographically remove anyone the server has already removed.
@@ -207,7 +210,7 @@ export default function ConversationPage() {
             {nameOf(m.deviceId)}’s security key changed. <button className="c-link" onClick={() => setSheet('verify')}>Verify again</button>
           </p>
         ))}
-        {!joined && <p className="c-notice">Waiting for the owner to let you in. Messages will appear once you’re admitted.</p>}
+        {synced && !joined && <p className="c-notice">Waiting for the owner to let you in. Messages will appear once you’re admitted.</p>}
         {msgs.map(m => {
           const left = m.expiresAt === null ? null : m.expiresAt - now;
           const hidden = secret && !m.mine && m.expiresAt === null;
@@ -250,7 +253,7 @@ export default function ConversationPage() {
             <Icon name="file" size={17} />
           </button>
           <input ref={fileInput} type="file" hidden onChange={e => { pickFile(e.target.files?.[0]); e.target.value = ''; }} />
-          <textarea rows={1} value={text} placeholder={joined ? 'Message' : 'Waiting to be let in…'} disabled={!joined} maxLength={4000}
+          <textarea rows={1} value={text} placeholder={joined ? 'Message' : synced ? 'Waiting to be let in…' : 'Loading…'} disabled={!joined} maxLength={4000}
             autoComplete="off" autoCorrect="on" spellCheck
             onChange={e => setText(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />

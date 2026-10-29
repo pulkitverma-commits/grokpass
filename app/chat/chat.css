@@ -140,7 +140,8 @@ a.c-row:hover { background: var(--c-fill); }
 .c-composer { padding: 8px 10px calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--c-line); background: var(--c-bg); }
 .c-replying { display: flex; justify-content: space-between; font-size: 13px; color: var(--c-muted); padding: 0 8px 6px; }
 .c-compose-row { display: flex; align-items: flex-end; gap: 8px; }
-.c-compose-row textarea { flex: 1; resize: none; max-height: 140px; font: inherit; font-size: 16px; color: var(--c-text); background: var(--c-fill); border: 1px solid var(--c-line); border-radius: 21px; padding: 10px 14px; outline: none; line-height: 1.35; }
+.c-compose-row textarea { flex: 1; width: auto; resize: none; min-height: 42px; max-height: 140px; field-sizing: content; font: inherit; font-size: 16px; color: var(--c-text); background: var(--c-fill); border: 1px solid var(--c-line); border-radius: 21px; padding: 10px 14px; outline: none; line-height: 1.35; transition: border-color .2s; }
+.c-compose-row textarea:focus { border-color: var(--c-accent); }
 .c-send { width: 40px; height: 40px; border-radius: 50%; border: 0; background: var(--c-accent); color: var(--c-accent-text); display: grid; place-items: center; cursor: pointer; flex: none; }
 .c-send:disabled { opacity: .3; cursor: default; }
 .c-ttl { border: 0; background: var(--c-fill); color: var(--c-muted); font: inherit; font-size: 12.5px; padding: 0 10px; height: 40px; border-radius: 20px; cursor: pointer; flex: none; }

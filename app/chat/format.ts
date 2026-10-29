@@ -39,6 +39,7 @@ export function friendlyError(code: string) {
     case 'upload_failed': return 'The file couldn’t be uploaded. Try again.';
     case 'view_once_sent': return 'You sent this as view once, so it can’t be opened on your side.';
     case 'gone': return 'That file has already been opened or has expired.';
+    case 'no_local_state': return 'You haven’t been let into this chat yet. Wait for the owner, then try again.';
     default: return 'Something went wrong. Try again.';
   }
 }

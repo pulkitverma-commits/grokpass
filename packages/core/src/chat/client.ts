@@ -192,7 +192,12 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
 
   // ---------------------------------------------------------------------------- rooms
 
-  async function createRoom(opts: { kind: RoomKind; ttl: number; mode: ExpiryMode; lifetime: number; accessCode?: string | null; name?: string | null }) {
+  /**
+   * Creates a room. `nickname` is the owner's display name for this room: it is kept locally and
+   * announced to members inside an encrypted `nick` control message, the same one a joiner sends
+   * (see redeemInvite). Like every message, the server only ever sees its ciphertext.
+   */
+  async function createRoom(opts: { kind: RoomKind; ttl: number; mode: ExpiryMode; lifetime: number; accessCode?: string | null; name?: string | null; nickname?: string | null }) {
     const dev = await ensureDevice();
     const roomId = await rpc<string>('chat_create_room', {
       p_device: dev.id, p_kind: opts.kind, p_ttl_s: opts.ttl, p_expiry_mode: opts.mode,
@@ -201,7 +206,12 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     const kp = await mls.newKeyPackage(dev.id, dev.signing);
     const state = await mls.createRoom(roomId, kp);
     await saveState(roomId, state);
-    await setRoomLocal(roomId, { name: opts.name?.trim() || null });
+    const nickname = opts.nickname?.trim().slice(0, 40) || null;
+    await setRoomLocal(roomId, { name: opts.name?.trim() || null, nicknames: nickname ? { [dev.id]: nickname } : {} });
+    // Sent now like a joiner's, under the room lock. Nobody else is in the group yet, so this copy
+    // is for the record only: a member who joins later cannot read traffic from before their
+    // Welcome, which is why admitPending() announces the owner's nickname again after each admit.
+    if (nickname) await withRoomLock(roomId, () => sendControl(roomId, { t: 'nick', name: nickname }));
     return roomId;
   }
 
@@ -294,6 +304,10 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
         p_ciphertext: toBytea(added.welcome!), p_to_device: m.device_id,
       });
     }
+    // The newcomers can only read messages from after their Welcome, so the owner's nickname (set
+    // in createRoom) is announced again now. Existing members simply see the same name twice.
+    const myNick = (await roomLocal(roomId)).nicknames[dev.id];
+    if (myNick) await sendControl(roomId, { t: 'nick', name: myNick });
     return rows.length;
   }
 

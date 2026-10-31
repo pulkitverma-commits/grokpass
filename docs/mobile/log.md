@@ -4,6 +4,9 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-10-31
 
+- **Human approved Gate 0 with the device spike deferred** (2026-10-31). Phase 1 starts on `mobile/integration`.
+  The spike (C2) runs as soon as the Expo account (and Apple Developer Program for iOS) exist; `app/spike.tsx`
+  stays until then. Push of `mobile/integration` and the Phase 0 PR remain with the human (PAT lacks `workflow`).
 - Lead: cloned `grokpass` to `~/grokpass` (no local checkout existed). Baseline on `main` `47f46ee`:
   typecheck clean, 58/58 tests green. No ESLint, no CI, no `gh`, Node only at `~/Sites/newspop/.node/bin`.
 - Lead: copied the 13 design PNGs into `docs/mobile/design/`.

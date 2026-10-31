@@ -1,8 +1,8 @@
 # Gate 0: spike and setup
 
 Date: 2026-10-31. Branch: `mobile/integration` (28 commits ahead of `main`, 101 files).
-Decision requested from the human: **approve Phase 0 as "complete except the device spike"** and
-unblock the device spike by creating the accounts in `docs/mobile/release/accounts-checklist.md` Part A.
+Decision: **approved by the human on 2026-10-31 with the device spike deferred.** The spike runs once the
+accounts in `docs/mobile/release/accounts-checklist.md` Part A exist; its numbers are appended to section 4.
 
 ## 1. Gate criteria and status
 

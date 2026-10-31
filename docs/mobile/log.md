@@ -81,3 +81,9 @@ Newest first. One line per decision, blocker or agent report.
 - Lead: `expo export` for Android and iOS bundles the whole app through Metro (1567 modules) and compiles it to
   Hermes bytecode with no resolution errors. That proves the monorepo resolution, the core import and the
   ts-mls stubs; it does not prove quick-crypto at runtime (needs a device build, blocked on EAS/Apple accounts).
+- qa (Q1) done, merged: `packages/core/test/interop.integration.test.ts` (20 tests, 28 planned assertions, roles
+  swapped both ways, every scenario sweeps the SQL log, DB dump, stored objects, phone SQLite rows and SecureStore
+  for bodies, file names, keys, tokens, codes, nick and MLS private key). Ran 5× with no flake. Core now 70/70,
+  root 58/58. Findings for Phase 1: (a) the owner never sends a `nick` control message, so members see
+  `null` for the owner (core-crypto, Phase 1: send nick on room creation); (b) `sync().newMessages` counts
+  screenshot alerts (core exposes a separate `newAlerts` counter in Phase 1 so unread badges stay honest).

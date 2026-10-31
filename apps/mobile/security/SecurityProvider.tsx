@@ -58,7 +58,8 @@ export type SecurityProviderProps = {
 
 export function SecurityProvider({ children, cover, now = Date.now }: SecurityProviderProps) {
   const [locked, setLocked] = useState(true);
-  const [inactive, setInactive] = useState(AppState.currentState !== 'active');
+  // 'unknown' (first read on Android / in tests) is not "inactive": only a real leave shows the cover.
+  const [inactive, setInactive] = useState(() => AppState.currentState === 'background' || AppState.currentState === 'inactive');
   const [captured, setCaptured] = useState<boolean>(() => isCaptured());
   const [biometrics, setBiometrics] = useState<Biometrics>('passcode');
   const [deviceInsecure, setDeviceInsecure] = useState(false);

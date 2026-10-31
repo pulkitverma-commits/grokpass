@@ -7,6 +7,7 @@ jest.mock('@/modules/screen-state', () => ({ excludeFromBackup: jest.fn(async ()
 describe('excludeChatDbFromBackup', () => {
   beforeEach(() => (excludeFromBackup as jest.Mock).mockClear());
 
+
   test('paths: expo-sqlite directory + onepeek-chat.db and its side files', () => {
     const p = chatDbPaths('file:///Documents/SQLite/');
     expect(p.dir).toBe('/Documents/SQLite');

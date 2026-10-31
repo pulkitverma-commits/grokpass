@@ -3,7 +3,6 @@
 // lib/chat/client.ts. Globals are read at call time, never captured at import.
 
 import type { ChatEnv, ChatPlatform, FileSource, KeyStore, LockStore, OpenedFile, SupabaseLike, SupabaseSession } from '../../chat/ports';
-import { createWebKeyStore } from './keystore';
 
 function deviceLabel() {
   if (typeof navigator === 'undefined') return 'Browser';
@@ -53,7 +52,36 @@ export function toBlob(f: OpenedFile): Blob {
   return new Blob([f.bytes as BlobPart], { type: f.mime });
 }
 
-/** Builds the browser ChatPlatform. Pass the app's Supabase client (or null when unconfigured). */
-export function createWebPlatform<S extends SupabaseSession>(opts: { supabase: SupabaseLike<S> | null; keystore?: KeyStore }): ChatPlatform<S> {
-  return { supabase: opts.supabase, keystore: opts.keystore ?? createWebKeyStore(), env: webEnv, lock: webLock };
+/**
+ * Wraps the browser Supabase client so attachment uploads reach it as the `Blob` it has always
+ * received: the core hands over raw ciphertext bytes (`Uint8Array`) because React Native cannot
+ * build a Blob from them. Everything else is delegated untouched.
+ */
+export function withBlobUploads<S extends SupabaseSession>(sb: SupabaseLike<S>): SupabaseLike<S> {
+  return {
+    auth: sb.auth,
+    rpc: (fn, args) => sb.rpc(fn, args),
+    channel: (name, options) => sb.channel(name, options),
+    removeChannel: (channel) => sb.removeChannel(channel),
+    realtime: sb.realtime,
+    storage: {
+      from(bucket) {
+        const b = sb.storage.from(bucket);
+        return {
+          upload: (path, body, options) =>
+            b.upload(path, body instanceof Uint8Array ? new Blob([body as BlobPart], { type: options.contentType }) : body, options),
+          download: (path) => b.download(path),
+        };
+      },
+    },
+  };
+}
+
+/**
+ * Builds the browser ChatPlatform. Pass the app's Supabase client (or null when unconfigured) and
+ * its one keystore (lib/chat/keystore.ts); the store is required so no caller ends up with a
+ * second, unintended instance.
+ */
+export function createWebPlatform<S extends SupabaseSession>(opts: { supabase: SupabaseLike<S> | null; keystore: KeyStore }): ChatPlatform<S> {
+  return { supabase: opts.supabase && withBlobUploads(opts.supabase), keystore: opts.keystore, env: webEnv, lock: webLock };
 }

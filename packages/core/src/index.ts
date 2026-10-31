@@ -10,4 +10,4 @@ export {
   type ChatClient, type RoomKind, type ExpiryMode, type LocalMessage, type RoomSummary, type SyncResult, type DeviceRecord,
 } from './chat/client';
 export { createWebKeyStore } from './adapters/web/keystore';
-export { createWebPlatform, webEnv, webLock, fileSource, toBlob } from './adapters/web/platform';
+export { createWebPlatform, withBlobUploads, webEnv, webLock, fileSource, toBlob } from './adapters/web/platform';

@@ -123,7 +123,7 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
           <header className="c-top">
             <Link href="/" className="c-brand" aria-label="OnePeek home">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/onepeek-logo.png" alt="OnePeek" width={96} height={36} />
+              <img src="/onepeek-logo.svg" alt="OnePeek" width={91} height={24} />
               <span className="c-brand-tag">Chat</span>
             </Link>
             <nav className="c-nav" aria-label="Chat">

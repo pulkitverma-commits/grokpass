@@ -256,7 +256,7 @@ export default function Dashboard() {
       <header className="container dash-header">
         <Link href="/" className="logo" aria-label="OnePeek home">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/onepeek-logo.png" alt="OnePeek" className="logo-img" width={149} height={56} />
+          <img src="/onepeek-logo.svg" alt="OnePeek" className="logo-img" width={129} height={34} />
         </Link>
         {user && (
           <div className="dash-header-right">

@@ -303,7 +303,7 @@ export default function Home() {
       <header className="container" style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 24px'}}>
         <Link href="/" className="logo" aria-label="OnePeek home">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/onepeek-logo.png" alt="OnePeek" className="logo-img" width={149} height={56} />
+          <img src="/onepeek-logo.svg" alt="OnePeek" className="logo-img" width={129} height={34} />
         </Link>
         <nav>
           <a href="#how">How it works</a>

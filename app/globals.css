@@ -89,9 +89,9 @@ header {
 }
 .logo { display: flex; align-items: center; gap: 10px; font-size: 21px; letter-spacing: -0.2px; color: #F4F5F6; }
 .logo-mark { width: 30px; height: 30px; border-radius: 8px; background: var(--gp-accent); color: #0A0C0F; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; }
-.logo-img { display: block; height: 52px; width: auto; }
-.logo-img-sm { height: 44px; }
-@media (max-width: 760px) { .logo-img { height: 44px; } }
+.logo-img { display: block; height: 34px; width: auto; }
+.logo-img-sm { height: 30px; }
+@media (max-width: 760px) { .logo-img { height: 28px; } .logo-img-sm { height: 26px; } }
 nav { display: flex; flex-wrap: wrap; align-items: center; gap: 28px; font-size: 15px; }
 nav a { color: #A3ABB6; transition: color 0.2s; }
 nav a:hover { color: #fff; }

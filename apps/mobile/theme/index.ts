@@ -2,8 +2,11 @@
 // `--c-*` custom properties) and the design frames in docs/mobile/design/*.png, so the phone and
 // the browser share one palette. Questrial is the UI face; Geist Mono carries codes, safety numbers,
 // timers and section labels.
-import { GeistMono_400Regular, GeistMono_500Medium } from '@expo-google-fonts/geist-mono';
-import { Questrial_400Regular } from '@expo-google-fonts/questrial';
+// Per-weight entry points: the package index requires every weight, which would ship 18 Geist Mono
+// files (~1.9 MB) in the bundle for the two the app uses.
+import { GeistMono_400Regular } from '@expo-google-fonts/geist-mono/400Regular';
+import { GeistMono_500Medium } from '@expo-google-fonts/geist-mono/500Medium';
+import { Questrial_400Regular } from '@expo-google-fonts/questrial/400Regular';
 
 export const colors = {
   bg: '#0A0C0F',

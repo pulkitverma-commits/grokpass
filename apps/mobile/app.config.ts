@@ -38,6 +38,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       monochromeImage: './assets/images/android-icon-monochrome.png',
     },
     // No backups of app data: keys and message copies stay on this device only.
+    // FCM client config is a secret file supplied by EAS (file-type env var); see docs/mobile/release/fcm-client-config.md.
+    googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? './google-services.json',
     allowBackup: false,
     predictiveBackGestureEnabled: false,
     intentFilters: [
@@ -56,7 +58,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   },
   plugins: [
     'expo-router',
-    ['expo-splash-screen', { backgroundColor: '#0A0C0F', image: './assets/images/splash-icon.png', imageWidth: 96 }],
+    ['expo-splash-screen', { backgroundColor: '#0A0C0F', image: './assets/images/splash-icon.png', imageWidth: 160 }],
     'expo-secure-store',
     'expo-sqlite',
     'expo-local-authentication',

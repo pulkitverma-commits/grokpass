@@ -46,3 +46,4 @@ example
 google-services.json
 GoogleService-Info.plist
 .env
+google-play-service-account.json

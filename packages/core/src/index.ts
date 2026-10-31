@@ -11,3 +11,6 @@ export {
 } from './chat/client';
 export { createWebKeyStore } from './adapters/web/keystore';
 export { createWebPlatform, withBlobUploads, webEnv, webLock, fileSource, toBlob } from './adapters/web/platform';
+
+// Approved logging path: a no-op logger and a redactor for anything that must never carry secrets.
+export { log, redact } from './log';

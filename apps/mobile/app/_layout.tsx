@@ -6,6 +6,8 @@ import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
+import { LockCover, SecurityProvider, useSecurity, UNLOCK_PROMPT } from '@/security';
+import { Button } from '../components/Button';
 import { useEffect, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -26,10 +28,20 @@ function useSession() {
   const [session, setSession] = useState<AuthSession | null | undefined>(undefined);
   useEffect(() => {
     let alive = true;
-    auth.getSession().then((s) => alive && setSession(s)).catch(() => alive && setSession(null));
+    auth
+      .getSession()
+      .then((s) => alive && setSession(s))
+      .catch(() => alive && setSession(null));
     let off = () => {};
-    try { off = auth.onChange((s) => alive && setSession(s)); } catch { /* lib/chat not wired: stay signed out */ }
-    return () => { alive = false; off(); };
+    try {
+      off = auth.onChange((s) => alive && setSession(s));
+    } catch {
+      /* lib/chat not wired: stay signed out */
+    }
+    return () => {
+      alive = false;
+      off();
+    };
   }, []);
   return session;
 }
@@ -46,27 +58,58 @@ function AuthGate({ session }: { session: AuthSession | null }) {
   return null;
 }
 
+/**
+ * Provisional cover shown while the app is locked, until mobile-ui's Locked screen (U3, wave 2)
+ * replaces it. Offers the one action the lock state needs: unlock with biometrics / passcode.
+ */
+function ProvisionalLocked() {
+  const { locked, unlock } = useSecurity();
+  return (
+    <LockCover>
+      {locked ? (
+        <Button
+          title={UNLOCK_PROMPT}
+          onPress={() => {
+            void unlock();
+          }}
+          testID="locked.unlock"
+        />
+      ) : null}
+    </LockCover>
+  );
+}
+
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts(fontAssets);
   const session = useSession();
   const ready = (fontsLoaded || !!fontError) && session !== undefined;
-  useEffect(() => { if (ready) SplashScreen.hideAsync().catch(() => {}); }, [ready]);
+  useEffect(() => {
+    if (ready) SplashScreen.hideAsync().catch(() => {});
+  }, [ready]);
   if (!ready) return null;
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bg }}>
       <SafeAreaProvider>
         <ChatProvider>
-          <StatusBar style="light" />
-          <AuthGate session={session} />
-          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg }, animation: 'fade_from_bottom' }}>
-            <Stack.Screen name="index" />
-            <Stack.Screen name="welcome" options={{ animation: 'fade' }} />
-            <Stack.Screen name="new" options={{ presentation: 'modal' }} />
-            <Stack.Screen name="join" options={{ presentation: 'modal' }} />
-            <Stack.Screen name="chat/join" options={{ presentation: 'modal' }} />
-            <Stack.Screen name="settings" />
-            <Stack.Screen name="reset" options={{ gestureEnabled: false }} />
-          </Stack>
+          <SecurityProvider cover={<ProvisionalLocked />}>
+            <StatusBar style="light" />
+            <AuthGate session={session} />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: colors.bg },
+                animation: 'fade_from_bottom',
+              }}
+            >
+              <Stack.Screen name="index" />
+              <Stack.Screen name="welcome" options={{ animation: 'fade' }} />
+              <Stack.Screen name="new" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="join" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="chat/join" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="settings" />
+              <Stack.Screen name="reset" options={{ gestureEnabled: false }} />
+            </Stack>
+          </SecurityProvider>
         </ChatProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

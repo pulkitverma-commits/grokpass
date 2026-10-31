@@ -4,6 +4,14 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-10-31
 
+- backend (B1–B4) merged: migration `008_mobile_push_tokens` (+down) with `push_devices`, owner-only RLS, RPCs
+  `register_push_device`/`unregister_push_device` (guests may register, like `chat_register_device` in 006);
+  APNs (HTTP/2, ES256 token auth) and FCM v1 senders in `lib/alerts.ts` with injectable transports; payload builders
+  take only a UUID room id; dead tokens deleted; `/api/chat/notify` fans out to native alongside web push (web payload
+  proven byte-identical); `/.well-known/apple-app-site-association` and `assetlinks.json` handlers from env (404 when
+  unset). Root tests 58 → 96, `next build` compiles both handlers. Lead set the native body to the web's wording
+  ("You have a new message in a private chat.") so qa's assertions match. **Human:** apply 008 (rehearse on a
+  throwaway project first), set the Vercel env vars listed in `docs/secret-chat/deployment.md` §5, never by an agent.
 - release (R1) merged: `eas.json` (development / development-simulator / preview / production, `appVersionSource`
   remote, EAS `environment` per profile, Android APK for dev and preview), OnePeek icon set and splash derived from
   `public/icon-512.png`, `docs/mobile/release/versioning.md`, `fcm-client-config.md`, checklist section A6 (EAS vars,

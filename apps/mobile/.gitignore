@@ -41,3 +41,8 @@ example
 # generated native folders
 /ios
 /android
+
+# Push credentials come from EAS/Vercel secrets, never the repo
+google-services.json
+GoogleService-Info.plist
+.env

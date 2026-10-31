@@ -45,3 +45,11 @@ Newest first. One line per decision, blocker or agent report.
   to confirm in C1 review. (5) no simulators on this Mac: Maestro runs on a GitHub `macos` runner or Maestro
   Cloud; decision deferred to Phase 1, flows get written regardless. (6) use `better-sqlite3`-free approach:
   Node 22.22 here supports `node:sqlite`; CI pins Node 22 (setup-node `22` resolves ≥22.13). (7) noted.
+- release (R0) done: `docs/mobile/release/accounts-checklist.md`, merged. Costs: Apple $99/yr before Gate 1,
+  Google Play $25 before beta; Android spike APK is free on EAS; iOS on a real phone has no free path.
+  Lead decisions on its questions: (1) push model stays as planned: the server (`lib/alerts.ts`) sends
+  directly to APNs and FCM v1, so the `.p8` and the FCM service account live in Vercel env only; the app
+  registers raw device tokens via expo-notifications (`getDevicePushTokenAsync`), not Expo push tokens.
+  (2) backend confirms the `APNS_*` / `FCM_SERVICE_ACCOUNT_JSON` names in B2. (4) `google-services.json`,
+  `GoogleService-Info.plist` and `.env` added to `apps/mobile/.gitignore`; `googleServicesFile` wiring and
+  `eas.json` profiles are R1 (Phase 1).

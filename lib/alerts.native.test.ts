@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { generateKeyPairSync, verify as cryptoVerify } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { BODY, BODY2, FILE_NAME, FILE_BODY, ACCESS_CODE, NICK, OWNER_NICK, ROOM_NAME, forbidden, expectClean as expectCleanForms, type Forbidden } from '../packages/core/test/fixtures';
 
 const sendNotification = vi.fn();
 const setVapidDetails = vi.fn();
@@ -23,6 +24,42 @@ const DECOY = {
   invite: FORBIDDEN[4], name: FORBIDDEN[5], sender: FORBIDDEN[6], aps: { alert: { body: FORBIDDEN[0] } }, notification: { image: 'x' },
 } as unknown as { room: string };
 const expectClean = (s: string) => { for (const f of FORBIDDEN) expect(s).not.toContain(f); };
+
+// Fixture-based sweep (test-plan §1.5 items 1, 2, 8): every fixture string, the ids a notify route knows,
+// and every credential, each as text, hex, base64 and base64url, over every captured request.
+const SENDER = '99999999-aaaa-4bbb-8ccc-dddddddddddd';
+const RECIPIENT = '88888888-aaaa-4bbb-8ccc-eeeeeeeeeeee';
+const INVITE = 'inv_tok_abcdef0123456789';
+const ATTACHMENT_KEY = 'att_key_0123456789abcdef';
+const APNS_KEY_ID = 'KEY1234567';
+const APNS_TEAM_ID = 'TEAM123456';
+const FCM_EMAIL = 'push@onepeek-test.iam.gserviceaccount.com';
+const pemBody = (p: string) => p.replace(/-----[^-]+-----|\s/g, '');
+const CONTENT_FORBIDDEN: Forbidden[] = [
+  ['BODY', BODY], ['BODY2', BODY2], ['FILE_NAME', FILE_NAME], ['FILE_BODY', FILE_BODY], ['ACCESS_CODE', ACCESS_CODE],
+  ['NICK', NICK], ['OWNER_NICK', OWNER_NICK], ['ROOM_NAME', ROOM_NAME], ['SENDER', SENDER], ['RECIPIENT', RECIPIENT],
+  ['INVITE', INVITE], ['ATTACHMENT_KEY', ATTACHMENT_KEY], ...FORBIDDEN.map((f, i) => [`decoy${i}`, f] as [string, string]),
+].map(([l, v]) => forbidden(l, v));
+const CREDENTIALS: Forbidden[] = [
+  forbidden('APNS_KEY_ID', APNS_KEY_ID), forbidden('APNS_TEAM_ID', APNS_TEAM_ID),
+  forbidden('APNS_PRIVATE_KEY (EC pem)', ecPem), forbidden('APNS_PRIVATE_KEY (EC pem, env-escaped)', ecPem.replace(/\n/g, '\\n')), forbidden('APNS_PRIVATE_KEY (EC der b64)', pemBody(ecPem)),
+  forbidden('FCM private_key (RSA pem)', rsaPem), forbidden('FCM private_key (RSA pem, env-escaped)', rsaPem.replace(/\n/g, '\\n')), forbidden('FCM private_key (RSA der b64)', pemBody(rsaPem)),
+  forbidden('FCM client_email', FCM_EMAIL),
+];
+// The provider JWTs legitimately name the key id / team id / client_email (inside base64url JSON claims), so the
+// authorization header and the token-exchange body are swept with the key material and message content only.
+const KEY_MATERIAL = CREDENTIALS.filter(f => /pem|der/.test(f.label));
+const serialise = (calls: unknown[][]) => calls.map(c => JSON.stringify(c)).join('\n');
+const sweep = (calls: unknown[][], where: string) => {
+  expect(calls.length, `${where}: nothing captured`).toBeGreaterThan(0);
+  const all = serialise(calls);
+  expectCleanForms(all, CONTENT_FORBIDDEN, `${where} (content)`);
+  expectCleanForms(all, KEY_MATERIAL, `${where} (key material)`);
+  // The non-JWT parts (URL, every header but authorization, body) must not carry ids either.
+  const stripped = JSON.stringify(calls.map(c => JSON.parse(JSON.stringify(c, (k, v) => (k === 'authorization' || k === 'assertion') ? '[jwt]' : v))));
+  const noJwt = stripped.replace(/assertion=[^"&]+/g, 'assertion=[jwt]');
+  expectCleanForms(noJwt, CREDENTIALS, `${where} (credentials)`);
+};
 const decode = (part: string) => JSON.parse(Buffer.from(part, 'base64url').toString('utf8'));
 
 type Alerts = typeof import('./alerts');
@@ -110,6 +147,45 @@ describe('native push: payload shapes', () => {
   it('refuses a room that is not a uuid (nothing can be smuggled through the routing key)', () => {
     expect(() => alerts.apnsPayload({ room: FORBIDDEN[0] })).toThrow(/bad_room/);
     expect(() => alerts.fcmMessage('tok', { room: 'Family chat' })).toThrow(/bad_room/);
+  });
+});
+
+describe('native push: fixture sweep over every captured request (§1.5 items 1, 2)', () => {
+  it('APNs: URL, headers and body of every request are clean as text, hex, base64 and base64url', async () => {
+    setApnsEnv();
+    const h = http2Mock(200);
+    await alerts.sendApns(['tokA', 'tokB'], DECOY, { http2Request: h });
+    sweep(h.mock.calls, 'APNs request');
+    expect(h.mock.calls).toHaveLength(2);
+  });
+
+  it('FCM: token-exchange URL/headers/body and every send URL/headers/body are clean', async () => {
+    setFcmEnv();
+    const f = fetchMock(fcmOk);
+    await alerts.sendFcm(['tokA', 'tokB'], DECOY, { fetch: f });
+    expect(f).toHaveBeenCalledTimes(3);
+    sweep(f.mock.calls, 'FCM request');
+    for (const [url, init] of f.mock.calls.slice(1)) {
+      expect(String(url)).toBe('https://fcm.googleapis.com/v1/projects/onepeek-test/messages:send');
+      expect(Object.keys(init!.headers as object).sort()).toEqual(['authorization', 'content-type']);
+    }
+  });
+
+  it('pushToNative on both transports: nothing but the fixed shapes goes out', async () => {
+    setApnsEnv(); setFcmEnv();
+    const { admin } = fakeAdmin([{ platform: 'ios', token: 'iosA' }, { platform: 'android', token: 'andA' }]);
+    const h = http2Mock(200), f = fetchMock(fcmOk);
+    expect(await alerts.pushToNative(admin, RECIPIENT, ROOM, { http2Request: h, fetch: f })).toBe(2);
+    sweep(h.mock.calls, 'pushToNative APNs'); sweep(f.mock.calls, 'pushToNative FCM');
+  });
+
+  it('the sweep itself catches a leak (a body carrying BODY in any encoding is flagged)', () => {
+    for (const enc of [(s: string) => s, (s: string) => Buffer.from(s).toString('hex'), (s: string) => Buffer.from(s).toString('base64'), (s: string) => Buffer.from(s).toString('base64url')]) {
+      expect(() => sweep([[{ body: `x${enc(BODY)}y` }]], 'canary')).toThrow();
+    }
+    expect(() => sweep([[{ headers: { 'x-leak': APNS_KEY_ID } }]], 'canary')).toThrow();
+    expect(() => sweep([[{ body: ecPem }]], 'canary')).toThrow();
+    expect(() => sweep([[{ url: `https://x/?e=${FCM_EMAIL}` }]], 'canary')).toThrow();
   });
 });
 
@@ -396,6 +472,128 @@ describe('native push: nodeHttp2Request always settles (W1-5)', () => {
     setApnsEnv();
     const h = vi.fn(async (req: { path: string }) => { if (req.path.endsWith('/slow')) throw new Error('http2_deadline'); return { status: 200, body: '' }; });
     expect(await alerts.sendApns(['ok', 'slow'], { room: ROOM }, { http2Request: h })).toEqual({ sent: 1, dead: [] });
+  });
+});
+
+describe('native push: credentials never surface in an error (§1.5 item 8)', () => {
+  // sendApns / sendFcm swallow transport failures by design ("kept, try next time"). What an operator or a
+  // client could ever see is the return value, a thrown message, or log output; sweep all three.
+  async function observe(run: () => Promise<unknown>) {
+    const logs: string[] = [];
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map(m => vi.spyOn(console, m).mockImplementation((...a: unknown[]) => { logs.push(a.map(x => x instanceof Error ? `${x.message}\n${x.stack}` : typeof x === 'string' ? x : JSON.stringify(x)).join(' ')); }));
+    let returned: unknown, thrown = '';
+    try { returned = await run(); } catch (e) { thrown = e instanceof Error ? `${e.name}: ${e.message}\n${e.stack}` : String(e); }
+    finally { spies.forEach(s => s.mockRestore()); }
+    const surfaced = [JSON.stringify(returned ?? null), thrown, ...logs].join('\n');
+    expectCleanForms(surfaced, CREDENTIALS, 'returned value / thrown error / console');
+    expectCleanForms(surfaced, CONTENT_FORBIDDEN, 'returned value / thrown error / console');
+    return { returned, thrown, logs };
+  }
+  // A failure whose message tries to carry everything it was given, like a careless HTTP client would.
+  const nasty = (req: unknown) => new Error(`transport failed for ${JSON.stringify(req)} with ${ecPem} ${rsaPem} ${APNS_KEY_ID} ${APNS_TEAM_ID} ${FCM_EMAIL}`);
+
+  it('APNs answering 500 (with a body echoing the request) returns a clean, non-dead result', async () => {
+    setApnsEnv();
+    const h = vi.fn(async (req: Http2Req) => ({ status: 500, body: JSON.stringify({ reason: 'InternalServerError', echo: req.headers }) }));
+    const { returned, thrown } = await observe(() => alerts.sendApns(['tokA'], DECOY, { http2Request: h }));
+    expect(returned).toEqual({ sent: 0, dead: [] });
+    expect(thrown).toBe('');
+  });
+
+  it('APNs transport that throws an error full of secrets: swallowed, nothing surfaces', async () => {
+    setApnsEnv();
+    const h = vi.fn(async (req: Http2Req) => { throw nasty(req); });
+    const { returned, thrown, logs } = await observe(() => alerts.sendApns(['tokA', 'tokB'], DECOY, { http2Request: h }));
+    expect(h).toHaveBeenCalledTimes(2);
+    expect(returned).toEqual({ sent: 0, dead: [] });
+    expect(thrown).toBe('');
+    expect(logs).toEqual([]);
+  });
+
+  it('FCM send answering 500 returns a clean result', async () => {
+    setFcmEnv();
+    const f = fetchMock(url => url.includes('oauth2') ? fcmOk(url) : { status: 500, body: { error: { code: 500, status: 'INTERNAL', message: `echo ${ecPem} ${FCM_EMAIL}` } } });
+    const { returned, thrown } = await observe(() => alerts.sendFcm(['tokA'], DECOY, { fetch: f }));
+    expect(returned).toEqual({ sent: 0, dead: [] });
+    expect(thrown).toBe('');
+  });
+
+  it('FCM token exchange answering 500, and fetch rejecting with secrets in the message: swallowed', async () => {
+    setFcmEnv();
+    const f500 = fetchMock(url => url.includes('oauth2') ? { status: 500, body: 'oops' } : { status: 200, body: {} });
+    const a = await observe(() => alerts.sendFcm(['tokA'], DECOY, { fetch: f500 }));
+    expect(a.returned).toEqual({ sent: 0, dead: [] });
+    vi.resetModules(); alerts = await import('./alerts'); alerts.configureNativeTransports(null);
+    const fThrow = vi.fn(async (url: string | URL | Request, init?: RequestInit) => { throw nasty({ url: String(url), init }); });
+    const b = await observe(() => alerts.sendFcm(['tokA'], DECOY, { fetch: fThrow as never }));
+    expect(b.returned).toEqual({ sent: 0, dead: [] });
+    expect(b.thrown).toBe('');
+    // And a send (not exchange) that throws after a good exchange.
+    vi.resetModules(); alerts = await import('./alerts'); alerts.configureNativeTransports(null);
+    const fSendThrows = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes('oauth2')) return { ok: true, status: 200, json: async () => ({ access_token: 'ya29.test', expires_in: 3600 }), text: async () => '' } as Response;
+      throw nasty({ url: String(url), init });
+    });
+    const c = await observe(() => alerts.sendFcm(['tokA'], DECOY, { fetch: fSendThrows as never }));
+    expect(c.returned).toEqual({ sent: 0, dead: [] });
+    expect(c.thrown).toBe('');
+  });
+
+  it('pushToNative with both transports failing returns 0 and surfaces nothing', async () => {
+    setApnsEnv(); setFcmEnv();
+    const { admin, deleted } = fakeAdmin([{ platform: 'ios', token: 'iosA' }, { platform: 'android', token: 'andA' }]);
+    const h = vi.fn(async (req: Http2Req) => { throw nasty(req); });
+    const f = fetchMock(url => url.includes('oauth2') ? fcmOk(url) : { status: 500, body: 'boom' });
+    const { returned, thrown } = await observe(() => alerts.pushToNative(admin, RECIPIENT, ROOM, { http2Request: h, fetch: f }));
+    expect(returned).toBe(0);
+    expect(thrown).toBe('');
+    expect(deleted).toEqual([]);
+  });
+
+  it('nodeHttp2Request rejection messages are fixed strings, free of the request it was handed', async () => {
+    setApnsEnv();
+    const req = { authority: 'api.push.apple.com', path: '/3/device/t', headers: { authorization: `bearer ${APNS_KEY_ID}.${APNS_TEAM_ID}`, 'x-key': ecPem }, body: JSON.stringify({ k: rsaPem, e: FCM_EMAIL }) };
+    const reasons: string[] = [];
+    for (const [target, event] of [['stream', 'close'], ['stream', 'timeout'], ['session', 'timeout'], ['session', 'close']] as const) {
+      const stream = Object.assign(new EventEmitter(), { setTimeout: vi.fn(), end: vi.fn(), close: vi.fn() });
+      const session = Object.assign(new EventEmitter(), { setTimeout: vi.fn(), destroy: vi.fn(), close: vi.fn(), request: vi.fn(() => stream) });
+      const p = alerts.nodeHttp2Request(req, { connect: (() => session) as never });
+      ({ stream, session })[target].emit(event);
+      reasons.push(await p.then(() => 'resolved', (e: Error) => `${e.message}\n${e.stack ?? ''}`));
+    }
+    vi.useFakeTimers();
+    try {
+      const stream = Object.assign(new EventEmitter(), { setTimeout: vi.fn(), end: vi.fn(), close: vi.fn() });
+      const session = Object.assign(new EventEmitter(), { setTimeout: vi.fn(), destroy: vi.fn(), close: vi.fn(), request: vi.fn(() => stream) });
+      const p = alerts.nodeHttp2Request(req, { connect: (() => session) as never });
+      const settled = p.then(() => 'resolved', (e: Error) => `${e.message}\n${e.stack ?? ''}`);
+      await vi.advanceTimersByTimeAsync(alerts.HTTP2_DEADLINE_MS);
+      reasons.push(await settled);
+    } finally { vi.useRealTimers(); }
+    expect(reasons).toHaveLength(5);
+    expectCleanForms(reasons.join('\n'), CREDENTIALS, 'nodeHttp2Request rejection');
+    expectCleanForms(reasons.join('\n'), CONTENT_FORBIDDEN, 'nodeHttp2Request rejection');
+  });
+
+  it('a malformed key never lands in an error: the sender stays inert and says nothing', async () => {
+    vi.stubEnv('APNS_KEY_ID', APNS_KEY_ID); vi.stubEnv('APNS_TEAM_ID', APNS_TEAM_ID);
+    vi.stubEnv('APNS_PRIVATE_KEY', `-----BEGIN PRIVATE KEY-----\\nnot-a-key-${APNS_KEY_ID}\\n-----END PRIVATE KEY-----`);
+    const h = http2Mock(200);
+    const { returned, thrown } = await observe(() => alerts.sendApns(['t'], { room: ROOM }, { http2Request: h }));
+    expect(returned).toEqual({ sent: 0, dead: [] });
+    expect(thrown).toBe('');
+    expect(h).not.toHaveBeenCalled();
+  });
+
+  it('the bad_room guard throws a fixed message without echoing the input', () => {
+    const msgs: string[] = [];
+    for (const room of [`${APNS_KEY_ID} ${FCM_EMAIL}`, ecPem, BODY]) {
+      for (const run of [() => alerts.apnsPayload({ room }), () => alerts.fcmMessage('tok', { room })]) {
+        try { run(); } catch (e) { msgs.push((e as Error).message); }
+      }
+    }
+    expect(msgs).toHaveLength(6);
+    expect(new Set(msgs)).toEqual(new Set(['bad_room']));
   });
 });
 

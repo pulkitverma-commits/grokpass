@@ -59,7 +59,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   plugins: [
     'expo-router',
     ['expo-splash-screen', { backgroundColor: '#0A0C0F', image: './assets/images/splash-icon.png', imageWidth: 160 }],
-    'expo-secure-store',
+    // native-security: its backup rules are superseded by ./plugins/withBackupRules.js (excludes every
+    // domain, SharedPreferences included), so SecureStore must not install its own.
+    ['expo-secure-store', { configureAndroidBackup: false }],
     'expo-sqlite',
     'expo-local-authentication',
     'expo-notifications',
@@ -67,6 +69,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     'expo-image-picker',
     'expo-document-picker',
     'expo-apple-authentication',
+    // native-security (N1, N3): FLAG_SECURE on MainActivity; Android backup/transfer rules.
+    './plugins/withSecureWindow.js',
+    './plugins/withBackupRules.js',
   ],
   experiments: { typedRoutes: true },
   extra: {

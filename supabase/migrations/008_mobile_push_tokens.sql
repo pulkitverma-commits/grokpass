@@ -19,6 +19,8 @@
 --     plus `^[A-Za-z0-9:_-]+$` because Postgres caps regex repetition bounds at 255.)
 --   * At most 10 tokens per owner (W1-3): after each registration the caller's rows beyond the 10
 --     most recently seen are deleted, so one account cannot turn a notify into an unbounded fan-out.
+--   * `authenticated` holds only select and delete on the table (W2-5); insert and update are
+--     refused by the grant, so the cap and the one-owner rule cannot be sidestepped via PostgREST.
 --   * Both RPCs run with `search_path = ''` and schema-qualified names (Supabase's recommended form).
 -- Additive only: one new table, two new functions. Rollback: 008_mobile_push_tokens_down.sql.
 
@@ -35,7 +37,9 @@ create index if not exists push_devices_owner on public.push_devices (owner);
 
 alter table public.push_devices enable row level security;
 revoke all on public.push_devices from anon, authenticated;
-grant select, insert, update, delete on public.push_devices to authenticated;
+-- Writes only through the RPCs (W2-5): a direct insert/update would sidestep the 10-row cap and the
+-- takeover rule. Owners may still read and delete their own rows (RLS below).
+grant select, delete on public.push_devices to authenticated;
 grant all on public.push_devices to service_role;
 drop policy if exists "owner manages push devices" on public.push_devices;
 create policy "owner manages push devices" on public.push_devices for all to authenticated

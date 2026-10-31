@@ -219,7 +219,8 @@ mocked to capture what would be sent:
   and sends nothing.
 - **Dead tokens.** APNs `410`/`BadDeviceToken` and FCM `UNREGISTERED` delete the `push_devices` row;
   the web `404/410` behaviour is unchanged (regression).
-- **Migration 008** (`supabase/tests/push-devices.test.ts`, PGlite, owner `backend`): owner can insert
+- **Migration 008** (`supabase/tests/push-devices.test.ts`, PGlite, owner `backend`; **exists, 12 tests**,
+  qa reviews it against this list in wave 2): owner can insert
   and read only their own `push_devices` rows; another user reads none; `anon` is denied; the service
   role reads all. The `register_push_device` RPC lives in the same file and must assert: (a) it runs as
   the caller and writes `owner = auth.uid()` whatever `owner` the arguments carry (a forged owner is
@@ -241,7 +242,8 @@ mocked to capture what would be sent:
   `{ aps: { alert: { title: 'OnePeek', body: 'You have a new message in a private chat.' }, sound: 'default' }, room: <id> }`
   (`room` only when `ROOM_IN_PAYLOAD`; it may also be mirrored as `aps.thread-id`) with no
   `mutable-content`, no `subtitle`, no `category` that names a room, and the FCM v1 message has
-  `notification.title`/`body` equal to the same two strings, no `image`, and `data` keys limited to
+  `notification.title`/`body` equal to the same two strings (lead confirmed: the native body is
+  `You have a new message in a private chat.`, identical to the web), no `image`, and `data` keys limited to
   `{ room }` when `ROOM_IN_PAYLOAD` (the lead set it to `true` on 2026-10-31, log.md); (4) assert the
   only UUID in either payload is the room id (regex over the serialised payload, count == 1 when
   `ROOM_IN_PAYLOAD`, 0 otherwise) so a sender or recipient id can never ride along; (5) the APNs
@@ -412,19 +414,21 @@ bearer. Adjustments made while building are marked **(built)**.
 **G. Screenshot alert**
 24. Member `sendScreenshotAlert(roomId, 30)` → `{ alert: 'screenshot' }`; SQL log does not contain
     `screenshot`; owner `sync` sees `{ alert: 'screenshot', mine: false, body: '' }` with
-    `expiresAt !== null`. **Documented (built):** the client today counts the notice in
-    `newMessages` (`sync` returns `1` for it), so a UI badge built on `newMessages` will light up for
-    a screenshot notice; the test pins `1` and `mobile-ui` must subtract alerts itself or ask
-    `core-crypto` for a separate counter. An alert triggers no `env.notify` (no push).
+    `expiresAt !== null`. **Fixed (core-crypto, Phase 1, merged into `mobile/integration`):** `sync()`
+    now returns `newAlerts` separately; a screenshot notice counts in `newAlerts`, not `newMessages`.
+    The test asserts `newAlerts === 1` and `newMessages === 0` for the alert, so an unread badge built on
+    `newMessages` stays honest. An alert triggers no `env.notify` (no push).
 
 **H. Nickname**
 25. Member joined as `NICK`; after the admit commit and one `sync` on each side, owner
     `members().find(role==='member').nickname === NICK`; the DB dump has no `NICK` as text, hex or
     base64 in any table; the rows the `chat_room_members` RPC returns (called directly on the fake,
     since the log keeps arguments, not results) have no `nick`/`name`/`label` field.
-26. **Finding (built):** the owner never sends a `nick` control message (not on `createRoom`, not on
-    first `sync`), so the member side sees `nickname: null` for the owner on both platforms. The test
-    pins that behaviour; `core-crypto` decides whether the owner should announce a nickname.
+26. **Fixed (core-crypto, Phase 1, merged):** the owner announces its nickname on `createRoom` and
+    re-announces after each admit, so members see the owner's nick. The test asserts the owner's
+    `nickname` on both sides (web ↔ phone), and `OWNER_NICK` is in the forbidden-strings sweep: it must
+    not appear as text, hex or base64 in the SQL log, the DB dump, the stored objects or the phone's
+    SQLite/SecureStore.
 
 **I. Concurrency (ported)**
 27. The web test's "sending while a sync is running" scenario with one side mobile: both sides end
@@ -680,9 +684,8 @@ verbatim and the fixture string it leaked, if any.
    M3/M5.
 3. **Harness extraction.** Moving the PGlite boot and `fakeSupabase` into `supabase/tests/harness.ts`
    touches the web test file (imports only). Approve, or Q1 duplicates the 90 lines.
-4. **Owner nickname.** The web test only asserts the member's nickname reaches the owner. If the
-   owner's nickname is not sent on create, mobile `members()` shows `null` for the owner (§2.2 H26).
-   `core-crypto` to confirm; otherwise it is a Phase 1 fix.
+4. **Owner nickname.** Answered: fixed by `core-crypto` in Phase 1 (§2.2 #26); owner nick announced on
+   create and re-announced after each admit.
 5. **Simulators.** Answered 2026-10-31: flows written regardless; where to run is still open. Both options
    are written up in `apps/mobile/e2e/README.md`; qa's recommendation is GitHub Actions (`macos-15` for
    iOS, `ubuntu` + KVM for Android) because Maestro Cloud cannot run the two-device journeys and keeps
@@ -710,7 +713,7 @@ proof exists or is specified but needs the EAS development build (blocked on the
 | Gate 1 criterion | Automated proof | Manual proof | Owner | Status 2026-10-31 |
 | --- | --- | --- | --- | --- |
 | Phone ↔ browser end to end on the live project | `packages/core/test/interop.integration.test.ts` (20 scenarios, roles swapped, every artefact swept; PGlite, not the live project, by rule §0.1) | one throwaway room on production: phone dev build + browser, create → join → text both ways → file → view-once → burn; evidence per §6.3 in `gates/phase-1.md` | qa (test), lead (live run) | test green (87/87 core); live run **pending device build** |
-| Push with no content | `lib/alerts.native.test.ts` forbidden-strings sweep (§1.5, spec written, backend writes it, qa reviews in wave 2); `supabase/tests/push-devices.test.ts` RLS + `register_push_device` (§1.5) | M8: banner shows only `OnePeek` / `You have a new message in a private chat.`, expanding shows nothing more, tap opens the app locked | backend (tests), qa (review, M8) | tests **pending backend B1/B2/B4**; M8 pending device build + APNs/FCM keys |
+| Push with no content | `lib/alerts.native.test.ts` forbidden-strings sweep (§1.5, spec written, backend writes it, qa reviews in wave 2); `supabase/tests/push-devices.test.ts` RLS + `register_push_device` (§1.5) | M8: banner shows only `OnePeek` / `You have a new message in a private chat.`, expanding shows nothing more, tap opens the app locked | backend (tests), qa (review, M8) | `push-devices.test.ts` landed (12 tests, qa review pending); `alerts.native.test.ts` pending B2/B4; M8 pending device build + APNs/FCM keys |
 | Black screenshots on Android | `apps/mobile/security` tests (§1.4 `secureFlag.test.ts`: `preventScreenCaptureAsync` on every `/room`, `/secret`, `/join` route, and the Chats list per the lead's answer); Maestro 07 asserts the notice side only, and only on Android 14+ | M2 Android: hardware screenshot in a room → OEM toast, no image in Photos; M5 switcher thumbnail black | native-security (N1, tests), qa (M2, M5) | **pending N1 + device build**; note: Maestro cannot verify that an image is black; M2 is the proof |
 | Blanked recording on iOS | `capture.test.ts` (§1.4: `UIScreen.isCaptured` true → cover shown; cover reasons independent) | M3 iOS: system recorder shows the cover for the whole capture; M4 mirroring | native-security (N2, tests), qa (M3, M4) | **pending N2 + device build** (simulators cannot record the screen the way a device does) |
 | Lock works | `autoLock.test.ts`, `biometric.test.ts` (§1.4); core `platform.test.ts` M3 fail-closed lock (landed, 87/87); Maestro 09 (panic → locked, relaunch still locked; unlock with `MAESTRO_BIOMETRIC=sim`) | M6 60 s auto-lock (and the 59 s non-lock), M7 Panic Exit | native-security (N4), qa (09, M6, M7) | core part landed; app tests **pending N4**; 09 written, **pending device build** |

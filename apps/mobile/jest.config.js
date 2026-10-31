@@ -13,6 +13,8 @@ Module._initPaths();
 /** @type {import('jest').Config} */
 module.exports = {
   preset: 'jest-expo',
+  // The first transform of ts-mls/@hpke on a cold cache can push a suite past the 5 s default.
+  testTimeout: 20000,
   modulePaths: ['<rootDir>/node_modules', '<rootDir>/../../node_modules'],
   // Pin the app's React 19 for everything, including the hoisted reconciler, so one copy renders.
   moduleNameMapper: {

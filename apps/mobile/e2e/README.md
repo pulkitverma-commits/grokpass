@@ -5,39 +5,53 @@ every element addressed by the testIDs in [`TESTIDS.md`](TESTIDS.md) (the single
 `mobile-ui` builds against it, `scripts/check-flows.mjs` enforces it). Companion to
 `docs/mobile/test-plan.md` §3.
 
-**Status 2026-10-31: written and statically checked, not run.** This Mac has no Xcode, Android
-Studio, Java or Maestro (`docs/mobile/log.md`), and there is no device build yet (EAS account
-pending). What was checked: every file parses as YAML, every `id:` exists in `TESTIDS.md`, no flow
-calls `takeScreenshot`/`startRecording`, headers carry `appId`, `name` and `tags`
-(`node apps/mobile/e2e/scripts/check-flows.mjs`). Where to run them is the lead's decision
-("Where to run", below); both options are written up.
+**Status 2026-10-31 (wave 2): written and statically checked, not run.** This Mac has no Xcode,
+Android Studio, Java or Maestro (`docs/mobile/log.md`), and there is no device build yet (EAS
+account pending). What was checked: every file parses as YAML, every `id:` exists in `TESTIDS.md`
+(all ids the flows use are now in the code: 0 dry steps), no flow calls
+`takeScreenshot`/`startRecording`, headers carry `appId`, `name` and `tags`
+(`node apps/mobile/e2e/scripts/check-flows.mjs`: `17 flows, 168 ids in TESTIDS.md (1 proposed)`).
+Where to run them is the lead's decision ("Where to run", below); both options are written up.
+
+**Build:** the flows need the **E2E build**, an `eas.json` profile `e2e` that extends `development`
+and sets `env: { "EXPO_PUBLIC_E2E": "1" }` (iOS `simulator: true` for CI). Only that flag makes
+`invite.link` render the full link that 03 copies (security review W1-9); every other build masks it
+and 03 stops at its `assertTrue` on purpose. `release` owns `eas.json`; the profile is requested in
+the qa wave-2 report.
 
 ## Flows
 
 | # | File(s) | Journey | Devices | Runnable today? |
 | --- | --- | --- | --- | --- |
-| 01 | `01-welcome-guest.yaml` | Welcome → Get started → Continue as guest → Chats home | 1 | yes, once the wave-1 screens exist |
+| 01 | `01-welcome-guest.yaml` | Welcome → Get started → Continue as guest → Chats home | 1 | yes |
 | 02 | `02-signin-email.yaml` | Welcome → Sign in → email → "check your inbox" | 1 | yes; stops at the sent state. **Manual step M1:** the link lands in a mailbox; open it on the same device and assert Chats home. `MAESTRO_EMAIL` must be an inbox the team controls (production sends a real email). |
-| 03 | `03-create-secret-room.yaml` | New chat → Secret → name, nick, code, timer → create → invite sheet → copy → done; publishes the link to the relay | A | yes, except the timer option is tapped by label (`new.timer.1h` proposed) |
-| 04 | `04-join-with-code.yaml` + `04-let-in.yaml` | B opens the link → code → nickname → submit → waits; A sees "Let in" on Chats home → taps it → opens the room | B then A | yes (`join.waiting` would make the waiting assertion positive) |
-| 05 | `05-message-roundtrip.yaml` + `.peer.yaml` | A types and sends; B sees the bubble with the body hidden, holds to read, releases, replies | A then B | once `room.composer`, `room.send`, `msg.<id>` land (wave 2) |
-| 06 | `06-file-view-once.yaml` + `.peer.yaml` | A attaches a photo as view-once; B opens it once, second open refused, still refused after relaunch | A then B | **dry**: needs the proposed `attach.*` / `viewer.*` ids and a device run to confirm the system picker labels |
-| 07 | `07-screenshot-notice.peer.yaml` (B first) + `07-screenshot-notice.yaml` | system screenshot on B → notice row on A | B then A | **dry**: needs `room.notice`; the screenshot trigger runs outside Maestro (relay); see "Screenshots" |
-| 08 | `08-burn.yaml` + `.peer.yaml` | A: menu → burn → confirm → room gone, still gone after relaunch; B: same | A then B | once wave-2 ids land |
-| 09 | `09-panic-lock.yaml` | panic → locked screen → relaunch still locked → (optional) biometric unlock | 1 | once `panic`, `locked.*` land; unlock only with `MAESTRO_BIOMETRIC=sim` |
+| 03 | `03-create-secret-room.yaml` | New chat → Secret → 1-hour timer (`new.timer.3600`), code, name, nick → create → invite sheet → copy (`invite.toast`) → done → room → back to Chats; publishes the link to the relay | A | yes, on the E2E build (masked link otherwise, see above) |
+| 04 | `04-join-with-code.yaml` + `04-let-in.yaml` | B opens the link → wrong code → `join.error` → right code → nick → submit → room in its waiting state (`room.waiting`, send disabled); A sees `chats.pending` + "Let in" on Chats home → taps it → opens the room | B then A | yes |
+| 05 | `05-message-roundtrip.yaml` + `.peer.yaml` | A picks the 1 m composer timer (`room.timer` → `room.timer.60`), types and sends; B: waiting notice gone, bubble shows "Hold to read", body **not** visible, holds, body still not asserted, countdown shows, replies | A then B | yes |
+| 11 | `11-verify-safety-number.yaml` + `.peer.yaml` | A: menu → Verify people → 60-digit safety number → published to the relay → mark verified → "Verified"; B: same number digit for digit (compared in the flow) → mark verified | A then B | yes |
+| 06 | `06-file-view-once.yaml` + `.peer.yaml` | A: attach sheet, view-once already **on** (asserted, never tapped), picks a photo from the system picker, sends; own file row disabled. B: opens once (viewer behind `viewer.hold`, no share button), closes; the row is `enabled: false`, a tap opens nothing, still disabled after a relaunch | A then B | yes, except the system picker label (`Photo.*`) is confirmed on the first device run |
+| 07 | `07-screenshot-notice.peer.yaml` (B first) + `07-screenshot-notice.yaml` | system screenshot on B → `room.notice` row on A, not a bubble | B then A | yes; the screenshot trigger runs outside Maestro (relay); see "Screenshots" |
+| 08 | `08-burn.yaml` + `.peer.yaml` | A: menu (Panic row present) → burn → **cancel** → burn → confirm → room gone, still gone after relaunch; B: `room.ended` → back → no room, still gone after relaunch | A then B | yes |
+| 10 | `10-settings-notifications.yaml` | Settings → Notifications on → OS prompt handled → switch `checked: true`, no error → relaunch keeps it → off again. Never asserts the token | 1 | needs a device that can mint a push token (tag `push`, `MAESTRO_PUSH=1` in the run script) |
+| 09 | `09-panic-lock.yaml` | Chats → Settings → `panic` (single tap, no confirmation) → `locked.screen` ("Locked by Panic Exit"), Settings/Chats/room not visible → relaunch still locked → (optional) biometric unlock | 1 | yes; unlock only with `MAESTRO_BIOMETRIC=sim` |
 
 Sub-flows in `flows/_common/`: `guest-home` (fresh install to Chats home), `back-to-chats`
-(Android back / iOS edge swipe), `open-room` (tap the only room if on Chats home).
+(`room.back` when in a room, else Android back / iOS edge swipe, twice), `open-room` (tap the only
+room if on Chats home).
 
-Tags: `ios`, `android` (every flow runs on both), `single` (01, 02, 03, 09: one device),
-`two-device` with `device-a` / `device-b` (03 to 08).
+Tags: `ios`, `android` (every flow runs on both), `single` (01, 02, 03, 09, 10: one device),
+`two-device` with `device-a` / `device-b` (03 to 08, 11), `push` (10 only).
 
 ## Rules the flows follow
 
 - **Never capture secret content.** No `takeScreenshot`, no `startRecording`, anywhere
   (`check-flows.mjs` fails the run otherwise). Assertions are `assertVisible`/`assertNotVisible`
   on **ids**; message text is only ever asserted **absent** (`assertNotVisible: <body>` before and
-  after hold-to-read). The revealed state is never asserted on text.
+  after hold-to-read). The revealed state is never asserted on text. The viewer's preview is never
+  held (06). Positive text assertions are on fixed UI copy only ("Hold to read", "Verified",
+  "Locked by Panic Exit", "may have taken a screenshot"). The two values copied between devices are
+  the invite link (03 → 04, through the in-memory relay, room burned by 08) and the safety number
+  (11, made to be compared and not a secret). The push token is never rendered or asserted (10).
 - **Fixture strings only** (test-plan §1.1): body `The launch code is 4471`, access code
   `blue-river-42`, nick `Sam Okonkwo`, room `qa-launch`. Rooms are throwaway: 1-hour timer, burned
   by flow 08 at the end of every run.
@@ -56,7 +70,8 @@ other) run in order by `scripts/run-two-device.sh`, which also starts the **rela
 2. B runs `04`: `runScript relay-get.js` reads it (or takes `MAESTRO_ROOM_LINK` when set),
    rewrites `https://onepeek.io/…` to `onepeek://…` (simulators do not verify Universal Links;
    set `MAESTRO_UNIVERSAL_LINKS=1` on physical devices), then `openLink`.
-3. The script alternates A and B for 04-let-in, 05, 06, 07, 08 and finishes with 09 on A.
+3. The script alternates A and B for 04-let-in, 05, 11, 06, 07, 08, then 10 on A only with
+   `MAESTRO_PUSH=1`, and finishes with 09 on A (it leaves A locked). 16 flows, 17 with 10.
 
 The link carries the invite token, so: the script never echoes variables or enables `set -x`; the
 relay keeps it in memory only; the room is burned by 08. See "What is never kept".
@@ -65,7 +80,8 @@ Environment (defaults in each flow's `env:`; `-e NAME=value` overrides):
 
 | Variable | Used by | Default |
 | --- | --- | --- |
-| `MAESTRO_RELAY` | 03, 04, 07, 09 | `http://127.0.0.1:4311` |
+| `MAESTRO_RELAY` | 03, 04, 07, 09, 11 | `http://127.0.0.1:4311` |
+| `MAESTRO_PUSH` | run script: `1` runs 10 | `0` |
 | `MAESTRO_DEVICE` | 07, 09 (which simulator the relay acts on) | set by the run script |
 | `MAESTRO_ROOM_LINK` | 04 | empty → read from the relay |
 | `MAESTRO_UNIVERSAL_LINKS` | 04 | `0` (rewrite to `onepeek://`) |
@@ -150,6 +166,7 @@ maestro test apps/mobile/e2e --include-tags single --include-tags ios   # or and
 xcrun simctl list devices booted              # pick the two udids
 MAESTRO_DEVICE_A=<udid-a> MAESTRO_DEVICE_B=<udid-b> apps/mobile/e2e/scripts/run-two-device.sh
 # Android: adb devices → serials (emulator-5554, emulator-5556)
+# add MAESTRO_PUSH=1 when the devices can mint a push token (10)
 
 # static check (no device): YAML, ids against TESTIDS.md, forbidden commands
 node apps/mobile/e2e/scripts/check-flows.mjs
@@ -162,4 +179,5 @@ is any PNG; it is never asserted on and the file is deleted by view-once.
 ## Report format
 
 As test-plan §6.3: `maestro test …` → `N flows: N passed, 0 failed, 0 skipped (<device>, <OS>,
-build <eas id>)`; dry steps are listed by id and flow, never counted as passed.
+build <eas id>)`; dry steps (none today) are listed by id and flow, never counted as passed; a flow
+excluded by tag (10 without a push-capable device) is listed as skipped, with the reason.

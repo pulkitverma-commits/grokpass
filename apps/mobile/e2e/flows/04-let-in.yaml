@@ -1,5 +1,6 @@
 # 04 (owner half) Device A: the pending join shows on Chats home → Let in → open the room.
-# Runs after 04-join-with-code on device B.
+# Runs after 04-join-with-code on device B. A is on Chats home (03 left it there): the room screen
+# would admit automatically, the home row is the explicit path this flow proves.
 appId: io.onepeek.app
 name: 04-let-in
 tags:
@@ -13,6 +14,8 @@ tags:
     visible:
       id: "chats.letIn"
     timeout: 30000
+- assertVisible:
+    id: "chats.pending"
 - tapOn:
     id: "chats.letIn"
 - extendedWaitUntil:
@@ -22,5 +25,9 @@ tags:
 - tapOn:
     id: "chats.room"
     index: 0
+- extendedWaitUntil:
+    visible:
+      id: "room.screen"
+    timeout: 10000
 - assertVisible:
-    id: "room.screen"
+    id: "room.title"

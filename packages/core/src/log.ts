@@ -28,7 +28,8 @@ export type LogFields = Record<string, unknown>;
  * Returns a copy of `value` safe to hand to any sink: sensitive keys are replaced by `REDACTED`,
  * strings are capped, byte buffers become their length, errors keep only their name and the
  * trailing `[a-z_]+` code that `ChatError` uses. A bare string has no key to judge it by, so it
- * is redacted whole.
+ * is redacted whole; so is every string inside an array, at any depth (W1-10: `{ ids: [token] }`
+ * used to keep the token's first 32 characters because the array's key, `ids`, is not sensitive).
  */
 export function redact(value: unknown, depth = 0): unknown {
   if (value === null || value === undefined) return value;
@@ -39,7 +40,7 @@ export function redact(value: unknown, depth = 0): unknown {
   if (value instanceof ArrayBuffer) return `[bytes:${value.byteLength}]`;
   if (ArrayBuffer.isView(value)) return `[bytes:${value.byteLength}]`;
   if (depth >= MAX_DEPTH) return '[depth]';
-  if (Array.isArray(value)) return value.map(v => redact(v, depth + 1));
+  if (Array.isArray(value)) return value.map(v => (typeof v === 'string' ? REDACTED : redact(v, depth + 1)));
   if (value instanceof Date) return value.toISOString();
   if (value instanceof Map || value instanceof Set) return `[${value instanceof Map ? 'map' : 'set'}:${value.size}]`;
   const out: LogFields = {};

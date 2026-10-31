@@ -14,17 +14,25 @@ env:
   MAESTRO_BODY2: Got it
 ---
 - runFlow: _common/open-room.yaml
+# Admitted by 04-let-in: the waiting notice is gone and the composer is live.
+- extendedWaitUntil:
+    notVisible:
+      id: "room.waiting"
+    timeout: 30000
 - extendedWaitUntil:
     visible:
       id: "msg\\..+"
     timeout: 30000
 - assertNotVisible: ${MAESTRO_BODY}
+- assertVisible: "Hold to read"
 - longPressOn:
     id: "msg\\..+"
     index: 0
 - assertVisible:
     id: "msg\\..+"
 - assertNotVisible: ${MAESTRO_BODY}
+- assertVisible:
+    id: "timer\\..+"
 - tapOn:
     id: "room.composer"
 - inputText: ${MAESTRO_BODY2}

@@ -4,6 +4,12 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-10-31
 
+- qa wave 2 merged: W1-10 closed (expo-insights/expo-updates imports; off-device sinks Clipboard/Share/Linking/
+  WebBrowser/Alert/WebSocket/XHR flagged with secret-named arguments; `redact` arrays), TESTIDS reconciled to the code
+  (168 ids), flows 03–09 on real ids, new 10 (notifications) and 11 (safety number), test plan v1.2 (§1.5 review of the
+  backend tests: four additive gaps d, f, 1+2, 8; §4.1 device checks S1–S20 with owners; §8 Gate 1 map updated). Core
+  194. Lead added the `e2e` EAS profile (simulator, `EXPO_PUBLIC_E2E=1`, internal only; the config guard refuses the
+  flag on preview/production) and dispatched the four backend test gaps.
 - security-reviewer (S1, second pass) `phase-1-wave-2.md`: **no high or critical**; W1-1..W1-7 and W1-9 closed with tests,
   W1-8 closed by decision, W1-10 with qa. Wave 2: mediums W2-1 (reply preview shows Secret text unheld) and W2-2
   (picker cache copies never deleted), lows W2-3..W2-10. Dispatched: mobile-ui (W2-1, W2-2, W2-3, W2-4 honest sentence

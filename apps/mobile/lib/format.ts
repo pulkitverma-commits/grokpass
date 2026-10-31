@@ -32,6 +32,11 @@ export function shortId(id: string) {
   return id.replace(/-/g, '').slice(0, 4).toUpperCase();
 }
 
+/** A room's display name: the local name, else "<kind> · <short id>" as on the web. */
+export function roomTitle(r: { name: string | null; kind: keyof typeof KIND_NAME; id: string }) {
+  return r.name || `${KIND_NAME[r.kind]} · ${shortId(r.id)}`;
+}
+
 /** The `code` of a core ChatError, or '' for anything else. Duck-typed so screens never import the core at runtime. */
 export function errorCode(e: unknown): string {
   return e && typeof e === 'object' && 'code' in e && typeof (e as { code: unknown }).code === 'string' ? (e as { code: string }).code : '';

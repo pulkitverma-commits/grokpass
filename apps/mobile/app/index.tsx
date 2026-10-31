@@ -16,14 +16,13 @@ import { Notice } from '../components/Notice';
 import { Screen } from '../components/Screen';
 import { Text } from '../components/Text';
 import { colors, radii, spacing, touchTarget } from '../theme';
-import { KIND_NAME, KIND_SHORT, countdown, errorCode, shortId } from '@/lib/format';
+import { KIND_NAME, KIND_SHORT, countdown, errorCode, roomTitle, shortId } from '@/lib/format';
 
 type Chat = ReturnType<ReturnType<typeof useChat>['chat']>;
 type Room = Awaited<ReturnType<Chat['myRooms']>>[number];
 type Pending = { roomId: string; roomTitle: string; deviceId: string };
 type Item = { t: 'pending'; p: Pending } | { t: 'room'; r: Room };
 
-export const roomTitle = (r: Pick<Room, 'name' | 'kind' | 'id'>) => r.name || `${KIND_NAME[r.kind]} · ${shortId(r.id)}`;
 const kindIcon = (k: Room['kind']) => (k === 'secret' ? 'lock' : k === 'business' ? 'shield' : 'clock');
 
 // Honest copy per platform: Android blocks screenshots in chats (FLAG_SECURE); iOS cannot block them,

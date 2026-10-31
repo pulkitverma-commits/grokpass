@@ -8,7 +8,7 @@ import { Header } from '../../components/Header';
 import { Screen } from '../../components/Screen';
 import { Text } from '../../components/Text';
 import { spacing } from '../../theme';
-import { roomTitle } from '../index';
+import { roomTitle } from '@/lib/format';
 
 export default function RoomScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();

@@ -142,17 +142,13 @@ export default function SignInScreen() {
       {err ? <View style={styles.err}><Notice tone="error" text={err} testID="signin.error" /></View> : null}
 
       <View style={styles.guestBox}>
-        <Icon name="user" size={20} color={colors.accent} />
-        <View style={styles.guestText}>
-          <Text variant="meta" tone="muted">
-            Got an invite?{' '}
-            <Text variant="meta" tone="accent" accessibilityRole="link" onPress={() => router.push('/join')} testID="signin.joinGuest">Join that chat as a guest</Text>, no account needed.
-          </Text>
-          <Text variant="meta" tone="muted">
-            No account?{' '}
-            <Text variant="meta" tone="accent" accessibilityRole="button" accessibilityState={{ busy: busy === 'guest' }} onPress={busy ? undefined : guest} testID="signin.guest">Start a Quick Chat as a guest</Text>
-          </Text>
+        <View style={styles.guestRow}>
+          <Icon name="user" size={20} color={colors.accent} />
+          <Text variant="meta" tone="muted" style={styles.guestText}>Got an invite? Join that chat as a guest, no account needed.</Text>
         </View>
+        <Button title="Join with an invite link" variant="ghost" small onPress={() => router.push('/join')} disabled={!!busy} testID="signin.joinGuest" />
+        <Text variant="meta" tone="muted" center>No account?</Text>
+        <Button title="Start a Quick Chat as a guest" variant="ghost" small busy={busy === 'guest'} disabled={!!busy && busy !== 'guest'} onPress={guest} testID="signin.guest" />
       </View>
     </Screen>
   );
@@ -165,6 +161,7 @@ const styles = StyleSheet.create({
   rule: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.line },
   sent: { gap: spacing.sm, alignItems: 'flex-start' },
   err: { marginTop: spacing.md },
-  guestBox: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start', marginTop: spacing.xxl * 1.5, padding: spacing.lg, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface },
-  guestText: { flex: 1, gap: spacing.sm },
+  guestBox: { gap: spacing.sm, marginTop: spacing.xxl * 1.5, padding: spacing.lg, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface },
+  guestRow: { flexDirection: 'row', gap: spacing.md, alignItems: 'center', marginBottom: spacing.xs },
+  guestText: { flex: 1 },
 });

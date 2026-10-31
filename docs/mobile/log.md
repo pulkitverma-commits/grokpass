@@ -30,3 +30,10 @@ Newest first. One line per decision, blocker or agent report.
   Apple Developer Program for the iPhone build. C2 (device spike) is blocked on that; everything else proceeds.
 - Lead: assumed answers to plan §8 (human said "approved" without picking): Q1 (b) production with throwaway
   rooms for Phase 0; Q3 yes; Q4 newspop Node; Q5 PRs via web UI; Q6 `io.onepeek.app`.
+- Lead: L4 GitHub Actions `ci.yml` (typecheck, lint, test, web build, tracked-secret check) on PRs and
+  pushes to `main` and `mobile/integration`.
+- Lead: static check of `react-native-quick-crypto` 1.1.9: its `subtle` implements AES-GCM, HKDF, SHA-256,
+  Ed25519 and X25519, i.e. everything `ts-mls` → `@hpke/core` calls. The spike risk drops to "works on
+  Hermes at acceptable speed", which only a device build can answer.
+- Lead: launched `core-crypto` (C1), `qa` (Q2) and `release` (R0) in parallel, each in its own worktree with
+  node_modules symlinked to the main checkout (disk is at 6.6 GB free; a second install would not fit twice).

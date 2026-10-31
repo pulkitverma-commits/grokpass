@@ -1,0 +1,40 @@
+# Typecheck, lint, unit tests and the web build for every workspace (web root, packages/core,
+# apps/mobile). Runs on pull requests to main and mobile/integration and on pushes to those
+# branches. No deploy happens here: Vercel deploys main on its own.
+name: CI
+
+on:
+  pull_request:
+    branches: [main, mobile/integration]
+  push:
+    branches: [main, mobile/integration]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - name: Web build (the live site must still build after every change)
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+      - name: No secrets committed
+        run: |
+          set -e
+          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example$'; then
+            echo 'A .env file is tracked; remove it and use EAS/Vercel secrets.'; exit 1; fi
+          if git ls-files | grep -E 'google-services\.json$|GoogleService-Info\.plist$|\.p8$|\.p12$|\.keystore$|\.jks$'; then
+            echo 'A signing or push credential file is tracked.'; exit 1; fi

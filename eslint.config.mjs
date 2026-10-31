@@ -8,7 +8,7 @@ import globals from 'globals';
 import next from '@next/eslint-plugin-next';
 
 export default tseslint.config(
-  { ignores: ['node_modules/**', '.next/**', 'apps/**', 'packages/**', 'public/sw.js', 'next-env.d.ts'] },
+  { ignores: ['node_modules/**', '.next/**', '.claude/**', 'apps/**', 'packages/**', 'public/sw.js', 'next-env.d.ts'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   prettier,

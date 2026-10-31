@@ -4,6 +4,17 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-10-31
 
+- mobile-ui wave 1 (U1, U2, U4, U6) merged: theme tokens + primitives, Welcome, Sign in (Apple with hashed nonce,
+  Google via system browser + PKCE, email link, guest), `auth` callback (URL never rendered or logged), Chats home
+  (rooms, search, pending "Let in", refresh on focus/foreground), New chat → invite sheet (QR, masked link, copy,
+  share), Join (paste or `/chat/join#token` deep link, token read from the fragment only), Settings, reset screen for
+  `keystore_unavailable`. 43 jest tests; `expo export` 2401 modules. Lead applied its Metro patch (watch realpaths
+  behind symlinked node_modules; resolve `@onepeek/core` to this tree) so worktrees can export. Decisions on its
+  questions: passkeys stay hidden for Gate 1 (no `signin.passkey` id; the human confirms at the gate); the room
+  screen (U5) auto-admits like the web, the home "Let in" row stays as the explicit path; the iOS chats footer
+  ("flagged to everyone") stays, it matches what native-security builds. Honest-copy deviations from the PNGs are
+  listed in its report and accepted. Not verified on device: fonts, keyboard avoidance, sheet gestures, native
+  sign-in flows, fragment routing through expo-router on cold start.
 - backend (B1–B4) merged: migration `008_mobile_push_tokens` (+down) with `push_devices`, owner-only RLS, RPCs
   `register_push_device`/`unregister_push_device` (guests may register, like `chat_register_device` in 006);
   APNs (HTTP/2, ES256 token auth) and FCM v1 senders in `lib/alerts.ts` with injectable transports; payload builders

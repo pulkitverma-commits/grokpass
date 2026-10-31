@@ -40,21 +40,26 @@ assertion greps for the same things:
 | `FILE_NAME` | `passport.txt` | attachment file name |
 | `FILE_BODY` | `passport scan: P1234567` | attachment content |
 | `ACCESS_CODE` | `blue-river-42` | room access code |
-| `NICK` | `Sam` | nickname (travels encrypted) |
+| `NICK` | `Sam Okonkwo` | nickname (travels encrypted); 11 bytes, so its hex cannot occur by chance in ciphertext (a 3-byte `Sam` had a ~1% false-positive rate per dump) |
 | `ROOM_NAME` | `qa-launch` | room name (local only) |
 
 Each test also captures at run time: the invite token (`link.split('#')[1]`), the file key
-(`sent.file.key`), the attachment object path, every MLS private key the mocks hand out, and the
-wrapping key bytes the RN keystore mock generates. The helper `forbidden(ctx)` returns the list of
-strings and their hex and base64url encodings; `expectClean(artefact: string, ctx)` asserts none of them
-occur. The three artefacts checked are:
+(`sent.file.key`), the attachment object path, every MLS signing private key (`ensureDevice().signing.signKey`),
+and the wrapping key bytes the RN keystore mock holds (`SecureStore` entry `onepeek.wrap`, base64url).
+The helper `forbidden(label, value)` returns the value's text, hex, base64url and base64 forms (byte
+values: the three encodings only); `expectClean(artefact: string, list, where)` asserts none of them
+occur and names what leaked where. The artefacts checked (as built in Q1) are:
 
-- **the SQL log**: `lastSql` (RPC name + arguments) serialised with `JSON.stringify`;
-- **the DB dump**: `select string_agg(encode(ciphertext,'escape'),'') from chat_messages`, plus
-  `chat_members.key_package`, `chat_devices`, `chat_invites`, `chat_rooms`, `chat_attachments`,
-  `realtime.messages.payload` and `chat_security_events` dumped as text;
-- **the device dump** (mobile only): every row of the in-memory SQLite `sealed` table as hex, plus the
-  SecureStore mock's values, plus anything the fake `console` captured.
+- **the SQL log**: every fake client's RPCs (name + arguments) serialised with `JSON.stringify`, with
+  `p_token` and `p_access_code` redacted only on the RPCs where they are the input to be hashed
+  (`chat_create_invite`, `chat_peek_invite`, `chat_redeem_invite`; `chat_create_room`,
+  `chat_redeem_invite`) and an assertion that they appear on no other RPC;
+- **the DB dump**: every `public.chat_*` table found in `pg_tables` plus `realtime.messages`, each row
+  as `row::text` (bytea renders as `\x` hex, so the hex forms are what match);
+- **the stored objects**: every uploaded object as latin1 and as hex;
+- **the device dump** (mobile only): every row of the in-memory SQLite `sealed` table (key, hex iv,
+  hex ct) plus the SecureStore mock's values. `console` is not captured here; the core never logs
+  (`no-console: error`), and the log lint is Q4 (§1.6).
 
 ### 1.2 `packages/core` (owner: `core-crypto`; `qa` co-owns)
 
@@ -112,37 +117,50 @@ adapter (web with `fake-indexeddb`, RN with the mocks from §1.3). Same test bod
 
 ### 1.3 RN adapters, `packages/core/src/adapters/rn` (owner: `core-crypto`, C3)
 
-Mocks live in `packages/core/test/rn-mocks.ts` and are the only place `expo-*` names appear in a test:
+Names below follow the ports as C1/C3 built them (`packages/core/src/chat/ports.ts`): the env port is
+`ChatEnv { origin(), deviceLabel(), randomUUID(), notify(roomId, accessToken) }` (no `notifyUrl()`;
+the RN env is built with `createRnEnv({ siteUrl, apiBaseUrl, deviceLabel, fetch? })` and posts to
+`<apiBaseUrl>/api/chat/notify`), and the panic flag is `LockStore { set(), get(), clear() }`
+(the client's `lock()/isLocked()/unlock()` call it). The expo modules are injected
+(`createRnKeyStore({ secureStore, sqlite, dbName })`, `createRnPlatform({ ..., secureStore })`),
+never imported by the core.
 
-- `expo-secure-store`: a `Map<string,string>` with `getItemAsync/setItemAsync/deleteItemAsync`,
-  recording the `keychainAccessible` option passed. Assert every `setItemAsync` for the wrapping key
-  uses `WHEN_UNLOCKED_THIS_DEVICE_ONLY` (and `requireAuthentication` is not set, since the lock is
-  the app's, not the item's).
-- `expo-sqlite`: backed by `node:sqlite` `DatabaseSync(':memory:')` (Node 22.13+, no new dependency).
-  Exposes the same `execAsync/runAsync/getAllAsync` subset the adapter uses. The test can dump the
-  `sealed` table.
+Mocks live in `packages/core/test/rn-mocks.ts` and are the only place `expo-*` shapes are built by hand:
+
+- `createSecureStoreMock(log)`: a `Map<string,string>` with `getItemAsync/setItemAsync/deleteItemAsync`,
+  recording the options passed to every `setItemAsync` (`setOptions`). Assert the wrapping key
+  (`WRAP_KEY_ID`, `onepeek.wrap`) is stored with exactly `{ keychainAccessible: WHEN_UNLOCKED_THIS_DEVICE_ONLY }`
+  (no `requireAuthentication`, since the lock is the app's, not the item's). The lock flag is
+  `LOCK_ID` (`onepeek.lock`), beside it.
+- `createSqliteMock(log)`: backed by `node:sqlite` `DatabaseSync(':memory:')` (Node 22.13+, no new
+  dependency; tests `skip` when it is missing). Exposes the `execAsync/runAsync/getFirstAsync/getAllAsync`
+  subset the adapter uses; `dump()` returns the `sealed` rows, `insert()` puts rows back.
 - `crypto`: `globalThis.crypto` from Node (`webcrypto`). This stands in for `react-native-quick-crypto`
   **only for logic**; it does not prove quick-crypto works on Hermes. That proof is C2's `spike.md`.
-- `fetch`: a recorder; `notifyRoom` must `POST` to `Env.notifyUrl()` with body `{ room }` and the
-  session bearer, nothing else.
+  Tests never call `installRnCrypto()`.
+- `createFetchRecorder(fail?)`: `env.notify(roomId, token)` must `POST` to `<apiBaseUrl>/api/chat/notify`
+  with body `{ room }` and `Authorization: Bearer <token>`, nothing else, and never throw.
+- Both mocks append to one `log` so ordering can be asserted (wrapping key deleted before any row).
 
-Adapter tests:
+Adapter tests (as landed in C3; file names are the adapter's, `<adapter>.test.ts`):
 
-- `keystore.rn.test.ts`: the §1.2 contract; plus "the SQLite file holds only ciphertext": after
+- `keystore.test.ts`: the §1.2 contract; plus "the SQLite file holds only ciphertext": after
   `put('room:1:state', { secret: BODY })` the dump of `sealed` contains neither `BODY` nor its hex nor
   its base64url; the wrapping key bytes (read from the SecureStore mock) do not appear in SQLite;
   after `wipe()` the SecureStore mock has no `onepeek.wrap` and `sealed` is empty; the order assertion
   from §1.2.
-- `keystore.rn.test.ts` "a copied database is unreadable without the device's SecureStore": serialise
+- `keystore.test.ts` "a copied database is unreadable without the device's SecureStore": serialise
   the SQLite rows, build a second adapter over the same rows and an **empty** SecureStore; every
   `get` is `null`.
-- `lock.rn.test.ts`: `lock()` is synchronous from the caller's point of view (flag is also kept in
-  memory so the UI can cover the screen before SecureStore resolves), `isLocked()` is true after a
-  simulated process restart (new instance, same mock).
-- `env.rn.test.ts`: `origin()` is `Constants.expoConfig.extra.siteUrl`; `deviceLabel()` is
-  `"<Device.modelName> · OnePeek app"` truncated to 40 chars, never the device name the user typed.
-- `filesource.rn.test.ts`: a picked file is read from its `uri` lazily (not at pick time); size comes
-  from the picker metadata and is checked against `MAX_ATTACHMENT_BYTES` before reading.
+- `platform.test.ts` (lock): `set()` flips the flag synchronously (kept in memory so the UI can cover
+  the screen before SecureStore resolves) and persists it; a new `createRnLockStore(sameMock)` reads
+  it back once `ready` resolves (simulated process restart); `clear()` deletes it.
+- `platform.test.ts` (env): `origin()` is the injected `siteUrl` (the app passes
+  `Constants.expoConfig.extra.siteUrl`), used verbatim in invite links and never sent to the server;
+  `deviceLabel()` is the injected model name truncated to 40 chars, never the user-typed device name;
+  `randomUUID()` is v4; `notify()` as above.
+- `platform.test.ts` (files): `fileSource(picked)` reads from `read()` lazily (not at pick time); size
+  comes from the picker metadata and the core checks it against `MAX_ATTACHMENT_BYTES` before reading.
 
 ### 1.4 `apps/mobile/security` (owner: `native-security`, N1 to N5)
 
@@ -208,118 +226,157 @@ anything was printed; the mobile app installs the same wrapper in `__DEV__` buil
 
 ## 2. Interop test design (Q1)
 
-File: `packages/core/test/interop.integration.test.ts`. It runs in the root `npm test` (vitest
-`include` gains `packages/core/**/*.test.ts`) and in `packages/core`'s own vitest. Timeout 60 s like
-the web test. Depends on C1 (core extracted) and C3's adapter code; until C3 lands it uses the §1.3
-mocks against the adapter interfaces, so it can start the day C1 merges.
+File: `packages/core/test/interop.integration.test.ts` (built in Q1 on `mobile/qa/interop-test`). It
+runs in `packages/core`'s own vitest (`include` gained `test/**/*.test.ts`) and therefore in the root
+`npm test`, which runs every workspace's `test` script; the root vitest config itself is unchanged.
+Per-test timeout 60 s like the web test. Built on C1 (core extracted) and C3's adapters as landed.
 
-### 2.1 Harness
+### 2.1 Harness (as built)
 
-Extract from `lib/chat/client.integration.test.ts` into `supabase/tests/harness.ts` (shared, no
-behaviour change to the web test, which keeps its own copy until the lead approves the move):
+`packages/core/test/harness.ts` is the harness of `lib/chat/client.integration.test.ts` **duplicated**,
+not extracted: moving it to `supabase/tests/harness.ts` would have changed the web test's module-level
+`lastSql` handling, and the zero-diff rule for that file wins. The two copies can be unified when the
+lead approves touching the web test. Differences from the web copy:
 
-- `bootDb()`: PGlite + pgcrypto, stubs, every migration in `supabase/migrations/*.sql` in order
-  (so 008 is covered automatically), `window.location.origin = 'https://onepeek.test'`.
-- `fakeSupabase(user)`: as today, plus it records `lastSql` per client instead of globally so the
-  test can tell which device sent what.
-- `storageObjects`: the shared `Map` standing in for the bucket, with the RLS checks.
+- `bootDb()`: PGlite + pgcrypto, the stubs, then the chat migrations in order: `006` and every later
+  migration except `*_down.sql` and `007` (it redefines `create_request` from `005`, whose tables are
+  not in this schema; 002 to 005 cannot be applied without a `001` that does not exist in the repo).
+  `008+` will therefore be covered automatically. `window.location.origin = 'https://onepeek.test'`
+  is set after PGlite starts.
+- `fakeSupabase(user, sql)`: as the web copy, plus every RPC is pushed both to the client's own `sql`
+  log and to the shared `allSql`, so a test can tell which device sent what; the session token is
+  `tok-<first 8 of user id>` so the notify assertion can check which device's token was used;
+  `auth.passkey.list` calls are counted; `signInWithPasskey` is present (the port requires it).
+- `objects`: the shared `Map` standing in for the bucket, with the `chat_attachment_writable/readable`
+  checks; uploads accept the `Uint8Array` the core sends or the `Blob` the web adapter wraps it in.
+- `dumpDb()`: every `public.chat_*` table plus `realtime.messages`, rows as text.
 
-Two client factories, both returning the **same** `ChatClient` type from `packages/core`:
+Two device factories in the test, both returning the same `ChatClient` from `createChatClient`:
 
 ```ts
-const web    = await webClient('alice', ALICE_ID);              // web adapters, own fake-indexeddb
-const mobile = await mobileClient('sam', SAM_ID, { guest: true }); // RN adapters over §1.3 mocks
+const owner = await device('web', 'owner');            // web adapters, own fake-indexeddb
+const guest = await device('phone', 'guest', true);    // RN adapters over §1.3 mocks, guest session
 ```
 
-`webClient` builds the `ChatPlatform` from `packages/core/src/adapters/web` with a fresh `IDBFactory`
-and `localStorage` map; `mobileClient` builds it from `adapters/rn` with a fresh SecureStore map and
-`DatabaseSync(':memory:')`. The `on(client, fn)` swap of `globalThis.indexedDB` is only needed for web
-clients; mobile clients hold their stores by reference. `dumpDevice(mobile)` returns the SQLite rows +
-SecureStore values as one string for `expectClean`.
+`device('web')` does `vi.resetModules()` and re-imports `adapters/web/keystore` so each browser has its
+own wrapping-key cache (module state in a real tab), swaps in a fresh `IDBFactory`, and builds
+`createWebPlatform({ supabase: fake, keystore })`; its `run(fn)` puts that `indexedDB` back before every
+call. `device('phone')` builds `createRnKeyStore({ secureStore, sqlite, dbName: ':memory:' })` and
+`createRnPlatform({ supabase: fake, keystore, secureStore, siteUrl: 'https://onepeek.io',
+apiBaseUrl: 'https://onepeek.io', deviceLabel: 'iPhone 15', fetch: recorder })` with Node's WebCrypto
+(no `installRnCrypto`). On both, `platform.env.notify` is replaced by a `vi.fn` spy (call-through on
+the phone, recording only on the web, whose real `notify` posts to a relative URL that has no server
+here). `sealedDump(phone)` / `secureDump(phone)` are the device dump.
 
 ### 2.2 Scenarios and assertions
 
-Every scenario runs twice with roles swapped (`[owner, member] = [web, mobile]` then
-`[mobile, web]`) via `describe.each`. Assertions listed once; "both" means asserted on each side.
+Every scenario runs twice with roles swapped (`describe.each([['web owner, phone guest'], ['phone
+owner, web guest']])`). Assertions listed once; "both" means asserted on each side. Every scenario ends
+with `sweep(devices, extraSecrets, tokens)`, the §1.1 `expectClean` over the SQL log, the DB dump, the
+stored objects and each phone's SQLite and SecureStore, plus: the wrapping key's SecureStore options,
+that SecureStore holds only `onepeek.wrap` and `onepeek.lock`, that every `env.notify` call was exactly
+`(roomId, that device's token)`, and that on the phone each call became one `POST {room}` with that
+bearer. Adjustments made while building are marked **(built)**.
 
 **A. Room, invite, access code, admit**
 1. Owner `createRoom({ kind:'secret', ttl:30, mode:'on_open', lifetime:3600, accessCode, name })`.
-2. `createInvite` link matches `^https://onepeek\.test/chat/join#[A-Za-z0-9_-]{40,}$` from both
-   platforms (mobile `Env.origin()` is injected, not read from `window`).
+2. `createInvite` link matches `^<origin>/chat/join#[A-Za-z0-9_-]{40,}$` where `<origin>` is the
+   platform's own: `https://onepeek.test` (the web `window`) or `https://onepeek.io` (the phone's
+   injected `siteUrl`, never read from a global) **(built)**.
 3. Member `peekInvite(token)` → `{ needs_code: true, kind: 'secret' }`.
 4. Wrong code → rejects `{ code: 'access_code_wrong' }`; the SQL log contains the wrong code only as
    an RPC argument to `chat_redeem_invite` (it is hashed server-side) and the DB dump never.
 5. Right code → `joined === roomId`; member `sync` → `joined: false` until owner `admitPending` → `1`;
-   then `joined: true`.
+   then `joined: true`; `myRooms()` lists the room on both, with `ROOM_NAME` on the owner **(built)**.
 6. `expectClean(sqlLog)`, `expectClean(dbDump)` with the invite token in context, except for the
-   `chat_redeem_invite` and `chat_peek_invite` arguments where the token is the input (assert it is
-   present only there, and `token_hash` is not its hex).
+   `chat_create_invite`, `chat_peek_invite` and `chat_redeem_invite` `p_token` arguments where the
+   token is the input (assert it is present only there, `token_hash` is not its hex, and every
+   `access_code_hash` matches `^\$2a\$10\$`). This is the `sweep` every scenario ends with.
 
 **B. Text, both directions**
 7. Owner `send(BODY, 30)`. SQL log and DB dump clean. Member `sync` → `newMessages: 1`;
    `messages()[0].body === BODY`, `expiresAt === null` (unopened), `mine === false`.
 8. Member `markOpened` → `expiresAt - now <= 31_000`.
 9. Member `send(BODY2, 30)`; owner `sync`; owner sees `[[true, BODY], [false, BODY2]]`.
-10. `expectClean(dumpDevice(mobile))` with `BODY`, `BODY2`, the MLS private key material and the
-    wrapping key bytes in context. This is the new assertion the web test cannot make: the phone's
-    SQLite holds only sealed blobs.
-11. Epoch agreement: `mls.epoch(ownerState) === mls.epoch(memberState)` after both synced.
+10. `expectClean(sealedDump(phone))` with `BODY`, `BODY2`, the MLS signing private key and the
+    wrapping key bytes in context, and the phone holds exactly two sealed `room:<id>:msg:` rows. This
+    is the new assertion the web test cannot make: the phone's SQLite holds only sealed blobs.
+11. Epoch agreement: `mls.epoch(ownerState) === mls.epoch(memberState)` after both synced. Also
+    **(built)**: `env.notify` was called exactly once per side, with `(roomId, that side's token)`.
 
 **C. File**
 12. Owner `sendFile(FileSource(FILE_NAME, FILE_BODY), 300, false)`; `sent.file.name === FILE_NAME`.
-13. SQL log, stored object bytes (`latin1`) and DB dump contain neither `passport` nor `sent.file.key`.
-14. Member `sync`, `openFile` → bytes decode to `FILE_BODY`, `mime === 'text/plain'`.
+13. SQL log, stored object bytes (`latin1` and hex) and DB dump contain neither `passport` nor
+    `sent.file.key` (checked as the key's bytes: hex, base64url, base64).
+14. Member `sync`, `openFile` → bytes decode to `FILE_BODY`, `mime === 'text/plain'`; then the member
+    sends a file back and the owner decrypts it (both directions) **(built)**.
 15. A third user who is not a member: `chat_attachment_readable(objectPath)` is `false`.
-16. Mobile's `FileSource.bytes()` is called exactly once per send (no second read during the
-    encrypt-then-upload path).
+16. `FileSource.bytes()` is called exactly once per send (no second read during the
+    encrypt-then-upload path); asserted on whichever platform sends, the rule lives in the core.
 
 **D. View-once file**
 17. Owner `sendFile(..., 300, true)`; owner `openFile` → rejects `view_once_sent`.
 18. Member `openFile` once → content; `messages()` shows `viewed: true`; second `openFile` → `gone`;
     replaying `{ ...msg, viewed: false }` → `gone` (server-side claim).
-19. On mobile, after the first open the sealed message row still exists but `openFile` is refused
-    locally before any RPC (`lastSql` unchanged by the second attempt).
+19. After the first open `openFile` is refused locally before any RPC (`allSql` unchanged by the
+    second attempt, on both platforms); on the phone the sealed message row still exists; the replay
+    with `viewed: false` makes exactly one `chat_claim_attachment` call and is refused by the server.
 
 **E. Removal commit**
-20. Three devices: owner + two members (one web, one mobile, then swapped). Owner `removeMember(m1)`.
-21. `m1.sync` → `removed: true`; `m1.keystore.keys('room:<id>:')` is `[]` (web) /
-    `sealed` has no `room:<id>:` rows (mobile).
-22. Owner `send('only m2 now')`; `m2.sync` sees it; `m1` is refused by the server (`not_a_member`)
-    and, independently, cannot decrypt a message captured from `lastSql` with its old state
-    (`mls.decrypt` throws).
+20. Three devices: owner, `m1` (the guest platform, the one removed) and `m2` (the owner's platform),
+    then swapped, so both platforms get removed once. Owner `removeMember(m1)`.
+21. `m1.sync` → `removed: true`; `m1.keystore.keys('room:<id>:')` is `[]` on both, and on the phone
+    `sealed` has no `room:<id>:` rows; `m1.myRooms()` no longer lists the room **(built)**.
+22. Owner `send('only m2 now…')`; `m2.sync` sees it; `m1`'s own `chat_fetch` is refused by the server
+    (`not_a_member`) and, independently, `mls.receive` of the ciphertext captured from the SQL log
+    with `m1`'s pre-removal state (saved before the commit) rejects.
 
 **F. Burn**
 23. Member `burn` → `not_owner`. Owner `burn`: owner's room keys gone; `chat_messages` for the room is
-    `0`; member `sync` → `removed: true` and its keys gone; `realtime.messages` has one `burned`
-    event for `room:<id>`; mobile `dumpDevice` has no `room:<id>:` rows and still contains the other
-    room's rows (burn is per room, not a wipe).
+    `0`; member `sync` → `removed: true` and its keys gone; `myRooms()` on both no longer lists it;
+    `realtime.messages` has one `burned` event for `room:<id>`; the phone's `sealed` has no
+    `room:<id>:` rows and still contains the rows of a second room the phone created beforehand
+    (burn is per room, not a wipe).
 
 **G. Screenshot alert**
 24. Member `sendScreenshotAlert(roomId, 30)` → `{ alert: 'screenshot' }`; SQL log does not contain
     `screenshot`; owner `sync` sees `{ alert: 'screenshot', mine: false, body: '' }` with
-    `expiresAt !== null`; the notice is not counted in `newMessages` for the UI badge (assert the
-    client's `newMessages` excludes alerts, or document that it does not).
+    `expiresAt !== null`. **Documented (built):** the client today counts the notice in
+    `newMessages` (`sync` returns `1` for it), so a UI badge built on `newMessages` will light up for
+    a screenshot notice; the test pins `1` and `mobile-ui` must subtract alerts itself or ask
+    `core-crypto` for a separate counter. An alert triggers no `env.notify` (no push).
 
 **H. Nickname**
 25. Member joined as `NICK`; after the admit commit and one `sync` on each side, owner
-    `members().find(role==='member').nickname === NICK`; the DB dump has no `Sam` as text or hex in
-    any table; the `chat_room_members` RPC rows in `lastSql` have no nickname field.
-26. Mobile `members()` shows the owner's nickname too (the owner's `nick` control message is sent on
-    room creation or first sync; if it is not today, this is a finding for `core-crypto`).
+    `members().find(role==='member').nickname === NICK`; the DB dump has no `NICK` as text, hex or
+    base64 in any table; the rows the `chat_room_members` RPC returns (called directly on the fake,
+    since the log keeps arguments, not results) have no `nick`/`name`/`label` field.
+26. **Finding (built):** the owner never sends a `nick` control message (not on `createRoom`, not on
+    first `sync`), so the member side sees `nickname: null` for the owner on both platforms. The test
+    pins that behaviour; `core-crypto` decides whether the owner should announce a nickname.
 
 **I. Concurrency (ported)**
 27. The web test's "sending while a sync is running" scenario with one side mobile: both sides end
-    with `['a1','a2','a3','b1','b2','b3']`.
+    with `['a1','a2','a3','b1','b2','b3']`, the pre-assigned id is kept, and the epochs agree. The
+    pre-assigned id is random per run (one PGlite database serves both role runs) **(built)**.
 
 **J. Panic lock**
-28. Mobile `lock()` → `isLocked()` true from a new adapter instance over the same SecureStore mock;
-    `unlock()` on a guest session needs no passkey; rooms are intact (`myRooms()` contains the room).
+28. Phone `lock()` → `isLocked()` true at once and `onepeek.lock = '1'` in SecureStore; a new
+    `createRnLockStore` over the same SecureStore mock reads it back after `ready` (restart);
+    `unlock()` clears it and, on a guest session, never calls `auth.passkey.list`; rooms are intact
+    (`myRooms()` contains the room and the sealed `room:<id>:state` row is still there).
 
 ### 2.3 Reporting line for Q1
 
-`npm test -- packages/core/test/interop.integration.test.ts` prints vitest's summary. Q1 is done when
-the plan's line reads `Test Files 1 passed, Tests 2×(A..J) passed` (count fixed once written) and
+`npm test --workspace packages/core -- test/interop.integration.test.ts` prints vitest's summary; the
+root `npm test` runs it through the workspace. Q1 is done when the line reads `Test Files 1 passed,
+Tests 20 passed` (2 role runs × scenarios A to J; the 28 numbered assertions above are all present,
+spread over those 20 tests, and the sweep adds the same security checks to every one of them), and
 `lib/chat/client.integration.test.ts` still reads `8 passed`.
+
+Status 2026-10-31 (branch `mobile/qa/interop-test`): `20 passed`, five consecutive runs, no flake;
+root `58 passed` unchanged; `packages/core` `70 passed` (50 + 20). Needs Node 22.13+ for `node:sqlite`
+(the interop block is skipped, not failed, without it).
 
 ## 3. Maestro E2E flows (Q3, Phase 1)
 

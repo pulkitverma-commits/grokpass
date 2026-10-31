@@ -29,3 +29,10 @@ Plain statements of what Secret Chat does not do. The public page (/secret-chat)
 8. **Encrypted files are deleted by a daily job.** Expired or burned files become unreadable immediately
    (their database rows are removed, so storage access is refused), and the encrypted objects are deleted
    by `/api/chat/cleanup` once a day.
+9. **The local expiry stamp is not authenticated.** Each copy kept on a device (browser IndexedDB, the
+   phone's SQLite file) is sealed with AES-GCM and bound to its record key, but its `expires_at` sits
+   beside the ciphertext and is not part of the authenticated data (format v1). Someone with write
+   access to that local store could extend or shorten a record's lifetime on that device without
+   touching the ciphertext (they still cannot read, forge or move it). Accepted for now because the
+   server enforces its own expiry independently and such an attacker already controls the device; a
+   v2 format would bind the stamp as well (`packages/core/src/chat/keystore.ts`).

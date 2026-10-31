@@ -26,6 +26,12 @@
 // writes `meta.wiping = 1` before deleting the key and clears it after the rows are gone, so a key
 // that is missing *with* the marker set means "finish the wipe" (delete the rows, then provision).
 //
+// Recovery path for `keystore_unavailable` (review N4): the rows are unreadable for good, so the app
+// catches `ChatError.code === 'keystore_unavailable'` at its chat entry points and shows a "Reset
+// chats on this phone" screen whose button calls `resetThisPhone()` (apps/mobile/lib/chat.ts). That
+// signs the phone out locally, calls wipe() on this store and on the sealed auth store, clears the
+// panic lock and rebuilds the client; the phone then joins its rooms again as a new device.
+//
 // Panic Exit / Burn call wipe(): the SecureStore entry is deleted BEFORE any row, so every record
 // becomes unreadable at once even if deleting the rows is interrupted.
 //

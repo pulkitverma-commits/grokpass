@@ -4,6 +4,13 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-10-31
 
+- release (R1) merged: `eas.json` (development / development-simulator / preview / production, `appVersionSource`
+  remote, EAS `environment` per profile, Android APK for dev and preview), OnePeek icon set and splash derived from
+  `public/icon-512.png`, `docs/mobile/release/versioning.md`, `fcm-client-config.md`, checklist section A6 (EAS vars,
+  spike commands, Vercel vars). Lead applied the proposed `app.config.ts` lines (`googleServicesFile` from
+  `GOOGLE_SERVICES_JSON`, splash `imageWidth` 160) and removed the template tab icons. Decisions on its questions:
+  `expo-updates` is not enabled in Phase 1 (every change is a store build; OTA policy in versioning.md applies once
+  it is added, no earlier than Phase 3); EAS CLI floor `>= 16` and EAS's default Node accepted.
 - Lead (Phase 1 started): pre-installed the shared app packages (fonts, SVG/QR, auth session, web browser,
   haptics, blur, crypto, dev client, jest-expo stack) so no agent runs npm in the shared `node_modules`; set up
   jest-expo + `@testing-library/react-native` for `apps/mobile` with the React 19 copy pinned (`jest.config.js`

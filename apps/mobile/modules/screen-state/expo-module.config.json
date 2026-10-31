@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["ScreenStateModule"]
+  },
+  "android": {
+    "modules": ["io.onepeek.screenstate.ScreenStateModule"]
+  }
+}

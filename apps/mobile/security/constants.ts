@@ -31,3 +31,6 @@ export const PROTECTION_COPY = {
   appSwitcher: 'OnePeek shows a cover instead of your chats while the app is in the background or in the app switcher.',
   camera: 'No app can stop another phone or camera from photographing the screen. A faint watermark with the viewer’s name, device and time is shown over every chat.',
 } as const;
+
+/** W1-4: delay before the one retry of the app-wide `preventScreenCaptureAsync` when the native call throws. */
+export const SECURE_RETRY_MS = 500;

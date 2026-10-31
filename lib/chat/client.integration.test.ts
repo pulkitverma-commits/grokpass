@@ -301,7 +301,10 @@ describe('Secret Chat end to end (two browsers)', () => {
     const sent = await on(b, c => c.sendScreenshotAlert(roomId, 30));
     expect(sent.alert).toBe('screenshot');
     expect(JSON.stringify(lastSql)).not.toContain('screenshot');   // the server only sees ciphertext
-    await on(a, c => c.sync(roomId));
+    const r = await on(a, c => c.sync(roomId));
+    // The room page refreshes its list on newMessages || newAlerts; an unread count built on
+    // newMessages alone must not count the notice.
+    expect(r).toMatchObject({ newMessages: 0, newAlerts: 1, joined: false, removed: false });
     const got = (await on(a, c => c.messages(roomId))).find(m => m.id === sent.id)!;
     expect(got).toMatchObject({ alert: 'screenshot', mine: false, body: '' });
     expect(got.expiresAt).not.toBeNull();   // it disappears on the room timer without being opened

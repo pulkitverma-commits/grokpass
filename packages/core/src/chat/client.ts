@@ -71,7 +71,12 @@ export function keyChanged(m: { verified: string | null; signaturePub: Uint8Arra
   return !!m.verified && m.verified !== toBytea(m.signaturePub);
 }
 
-export type SyncResult = { joined: boolean; removed: boolean; newMessages: number };
+/**
+ * What one sync() applied. `newMessages` counts text and file messages from other devices;
+ * `newAlerts` counts screenshot notices, which are shown in the room but are not messages (so an
+ * unread badge built on newMessages stays honest).
+ */
+export type SyncResult = { joined: boolean; removed: boolean; newMessages: number; newAlerts: number };
 
 export type ChatClient<S extends SupabaseSession = SupabaseSession> = ReturnType<typeof createChatClient<S>>;
 
@@ -192,7 +197,12 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
 
   // ---------------------------------------------------------------------------- rooms
 
-  async function createRoom(opts: { kind: RoomKind; ttl: number; mode: ExpiryMode; lifetime: number; accessCode?: string | null; name?: string | null }) {
+  /**
+   * Creates a room. `nickname` is the owner's display name for this room: it is kept locally and
+   * announced to members inside an encrypted `nick` control message, the same one a joiner sends
+   * (see redeemInvite). Like every message, the server only ever sees its ciphertext.
+   */
+  async function createRoom(opts: { kind: RoomKind; ttl: number; mode: ExpiryMode; lifetime: number; accessCode?: string | null; name?: string | null; nickname?: string | null }) {
     const dev = await ensureDevice();
     const roomId = await rpc<string>('chat_create_room', {
       p_device: dev.id, p_kind: opts.kind, p_ttl_s: opts.ttl, p_expiry_mode: opts.mode,
@@ -201,7 +211,12 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     const kp = await mls.newKeyPackage(dev.id, dev.signing);
     const state = await mls.createRoom(roomId, kp);
     await saveState(roomId, state);
-    await setRoomLocal(roomId, { name: opts.name?.trim() || null });
+    const nickname = opts.nickname?.trim().slice(0, 40) || null;
+    await setRoomLocal(roomId, { name: opts.name?.trim() || null, nicknames: nickname ? { [dev.id]: nickname } : {} });
+    // Sent now like a joiner's, under the room lock. Nobody else is in the group yet, so this copy
+    // is for the record only: a member who joins later cannot read traffic from before their
+    // Welcome, which is why admitPending() announces the owner's nickname again after each admit.
+    if (nickname) await withRoomLock(roomId, () => sendControl(roomId, { t: 'nick', name: nickname }));
     return roomId;
   }
 
@@ -294,6 +309,10 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
         p_ciphertext: toBytea(added.welcome!), p_to_device: m.device_id,
       });
     }
+    // The newcomers can only read messages from after their Welcome, so the owner's nickname (set
+    // in createRoom) is announced again now. Existing members simply see the same name twice.
+    const myNick = (await roomLocal(roomId)).nicknames[dev.id];
+    if (myNick) await sendControl(roomId, { t: 'nick', name: myNick });
     return rows.length;
   }
 
@@ -473,6 +492,29 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     } catch { /* best effort */ }
   }
 
+  // ---------------------------------------------------------------------------- push devices (phones)
+
+  /**
+   * Registers this phone's push token for content-free "new message" nudges (migration 008,
+   * `register_push_device`: upsert, owner = auth.uid()). The token is an opaque APNs / FCM device
+   * token; it and the platform are the only things sent. Needs a signed-in session.
+   */
+  async function registerPushDevice(platform: 'ios' | 'android', token: string) {
+    if (platform !== 'ios' && platform !== 'android') throw new ChatError('bad_platform');
+    const t = token.trim();
+    if (!t) throw new ChatError('bad_token');
+    if (!(await ensureSession(false))) throw new ChatError('not_signed_in');
+    await rpc('register_push_device', { p_platform: platform, p_token: t });
+  }
+
+  /** Forgets a push token registered by this user (`unregister_push_device`). Needs a signed-in session. */
+  async function unregisterPushDevice(token: string) {
+    const t = token.trim();
+    if (!t) throw new ChatError('bad_token');
+    if (!(await ensureSession(false))) throw new ChatError('not_signed_in');
+    await rpc('unregister_push_device', { p_token: t });
+  }
+
   async function sendControl(roomId: string, payload: mls.ChatPayload) {
     const dev = await ensureDevice();
     const state = await loadState(roomId);
@@ -502,7 +544,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
       // Removed, burned or expired: the server is authoritative, so drop our keys and copies too.
       if (e instanceof ChatError && e.code === 'not_a_member') {
         await withRoomLock(roomId, () => forgetRoom(roomId));
-        return { joined: false, removed: true, newMessages: 0 };
+        return { joined: false, removed: true, newMessages: 0, newAlerts: 0 };
       }
       throw e;
     }
@@ -517,7 +559,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     let state = await loadState(roomId);
     let lastSeq = local.lastSeq;
     const nicknames = { ...local.nicknames };
-    const res: SyncResult = { joined: false, removed: false, newMessages: 0 };
+    const res: SyncResult = { joined: false, removed: false, newMessages: 0, newAlerts: 0 };
 
     for (const row of rows) {
       lastSeq = Math.max(lastSeq, Number(row.seq));
@@ -555,7 +597,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
             id: p.id, seq: Number(row.seq), mine: false, sender: row.sender_device, body: '', ttl: p.ttl,
             sentAt, expiresAt: sentAt + p.ttl * 1000, alert: 'screenshot',
           });
-          res.newMessages++;
+          res.newAlerts++;
           continue;
         }
         const expiresAt = row.expires_at ? new Date(row.expires_at).getTime() : null;
@@ -666,6 +708,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     send, sendScreenshotAlert, sendFile, openFile, markViewed, notifyRoom, sync, markOpened, setTimer,
     safetyNumberWith, markVerified,
     leave, burn, lock, isLocked, unlock, subscribe,
+    registerPushDevice, unregisterPushDevice,
     keystore: ks,
   };
 }

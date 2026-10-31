@@ -19,7 +19,7 @@ import {
   type SecureStoreMock, type SqliteMock,
 } from './rn-mocks';
 import { bootDb, WEB_ORIGIN, type Harness, type SqlCall } from './harness';
-import { BODY, BODY2, FILE_NAME, FILE_BODY, ACCESS_CODE, NICK, ROOM_NAME, forbidden, expectClean, hex, type Forbidden } from './fixtures';
+import { BODY, BODY2, FILE_NAME, FILE_BODY, ACCESS_CODE, NICK, OWNER_NICK, ROOM_NAME, forbidden, expectClean, hex, type Forbidden } from './fixtures';
 
 const PHONE_ORIGIN = 'https://onepeek.io';
 const WRONG_CODE = 'wrong-code-99';
@@ -130,11 +130,11 @@ function wrapKeyBytes(d: Device): Uint8Array {
   return fromB64Url(v!);
 }
 
-/** A pair in one secret room: owner created it with the access code, guest joined as NICK and was admitted. */
+/** A pair in one secret room: owner created it as OWNER_NICK with the access code, guest joined as NICK and was admitted. */
 async function pair(ownerKind: Kind, guestKind: Kind) {
   const owner = await device(ownerKind, 'owner');
   const guest = await device(guestKind, 'guest', true);
-  const roomId = await owner.run(c => c.createRoom({ kind: 'secret', ttl: 30, mode: 'on_open', lifetime: 3600, accessCode: ACCESS_CODE, name: ROOM_NAME }));
+  const roomId = await owner.run(c => c.createRoom({ kind: 'secret', ttl: 30, mode: 'on_open', lifetime: 3600, accessCode: ACCESS_CODE, name: ROOM_NAME, nickname: OWNER_NICK }));
   const { link } = await owner.run(c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
   const token = tokenOf(link);
   expect(await guest.run(c => c.redeemInvite(token, NICK, ACCESS_CODE))).toBe(roomId);
@@ -147,7 +147,7 @@ async function pair(ownerKind: Kind, guestKind: Kind) {
 
 const FIXTURES: Forbidden[] = [
   forbidden('message body', BODY), forbidden('reply body', BODY2), forbidden('file name', FILE_NAME), forbidden('file body', FILE_BODY),
-  forbidden('nickname', NICK), forbidden('room name', ROOM_NAME),
+  forbidden('nickname', NICK), forbidden('owner nickname', OWNER_NICK), forbidden('room name', ROOM_NAME),
 ];
 const TOKEN_RPCS = ['chat_create_invite', 'chat_peek_invite', 'chat_redeem_invite'];
 const CODE_RPCS = ['chat_create_room', 'chat_redeem_invite'];
@@ -266,7 +266,7 @@ describeInterop.each(ROLES)('Web <-> mobile interop: %s', (_label, ownerKind, gu
     const mark = h.allSql.length;
     await owner.run(c => c.send(roomId, BODY, 30));
     expectClean(JSON.stringify(h.allSql.slice(mark)), [forbidden('message body', BODY)], 'the send RPCs');
-    expect((await guest.run(c => c.sync(roomId))).newMessages).toBe(1);
+    expect(await guest.run(c => c.sync(roomId))).toMatchObject({ newMessages: 1, newAlerts: 0 });
     const seen = await guest.run(c => c.messages(roomId));
     expect(bodies(seen)).toEqual([BODY]);
     expect(seen[0].mine).toBe(false);
@@ -425,8 +425,9 @@ describeInterop.each(ROLES)('Web <-> mobile interop: %s', (_label, ownerKind, gu
     const got = (await owner.run(c => c.messages(roomId))).find(m => m.id === sent.id)!;
     expect(got).toMatchObject({ alert: 'screenshot', mine: false, body: '' });
     expect(got.expiresAt).not.toBeNull();   // disappears on the room timer without being opened
-    // Today the client counts the notice in newMessages (test-plan §2.2 #24 documents this).
-    expect(r.newMessages).toBe(1);
+    // Q1 finding (b), fixed in Phase 1: a notice is counted in newAlerts, never in newMessages.
+    expect(r.newAlerts).toBe(1);
+    expect(r.newMessages).toBe(0);
     expect(guest.notify).not.toHaveBeenCalled();   // an alert is not a message: no push for it
     await sweep([owner, guest], [], [token]);
   }, TIMEOUT);
@@ -442,11 +443,13 @@ describeInterop.each(ROLES)('Web <-> mobile interop: %s', (_label, ownerKind, gu
     const rows = (await owner.fake.rpc('chat_room_members', { p_room: roomId })).data as Record<string, unknown>[];
     expect(rows.length).toBe(2);
     for (const row of rows) expect(Object.keys(row).some(k => /nick|name|label/i.test(k))).toBe(false);
-    // #26: the owner never sends a nick control message today, so the member side sees no owner
-    // nickname (finding for core-crypto; the assertion pins the current behaviour).
+    // #26 (Phase 1 fix of Q1 finding a): the owner's nickname, given to createRoom, reaches the member
+    // through the nick control message re-announced after the admit; the server never sees it.
+    expect(ms.find(m => m.role === 'owner')!.nickname).toBe(OWNER_NICK);   // the owner's own copy
     const gm = await guest.run(c => c.members(roomId));
-    expect(gm.find(m => m.role === 'owner')!.nickname).toBeNull();
+    expect(gm.find(m => m.role === 'owner')!.nickname).toBe(OWNER_NICK);
     expect(gm.find(m => m.role === 'member')!.nickname).toBe(NICK);   // its own, from the pending join
+    for (const row of rows) expect(JSON.stringify(row)).not.toContain(OWNER_NICK);
     await sweep([owner, guest], [], [token]);
   }, TIMEOUT);
 

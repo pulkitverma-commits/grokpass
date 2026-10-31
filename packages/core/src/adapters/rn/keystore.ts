@@ -26,6 +26,12 @@
 // writes `meta.wiping = 1` before deleting the key and clears it after the rows are gone, so a key
 // that is missing *with* the marker set means "finish the wipe" (delete the rows, then provision).
 //
+// Recovery path for `keystore_unavailable` (review N4): the rows are unreadable for good, so the app
+// catches `ChatError.code === 'keystore_unavailable'` at its chat entry points and shows a "Reset
+// chats on this phone" screen whose button calls `resetThisPhone()` (apps/mobile/lib/chat.ts). That
+// signs the phone out locally, calls wipe() on this store and on the sealed auth store, clears the
+// panic lock and rebuilds the client; the phone then joins its rooms again as a new device.
+//
 // Panic Exit / Burn call wipe(): the SecureStore entry is deleted BEFORE any row, so every record
 // becomes unreadable at once even if deleting the rows is interrupted.
 //
@@ -165,7 +171,13 @@ export function createRnKeyStore(opts: RnKeyStoreOptions): KeyStore {
   async function onMissingKey(): Promise<void> {
     const d = await ready();
     const any = await d.getFirstAsync<{ one: number }>('SELECT 1 AS one FROM sealed LIMIT 1', []);
-    if (!any) return;
+    if (!any) {
+      // N2: a wipe that died between its two deletes leaves the marker behind with an empty table.
+      // Clear it now; otherwise, once rows exist again under the new key, a genuine key loss would
+      // read as "finish the wipe" and silently delete them instead of raising keystore_unavailable.
+      await d.runAsync('DELETE FROM meta WHERE k = ?', [WIPING]);
+      return;
+    }
     const marker = await d.getFirstAsync<{ v: string }>('SELECT v FROM meta WHERE k = ?', [WIPING]);
     if (marker?.v === '1') {
       // A wipe deleted the key but was interrupted before the rows went: finish it.

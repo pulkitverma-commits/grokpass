@@ -261,6 +261,29 @@ describe.skipIf(!hasNodeSqlite)('rn keystore', () => {
     expect(log.filter(l => l === `secure.set ${WRAP_KEY_ID}`)).toHaveLength(1);
   });
 
+  it('N2: a marker left by a wipe that died after the row delete is cleared on the next provisioning', async () => {
+    await ks.put('room:1:state', { s: 'alpha' });
+    sqlite.failOnce = /^DELETE FROM meta WHERE k = \?$/;
+    await expect(ks.wipe()).rejects.toThrow(/injected failure/);
+    expect(secure.items.has(WRAP_KEY_ID)).toBe(false);
+    expect(sqlite.dump()).toHaveLength(0);
+    expect(sqlite.meta()).toEqual([{ k: 'wiping', v: '1' }]);   // the stale marker
+
+    // Relaunch; the first use provisions a key and must also drop the marker.
+    resetWrapCache();
+    const relaunched = createRnKeyStore({ secureStore: secure.module, sqlite: sameFile });
+    await relaunched.put('room:3:state', { s: 'gamma' });
+    expect(sqlite.meta()).toEqual([]);
+    expect(await relaunched.get('room:3:state')).toEqual({ s: 'gamma' });
+
+    // Months later the key is lost for real: with the marker gone this is keystore_unavailable, not a silent delete.
+    secure.items.delete(WRAP_KEY_ID);
+    resetWrapCache();
+    const later = createRnKeyStore({ secureStore: secure.module, sqlite: sameFile });
+    await expect(later.get('room:3:state')).rejects.toMatchObject(UNAVAILABLE);
+    expect(sqlite.dump().map(r => r.key)).toEqual(['room:3:state']);
+  });
+
   it('L2: without the wiping marker, missing key + rows is NOT treated as a wipe', async () => {
     await ks.put('room:1:state', { s: 'alpha' });
     secure.items.delete(WRAP_KEY_ID);

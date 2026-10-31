@@ -10,6 +10,8 @@ export const FILE_BODY = 'passport scan: P1234567';
 export const ACCESS_CODE = 'blue-river-42';
 /** Long enough (11 bytes) that its hex cannot occur by chance inside random ciphertext. */
 export const NICK = 'Sam Okonkwo';
+/** The owner's display name, announced through the same encrypted `nick` control message. */
+export const OWNER_NICK = 'Priya Venkatesan';
 export const ROOM_NAME = 'qa-launch';
 
 export type Forbidden = { label: string; forms: string[] };

@@ -25,7 +25,7 @@ export function Sheet({ open, onClose, title, children, testID }: Props) {
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close" />
         <Animated.View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, spacing.lg) + spacing.sm, transform: [{ translateY: y }] }]} accessibilityViewIsModal testID={testID}>
           <View {...pan.panHandlers} style={styles.handleZone}>
-            <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close" hitSlop={12} style={styles.handleHit}>
+            <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close" hitSlop={12} style={styles.handleHit} testID="sheet.handle">
               <View style={styles.handle} />
             </Pressable>
           </View>

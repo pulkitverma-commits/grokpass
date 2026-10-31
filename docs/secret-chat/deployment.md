@@ -73,7 +73,8 @@ Everything here is additive; the website keeps working with none of it in place.
 
 Adds `public.push_devices` (owner, platform, token, created_at, last_seen; RLS owner-only) and two
 RPCs the app calls: `register_push_device(p_platform text, p_token text)` and
-`unregister_push_device(p_token text)`, both `authenticated` only. Chat guests (anonymous users) may
+`unregister_push_device(p_token text)`, both `authenticated` only. The table itself grants `authenticated` only `select, delete` (writes go
+through the RPCs, so the 10-token cap and one-owner rule hold). Chat guests (anonymous users) may
 register, like `chat_register_device`; `007` is unaffected. Tested in PGlite
 (`supabase/tests/push-devices.test.ts`, up/down/up) and in the schema-history replay.
 

@@ -75,13 +75,14 @@ describe('migration 008: push_devices', () => {
   it('keeps other users from deleting or updating a row', async () => {
     await register(ALICE, 'ios', TOKEN_A);
     await as(BOB, `delete from public.push_devices where token = $1`, [TOKEN_A]);
-    await as(BOB, `update public.push_devices set platform = 'android' where token = $1`, [TOKEN_A]);
+    await expect(as(BOB, `update public.push_devices set platform = 'android' where token = $1`, [TOKEN_A]))
+      .rejects.toThrow(/permission denied/);
     await as(BOB, `select public.unregister_push_device($1)`, [TOKEN_A]);
     const all = (await sys(`select owner, platform from public.push_devices`)).rows;
     expect(all).toEqual([{ owner: ALICE, platform: 'ios' }]);
-    // Direct inserts for someone else are refused by the with-check clause.
+    // Direct inserts are refused by the grant (W2-5), for someone else's owner id as for one's own.
     await expect(as(BOB, `insert into public.push_devices(owner, platform, token) values ($1, 'ios', 'x')`, [ALICE]))
-      .rejects.toThrow(/row-level security/);
+      .rejects.toThrow(/permission denied/);
   });
 
   it('re-registering the same token updates last_seen and platform instead of duplicating', async () => {
@@ -116,10 +117,10 @@ describe('migration 008: push_devices', () => {
     // Bob's own unregister removes it.
     await as(BOB, `select public.unregister_push_device($1)`, [TOKEN_A]);
     expect((await sys(`select count(*)::int n from public.push_devices`)).rows[0].n).toBe(0);
-    // A direct insert of a held token is refused by the unique constraint too.
+    // A direct insert of a held token is refused (the grant; the unique constraint behind it).
     await register(ALICE, 'ios', TOKEN_A);
     await expect(as(BOB, `insert into public.push_devices(owner, platform, token) values ($1, 'ios', $2)`, [BOB, TOKEN_A]))
-      .rejects.toThrow(/unique|duplicate key/);
+      .rejects.toThrow(/permission denied/);
   });
 
   it('unregister removes only the caller\'s token', async () => {
@@ -165,9 +166,23 @@ describe('migration 008: push_devices', () => {
     await register(ALICE, 'ios', TOKEN_A);
     await register(ALICE, 'android', FCM_LIKE);
     expect(await mine(ALICE)).toHaveLength(4);
-    // The table constraint backs the RPC check for direct inserts as well.
+    // Direct inserts do not reach the table constraint: the grant refuses them first.
     await expect(as(ALICE, `insert into public.push_devices(owner, platform, token) values ($1, 'ios', 'short')`, [ALICE]))
-      .rejects.toThrow(/check constraint|violates/);
+      .rejects.toThrow(/permission denied/);
+  });
+
+  it('authenticated can only select and delete directly; insert and update are denied (W2-5)', async () => {
+    await register(ALICE, 'ios', TOKEN_A);
+    await register(ALICE, 'android', TOKEN_B);
+    await expect(as(ALICE, `insert into public.push_devices(owner, platform, token) values ($1, 'ios', $2)`, [ALICE, 'z'.repeat(40)]))
+      .rejects.toThrow(/permission denied/);
+    await expect(as(ALICE, `update public.push_devices set last_seen = now() where token = $1`, [TOKEN_A]))
+      .rejects.toThrow(/permission denied/);
+    await expect(as(ALICE, `update public.push_devices set platform = 'android'`)).rejects.toThrow(/permission denied/);
+    expect((await mine(ALICE)).map(r => r.token).sort()).toEqual([TOKEN_A, TOKEN_B].sort());
+    await as(ALICE, `delete from public.push_devices where token = $1`, [TOKEN_A]);
+    expect((await mine(ALICE)).map(r => r.token)).toEqual([TOKEN_B]);
+    expect((await mine(BOB))).toEqual([]);
   });
 
   it('both RPCs run with an empty search_path and schema-qualified names', async () => {

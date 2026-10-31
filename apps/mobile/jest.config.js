@@ -20,11 +20,17 @@ module.exports = {
     '^react/(.*)$': '<rootDir>/node_modules/react/$1',
     '^scheduler$': '<rootDir>/node_modules/scheduler',
     '^scheduler/(.*)$': '<rootDir>/node_modules/scheduler/$1',
+    // The sibling workspace package by path, not through node_modules: in an agent worktree the
+    // node_modules symlink points at another checkout's packages/core.
+    '^@onepeek/core$': '<rootDir>/../../packages/core/src/index.ts',
+    '^@onepeek/core/src/(.*)$': '<rootDir>/../../packages/core/src/$1',
   },
   testMatch: ['<rootDir>/**/__tests__/**/*.test.[jt]s?(x)', '<rootDir>/**/*.test.[jt]s?(x)'],
   testPathIgnorePatterns: ['/node_modules/', '/e2e/'],
+  // ts-mls and its @hpke / @noble dependencies ship ESM only; anything importing @onepeek/core (lib/chat)
+  // needs them compiled, like Metro does for the app.
   transformIgnorePatterns: [
-    'node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|react-native-svg|react-native-qrcode-svg|@onepeek/.*)',
+    'node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|react-native-svg|react-native-qrcode-svg|@onepeek/.*|ts-mls|@hpke/.*|@noble/.*)',
   ],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
 };

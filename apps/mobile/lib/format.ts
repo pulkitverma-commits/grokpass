@@ -74,3 +74,22 @@ export function inviteTokenFrom(text: string | null | undefined): string | null 
 export function maskLink(link: string) {
   return link.replace(/#.*/, '#••••••');
 }
+
+/** The core's `keyChanged`: a verified member whose signing key no longer matches what was verified. */
+export function keyChanged(m: { verified: string | null; signaturePub: Uint8Array }) {
+  if (!m.verified) return false;
+  let hex = '\\x';
+  for (let i = 0; i < m.signaturePub.length; i++) hex += m.signaturePub[i]!.toString(16).padStart(2, '0');
+  return m.verified !== hex;
+}
+
+/** A member's display name: nickname, else the web's `Guest XXXX`. */
+export function memberName(nickname: string | null | undefined, deviceId: string) {
+  return nickname || `Guest ${shortId(deviceId)}`;
+}
+
+/** Message timer text, per message: countdown once started, otherwise "<ttl> once read" as on the web. */
+export function timerText(ttl: number, expiresAt: number | null, now: number) {
+  if (expiresAt === null) return `${ttlLabel(ttl)} once read`;
+  return `${countdown(expiresAt - now)} left`;
+}

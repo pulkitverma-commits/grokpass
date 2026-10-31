@@ -1,0 +1,18 @@
+# Maestro workspace for the OnePeek app (docs/mobile/test-plan.md §3, task Q3).
+# `maestro test apps/mobile/e2e --include-tags single` runs the one-device journeys in order.
+# Two-device journeys (tag `two-device`) are driven by scripts/run-two-device.sh, which runs each
+# half on its own simulator and passes the room link between them (see README.md).
+flows:
+  - "flows/*.yaml"
+executionOrder:
+  continueOnFailure: false
+  flowsOrder:
+    - 01-welcome-guest
+    - 02-signin-email
+    - 03-create-secret-room
+    - 09-panic-lock
+platform:
+  ios:
+    disableAnimations: true
+  android:
+    disableAnimations: true

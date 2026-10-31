@@ -1,0 +1,46 @@
+# 06 (peer) Device B: open the view-once file once; a second open is refused. The viewer content
+# is never asserted on and never screenshotted. TODO(testid): viewer.screen, viewer.close,
+# viewer.gone (proposed). Dry until they exist.
+appId: io.onepeek.app
+name: 06-file-view-once.peer
+tags:
+  - ios
+  - android
+  - two-device
+  - device-b
+---
+- runFlow: _common/open-room.yaml
+- extendedWaitUntil:
+    visible:
+      id: "msg\\..+"
+      index: 2
+    timeout: 30000
+- tapOn:
+    id: "msg\\..+"
+    index: 2
+- extendedWaitUntil:
+    visible:
+      id: "viewer.screen"
+    timeout: 20000
+- tapOn:
+    id: "viewer.close"
+- assertNotVisible:
+    id: "viewer.screen"
+- tapOn:
+    id: "msg\\..+"
+    index: 2
+- extendedWaitUntil:
+    visible:
+      id: "viewer.gone"
+    timeout: 10000
+- assertNotVisible:
+    id: "viewer.screen"
+# Still refused after a relaunch.
+- stopApp
+- launchApp
+- runFlow: _common/open-room.yaml
+- tapOn:
+    id: "msg\\..+"
+    index: 2
+- assertVisible:
+    id: "viewer.gone"

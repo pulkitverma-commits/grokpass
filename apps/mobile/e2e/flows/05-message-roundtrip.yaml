@@ -1,0 +1,22 @@
+# 05 Device A: type and send. The body is a fixture string (test-plan §1.1), never a real secret.
+# No screenshot is taken anywhere in this flow or its peer.
+appId: io.onepeek.app
+name: 05-message-roundtrip
+tags:
+  - ios
+  - android
+  - two-device
+  - device-a
+env:
+  MAESTRO_BODY: The launch code is 4471
+---
+- runFlow: _common/open-room.yaml
+- tapOn:
+    id: "room.composer"
+- inputText: ${MAESTRO_BODY}
+- tapOn:
+    id: "room.send"
+- extendedWaitUntil:
+    visible:
+      id: "msg\\..+"
+    timeout: 15000

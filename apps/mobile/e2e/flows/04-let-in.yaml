@@ -1,0 +1,26 @@
+# 04 (owner half) Device A: the pending join shows on Chats home → Let in → open the room.
+# Runs after 04-join-with-code on device B.
+appId: io.onepeek.app
+name: 04-let-in
+tags:
+  - ios
+  - android
+  - two-device
+  - device-a
+---
+- runFlow: _common/back-to-chats.yaml
+- extendedWaitUntil:
+    visible:
+      id: "chats.letIn"
+    timeout: 30000
+- tapOn:
+    id: "chats.letIn"
+- extendedWaitUntil:
+    notVisible:
+      id: "chats.letIn"
+    timeout: 15000
+- tapOn:
+    id: "chats.room"
+    index: 0
+- assertVisible:
+    id: "room.screen"

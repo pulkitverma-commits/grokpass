@@ -1,0 +1,37 @@
+# 05 (peer) Device B: the message arrives hidden (Secret room), hold-to-read shows it only while
+# held, and it is hidden again on release. Assertions are on ids plus the *absence* of the body;
+# the revealed state is never asserted on text and never screenshotted. Ends with a reply so
+# device A sees the round trip (06 waits for it).
+appId: io.onepeek.app
+name: 05-message-roundtrip.peer
+tags:
+  - ios
+  - android
+  - two-device
+  - device-b
+env:
+  MAESTRO_BODY: The launch code is 4471
+  MAESTRO_BODY2: Got it
+---
+- runFlow: _common/open-room.yaml
+- extendedWaitUntil:
+    visible:
+      id: "msg\\..+"
+    timeout: 30000
+- assertNotVisible: ${MAESTRO_BODY}
+- longPressOn:
+    id: "msg\\..+"
+    index: 0
+- assertVisible:
+    id: "msg\\..+"
+- assertNotVisible: ${MAESTRO_BODY}
+- tapOn:
+    id: "room.composer"
+- inputText: ${MAESTRO_BODY2}
+- tapOn:
+    id: "room.send"
+- extendedWaitUntil:
+    visible:
+      id: "msg\\..+"
+      index: 1
+    timeout: 15000

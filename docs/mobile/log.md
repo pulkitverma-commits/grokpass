@@ -4,6 +4,16 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-10-31
 
+- security-reviewer (S1, wave 1) `phase-1-wave-1.md`: **one high** W1-1 (a `token_hash` email link is a bearer, so a
+  crafted `onepeek://auth` link signs the phone into an attacker's account, after which `sync()` forgets the victim's
+  rooms); mediums W1-2 (push token outlives the account on a shared phone; unique(owner, token)), W1-3 (no per-owner
+  cap, unbounded fan-out), W1-4 (`allowScreenCaptureAsync` on unmount can clear FLAG_SECURE for the process); lows
+  W1-5..W1-10. S0a/S0b held; N1, N2, N4 closed. Fixes dispatched in parallel: core-crypto (W1-1 device-bound email
+  link, W1-2 `push` helper + unregister on sign-out/reset, W1-6 supabase URL check), backend (W1-2 unique(token),
+  W1-3 cap 10/owner + token charset + chunked sends, W1-5 http2 deadline), native-security (W1-4 never allow, re-assert
+  on active; W1-7 unlock generation counter). Lead: W1-8 spike route needs a session (deleted after the spike runs);
+  W1-9 masked invite link stays (full link only under `EXPO_PUBLIC_E2E=1`, told mobile-ui); W1-10 to qa in wave 2.
+  No tester build before W1-1 lands; 008 not to be applied before W1-2/W1-3 land.
 - native-security (N1–N5) merged: `withSecureWindow` plugin (FLAG_SECURE in MainActivity, app-wide) + `useSecureScreen`;
   `withBackupRules` plugin (full-backup-content and data-extraction-rules excluding every domain; expo-secure-store's own
   backup config disabled); local Expo module `modules/screen-state` (iOS `UIScreen.isCaptured` + change events,

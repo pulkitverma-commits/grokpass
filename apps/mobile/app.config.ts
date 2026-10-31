@@ -70,6 +70,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   extra: {
     supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL ?? '',
     supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '',
-    siteUrl: process.env.EXPO_PUBLIC_SITE_URL ?? 'https://onepeek.io',
+    // Fixed on purpose (security review S0b M2): invite links and the notify endpoint must never be
+    // redirectable through an env var or OTA update. The core validates it again.
+    siteUrl: 'https://onepeek.io',
   },
 });

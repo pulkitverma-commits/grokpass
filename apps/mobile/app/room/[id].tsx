@@ -4,7 +4,11 @@
 // menu. Every byte goes through the core; this screen never sees a key or a ciphertext.
 //
 // What never leaves this screen: message text stays in component state and in the bubbles that
-// show it; it is not put in navigation params, accessibility labels, errors or logs.
+// show it; it is not put in navigation params, accessibility labels, errors or logs. In Secret rooms
+// the composer's reply preview of someone else's message is content-free (sender name only) and the
+// reply itself is dropped by a screenshot or when the app goes inactive, so no Secret text is ever on
+// screen while nothing is held (review W2-1). A picked file's plaintext copy is deleted once the send
+// has settled or the pick is dropped (review W2-2).
 import * as Crypto from 'expo-crypto';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -26,7 +30,7 @@ import { RoomMenu, type Member, type MenuRoom, type MenuView } from '../../compo
 import { Sheet } from '../../components/Sheet';
 import { Segmented } from '../../components/Segmented';
 import { colors, radii, spacing, touchTarget } from '../../theme';
-import { MAX_ATTACHMENT_BYTES, pickDocument, pickPhoto, fileSource, type Picked } from '@/lib/files';
+import { MAX_ATTACHMENT_BYTES, deletePicked, pickDocument, pickPhoto, fileSource, type Picked } from '@/lib/files';
 import { KIND_SHORT, TIMERS, errorCode, friendlyError, keyChanged, memberName, roomTitle, ttlLabel } from '@/lib/format';
 import type { LocalMessage } from '@onepeek/core';
 
@@ -157,7 +161,11 @@ export default function RoomScreen() {
   }, [chat, roomId, refresh, pull]);
 
   // Anything held lets go when a screenshot is taken; while the app is inactive nothing counts as held.
-  useEffect(() => onScreenshot(() => setHeld(null)), []);
+  // In Secret rooms a reply in progress goes too (W2-1): its preview names the sender, never the text,
+  // but a reply to a hidden message should not outlive the moment it was chosen in.
+  useEffect(() => onScreenshot(() => { setHeld(null); if (secret) setReplyTo(null); }), [secret]);
+  const [wasInactive, setWasInactive] = useState(inactive);
+  if (inactive !== wasInactive) { setWasInactive(inactive); if (inactive && secret) setReplyTo(null); }
   const heldNow = inactive ? null : held;
 
   // Expired messages leave the screen (filtered out of `live`) and the device (dropMessage); the
@@ -225,8 +233,8 @@ export default function RoomScreen() {
     try {
       const p = kind === 'photo' ? await pickPhoto() : await pickDocument();
       if (!p) return;
-      if (p.size > MAX_ATTACHMENT_BYTES) { setAttachErr('Files can be up to 50 MB.'); return; }
-      setPicked(p);
+      if (p.size > MAX_ATTACHMENT_BYTES) { deletePicked(p); setAttachErr('Files can be up to 50 MB.'); return; }
+      setPicked((prev) => { deletePicked(prev); return p; });
     } catch { setAttachErr('Couldn’t open the picker.'); }
   }
 
@@ -240,7 +248,13 @@ export default function RoomScreen() {
       void chat().notifyRoom(roomId);
     } catch (e) {
       setErr(friendlyError(errorCode(e)));
-    } finally { setFileBusy(null); }
+    } finally { setFileBusy(null); deletePicked(p); }
+  }
+
+  /** Closes the attach sheet and drops the picker's copy of anything chosen but not sent. */
+  function dropPicked() {
+    setAttachOpen(false);
+    setPicked((prev) => { deletePicked(prev); return null; });
   }
 
   async function openFile(bm: BubbleMessage) {
@@ -364,13 +378,15 @@ export default function RoomScreen() {
         text={text}
         onChangeText={setText}
         onSend={send}
-        onAttach={() => { setAttachErr(''); setPicked(null); setAttachOpen(true); }}
+        onAttach={() => { setAttachErr(''); setPicked((prev) => { deletePicked(prev); return null; }); setAttachOpen(true); }}
         onTimer={() => setTimerOpen(true)}
         ttl={ttl}
         joined={joined}
         synced={synced}
         busy={fileBusy === 'sending'}
-        replyPreview={replyTo ? (replyTo.file ? (secret ? 'File' : replyTo.file.name) : replyTo.body.slice(0, 40)) : null}
+        secret={!!secret}
+        replyPreview={replyTo ? (secret && !replyTo.mine ? nameOf(replyTo.sender) : replyTo.file ? (secret ? 'File' : replyTo.file.name) : replyTo.body.slice(0, 40)) : null}
+        replyHidden={!!replyTo && !!secret && !replyTo.mine}
         onCancelReply={() => setReplyTo(null)}
       />
 
@@ -379,7 +395,7 @@ export default function RoomScreen() {
         <Text variant="meta" tone="muted" style={styles.timerHint}>Applies to the next messages you send. The room default is in the menu.</Text>
       </Sheet>
 
-      <AttachSheet open={attachOpen} onClose={() => { setAttachOpen(false); setPicked(null); }} secret={!!secret} ttl={ttl} picked={picked} error={attachErr} onPickPhoto={() => pick('photo')} onPickFile={() => pick('file')} onSend={sendPicked} />
+      <AttachSheet open={attachOpen} onClose={dropPicked} secret={!!secret} ttl={ttl} picked={picked} error={attachErr} onPickPhoto={() => pick('photo')} onPickFile={() => pick('file')} onSend={sendPicked} />
 
       <FileViewer item={viewer} secret={!!secret} viewerName={myName} deviceCode={deviceCode} onClose={() => setViewer(null)} />
 

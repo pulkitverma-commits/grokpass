@@ -30,6 +30,7 @@ import * as Device from 'expo-device';
 import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
 import { Platform } from 'react-native';
+import { clearPickerCaches } from './files';
 
 export type AuthSession = { userId: string; email: string | null; isAnonymous: boolean };
 
@@ -316,7 +317,8 @@ export const push = {
  * device identity), the sealed session, and the panic-lock flag, then drops the singletons so the
  * next getChat() builds fresh ones. Used by the recovery screen for `keystore_unavailable`, where the
  * rows are already unreadable, and nowhere else. Server-side state (room membership, the old device
- * record) is untouched; this device simply joins again as a new one.
+ * record) is untouched; this device simply joins again as a new one. Also sweeps the picker and viewer
+ * cache directories (lib/files) so no plaintext attachment copy survives the reset.
  */
 export async function resetThisPhone(): Promise<void> {
   pendingEmail = null;
@@ -337,4 +339,7 @@ export async function resetThisPhone(): Promise<void> {
   const authStorage = b?.authStorage ?? createRnAuthStorage({ secureStore: SecureStore, sqlite: SQLite });
   await authStorage.wipe();
   getLockStore().clear();
+  // Plaintext copies the pickers and the viewer left in the cache (review W2-2 / W2-3): "Forgets every
+  // chat and key stored here" has to include the files that were sent or opened from this phone.
+  await clearPickerCaches();
 }

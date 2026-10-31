@@ -1,5 +1,9 @@
 // Composer (design 05): timer pill, attach, multiline input, send. Disabled with an honest
 // placeholder until the first sync says this device has been let in and holds the room's keys.
+// In Secret rooms the input is kept away from keyboard learning (review W2-7): no autocorrect, no
+// spell check, no auto-capitalisation, and the field is marked as not for autofill (Android) and of
+// no content type (iOS). Third-party keyboards see keystrokes regardless; see known-limitations.
+// A reply to someone else's Secret message shows the sender, never the text (review W2-1).
 import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { colors, fonts, maxFontSizeMultiplier, radii, spacing, touchTarget, type } from '../../theme';
 import { Icon } from '../Icon';
@@ -16,18 +20,25 @@ type Props = {
   joined: boolean;
   synced: boolean;
   busy: boolean;
+  /** Secret room: keyboard-learning props off, hidden reply wording. */
+  secret: boolean;
+  /** The quoted text (own messages, non-Secret rooms) or, with `replyHidden`, the sender's name. */
   replyPreview: string | null;
+  replyHidden?: boolean;
   onCancelReply: () => void;
 };
 
-export function Composer({ text, onChangeText, onSend, onAttach, onTimer, ttl, joined, synced, busy, replyPreview, onCancelReply }: Props) {
+/** TextInput props that keep a Secret-room draft out of the keyboard's dictionary and autofill. */
+const SECRET_INPUT = { autoCorrect: false, spellCheck: false, autoCapitalize: 'none', importantForAutofill: 'no', textContentType: 'none' } as const;
+
+export function Composer({ text, onChangeText, onSend, onAttach, onTimer, ttl, joined, synced, busy, secret, replyPreview, replyHidden = false, onCancelReply }: Props) {
   const canSend = joined && !!text.trim() && !busy;
   return (
     <View style={styles.wrap}>
       {replyPreview !== null ? (
         <View style={styles.replying} accessibilityLiveRegion="polite">
           <Icon name="reply" size={14} color={colors.muted} />
-          <Text variant="meta" tone="muted" numberOfLines={1} style={styles.replyText}>Replying to “{replyPreview}”</Text>
+          <Text variant="meta" tone="muted" numberOfLines={1} style={styles.replyText} testID="room.replyPreview">{replyHidden ? `Replying to a hidden message from ${replyPreview}` : `Replying to “${replyPreview}”`}</Text>
           <Pressable onPress={onCancelReply} accessibilityRole="button" accessibilityLabel="Cancel reply" hitSlop={10} style={styles.cancel} testID="room.replyCancel">
             <Icon name="close" size={16} color={colors.muted} />
           </Pressable>
@@ -55,6 +66,7 @@ export function Composer({ text, onChangeText, onSend, onAttach, onTimer, ttl, j
           maxFontSizeMultiplier={maxFontSizeMultiplier}
           autoCorrect
           autoComplete="off"
+          {...(secret ? SECRET_INPUT : {})}
           accessibilityLabel="Message"
           style={styles.input}
           testID="room.composer"

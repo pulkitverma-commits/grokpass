@@ -60,6 +60,7 @@ export function AttachSheet({ open, onClose, secret, ttl, picked, error, onPickP
         <Switch value={viewOnce} onValueChange={setViewOnce} trackColor={{ true: colors.accent, false: colors.segOn }} thumbColor={colors.white} accessibilityLabel="View once" testID="attach.viewOnce" />
       </View>
       <Text variant="meta" tone="muted" style={styles.hint}>Encrypted on this device before upload. OnePeek never sees the file, its name or its key.</Text>
+      <Text variant="meta" tone="muted" style={styles.hintTight} testID="attach.exif">Photos keep their embedded details, such as location, unless your phone removes them.</Text>
       {error ? <View style={styles.err}><Notice tone="error" text={error} testID="attach.error" /></View> : null}
       <View style={styles.actions}>
         <Button title="Encrypt and send" disabled={!picked} onPress={() => onSend(viewOnce)} testID="attach.send" />
@@ -79,6 +80,7 @@ const styles = StyleSheet.create({
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.lg, minHeight: touchTarget },
   toggleText: { flex: 1, gap: 2 },
   hint: { marginTop: spacing.md, marginHorizontal: spacing.xs },
+  hintTight: { marginTop: spacing.xs, marginHorizontal: spacing.xs },
   err: { marginTop: spacing.sm },
   actions: { gap: spacing.sm, marginTop: spacing.lg },
 });

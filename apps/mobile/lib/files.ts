@@ -2,8 +2,16 @@
 // short-lived decrypted copies for the viewer. Decrypted bytes go to a data: URI when small enough
 // and otherwise to a file in the CACHE directory (never Documents, which iCloud / Finder back up)
 // that the viewer deletes on close. Nothing here logs a name, a URI or a size.
+//
+// Plaintext copies on disk (review W2-2 / W2-3): both pickers write a copy of the chosen file under
+// the app's cache (ImagePicker re-encodes photos into <cache>/ImagePicker, DocumentPicker copies into
+// <cache>/DocumentPicker). `deletePicked` removes that copy once a send has settled or the pick is
+// dropped; `clearPickerCaches` sweeps both picker directories and the viewer's `onepeek-view` on app
+// start and in "Reset chats on this phone", so a kill mid-send or mid-view leaves nothing behind
+// for longer than one launch. The OS photo library still holds the original photo; that is the
+// user's, not ours.
 import * as DocumentPicker from 'expo-document-picker';
-import { File, Paths } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
 import { fileSource as coreFileSource, type RnPickedFile } from '@onepeek/core/src/rn';
@@ -51,6 +59,47 @@ export function fileSource(p: Picked) {
   return coreFileSource(p);
 }
 
+/** Whether a URI points inside the app's cache directory (where both pickers put their copies). */
+function inCache(uri: string): boolean {
+  try {
+    const root = Paths.cache.uri;
+    return !!root && uri.startsWith(root.endsWith('/') ? root : `${root}/`);
+  } catch { return false; }
+}
+
+/**
+ * Deletes the picker's plaintext copy of a picked file. Only a file under the cache directory is
+ * touched: a `content://` or other URI that a picker handed over without copying (not the case for
+ * the two pickers above, but cheap to guard) belongs to another app and is left alone.
+ */
+export function deletePicked(p: Pick<Picked, 'uri'> | null | undefined): void {
+  if (!p || !inCache(p.uri)) return;
+  deleteTemp(p.uri);
+}
+
+/** Directories under the cache that may hold plaintext: the two pickers' copies and the viewer's temp files. */
+const PLAINTEXT_DIRS = ['ImagePicker', 'DocumentPicker', 'onepeek-view'] as const;
+
+let sweep: Promise<void> | null = null;
+
+/**
+ * Removes every picker copy and viewer temp file left on disk. Called on app start (root layout)
+ * and from resetThisPhone(). Each directory is deleted on its own so one failure (a file held open
+ * by the OS) does not stop the others; nothing is thrown and nothing is logged.
+ */
+export function clearPickerCaches(): Promise<void> {
+  const run = (async () => {
+    for (const name of PLAINTEXT_DIRS) {
+      try {
+        const d = new Directory(Paths.cache, name);
+        if (d.exists) d.delete();
+      } catch { /* best effort: the next launch tries again */ }
+    }
+  })();
+  sweep = run;
+  return run;
+}
+
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
 export function base64(bytes: Uint8Array): string {
@@ -79,6 +128,9 @@ function randomName(ext: string) {
 
 /** A decrypted copy in the cache directory under a random name (the real name never touches the file system). */
 export async function writeTemp(bytes: Uint8Array, ext: string): Promise<string> {
+  // Never race the launch sweep: a temp file written while onepeek-view is being removed would vanish
+  // under the viewer (or survive the sweep).
+  if (sweep) await sweep.catch(() => {});
   const f = new File(Paths.cache, 'onepeek-view', randomName(ext));
   if (!f.parentDirectory.exists) f.parentDirectory.create({ intermediates: true, idempotent: true });
   await f.write(bytes);

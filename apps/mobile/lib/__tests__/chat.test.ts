@@ -15,6 +15,10 @@ const PUSH_TOKEN = 'apns-7b2e9c4d1f8a6e3b5c0d9f2a4e7b1c8d6a3f5e9b2c4d7a1f8e6b3c5
 const PUSH_TOKEN_2 = 'apns-ROTATED-0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d';
 const HOUR = 60 * 60 * 1000;
 
+// lib/files pulls in the pickers and expo-file-system; the reset only has to call its sweep (W2-2).
+const mockFiles = { clearPickerCaches: jest.fn(async () => {}) };
+jest.mock('../files', () => ({ clearPickerCaches: () => mockFiles.clearPickerCaches() }));
+
 jest.mock('expo-constants', () => ({
   __esModule: true,
   default: { expoConfig: { extra: { supabaseUrl: 'https://xyzcompany.supabase.co', supabaseAnonKey: 'anon-key-for-tests', siteUrl: 'https://onepeek.io' } } },
@@ -421,9 +425,11 @@ describe('resetThisPhone', () => {
     expect(secureItems.has('onepeek.wrap')).toBe(true);
     expect(secureItems.has('onepeek.wrap.auth')).toBe(true);
     const builds = sbMock.createClient.mock.calls.length;
+    mockFiles.clearPickerCaches.mockClear();
 
     await resetThisPhone();
 
+    expect(mockFiles.clearPickerCaches).toHaveBeenCalledTimes(1);   // picker copies and viewer temps go too (W2-2 / W2-3)
     expect(callsOf('stopAutoRefresh')).toHaveLength(1);
     expect(callsOf('signOut')[0].args).toEqual([{ scope: 'local' }]);
     expect(sqliteFake.files.get('onepeek-chat.db')!.sealed.size).toBe(0);

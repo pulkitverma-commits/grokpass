@@ -22,6 +22,7 @@ jest.mock('@/lib/files', () => ({
   fileSize: (n: number) => `${(n / 1048576).toFixed(1)} MB`,
   pickPhoto: jest.fn(async () => mockPicked),
   pickDocument: jest.fn(async () => null),
+  deletePicked: jest.fn(),
   fileSource: (p: typeof mockPicked) => ({ name: p.name, mime: p.mime, size: p.size, bytes: p.read }),
   dataUri: () => 'data:image/png;base64,AQID',
   writeTemp: jest.fn(async () => 'file:///cache/t'),
@@ -29,12 +30,13 @@ jest.mock('@/lib/files', () => ({
   shareBytes: jest.fn(async () => {}),
   extensionOf: () => '.png',
 }));
+const mockShot: { cb: (() => void) | null } = { cb: null };
 jest.mock('@/security', () => ({
   ...jest.requireActual('@/security/constants'),
   useSecurity: () => mockSecurity,
   useSecureScreen: jest.fn(),
   useScreenshotAlert: jest.fn(),
-  onScreenshot: jest.fn(() => () => {}),
+  onScreenshot: jest.fn((cb: () => void) => { mockShot.cb = cb; return () => { mockShot.cb = null; }; }),
   shortDeviceCode: (id: string) => id.replace(/-/g, '').slice(0, 4).toUpperCase(),
   Watermark: () => { const { View } = require('react-native'); return <View testID="security.watermark" />; },
 }));
@@ -44,8 +46,32 @@ const MEMBERS = [
   { deviceId: THEM, role: 'member' as const, state: 'active' as const, signaturePub: new Uint8Array([2]), hasKeyPackage: true, nickname: 'Bea', verified: null },
 ];
 
+const files = () => jest.requireMock('@/lib/files') as { deletePicked: jest.Mock; pickPhoto: jest.Mock };
+
+/**
+ * Everything the rendered tree shows or announces: string children of host nodes and the props a
+ * screen reader or the keyboard would read. (A whole-tree JSON.stringify is not usable here: FlatList
+ * hands its `data` to the host ScrollView as a prop, and host props can reach React fiber internals.)
+ */
+function treeText(): string {
+  const out: string[] = [];
+  const SPOKEN = ['accessibilityLabel', 'accessibilityHint', 'accessibilityValue', 'placeholder', 'value', 'text'];
+  const walk = (n: unknown) => {
+    if (n === null || n === undefined || typeof n === 'boolean') return;
+    if (typeof n === 'string' || typeof n === 'number') { out.push(String(n)); return; }
+    if (Array.isArray(n)) { n.forEach(walk); return; }
+    const node = n as { props?: Record<string, unknown>; children?: unknown[] };
+    for (const k of SPOKEN) { const v = node.props?.[k]; if (typeof v === 'string') out.push(v); else if (v && typeof v === 'object') out.push(JSON.stringify(v)); }
+    node.children?.forEach(walk);
+  };
+  walk(screen.toJSON());
+  return out.join('\n');
+}
+
 beforeEach(() => {
   resetChatMock(); resetRouter();
+  files().deletePicked.mockClear(); files().pickPhoto.mockResolvedValue(mockPicked);
+  mockSecurity.inactive = false; mockShot.cb = null;
   setLocalParams({ id: ROOM.id });
   chat.myRooms.mockResolvedValue([ROOM]);
   chat.members.mockResolvedValue(MEMBERS);
@@ -179,4 +205,107 @@ test('the room menu opens from the header and the watermark is only drawn while 
   expect(await screen.findByTestId('room.burn')).toBeTruthy();
   expect(screen.getByTestId('room.menuSheet')).toBeTruthy();
   expect(<Text>placeholder</Text>).toBeTruthy();
+});
+
+test('W2-1: replying to a hidden Secret message keeps the text off screen after release; a screenshot or inactive drops the reply', async () => {
+  await open();
+  const bubble = await screen.findByTestId('msg.m1');
+  await act(async () => { fireEvent(bubble, 'pressIn'); });
+  await fireEvent.press(screen.getByTestId('reply.m1'));
+  await act(async () => { fireEvent(screen.getByTestId('msg.m1'), 'pressOut'); });
+  // The preview names the sender only; the body is nowhere in the tree.
+  expect(screen.getByTestId('room.replyPreview').props.children).toBe('Replying to a hidden message from Bea');
+  expect(screen.queryByText(/locker/)).toBeNull();
+  expect(treeText()).not.toContain('The locker code is 4471.');
+  expect(treeText()).not.toContain('locker');
+  // A screenshot drops the reply altogether.
+  expect(mockShot.cb).not.toBeNull();
+  await act(async () => { mockShot.cb!(); });
+  expect(screen.queryByTestId('room.replyPreview')).toBeNull();
+  // Reply again, then the app goes inactive: gone as well.
+  await act(async () => { fireEvent(screen.getByTestId('msg.m1'), 'pressIn'); });
+  await fireEvent.press(screen.getByTestId('reply.m1'));
+  await act(async () => { fireEvent(screen.getByTestId('msg.m1'), 'pressOut'); });
+  expect(screen.getByTestId('room.replyPreview')).toBeTruthy();
+  mockSecurity.inactive = true;
+  await fireEvent.changeText(screen.getByTestId('room.composer'), 'x');   // any re-render picks up `inactive`
+  expect(screen.queryByTestId('room.replyPreview')).toBeNull();
+  mockSecurity.inactive = false;
+});
+
+test('W2-1: own messages and Quick rooms keep the quoted preview; the reply id still goes to send()', async () => {
+  chat.myRooms.mockResolvedValue([room({ id: ROOM.id, kind: 'quick', name: 'Vault handover', ttl: 60 })]);
+  await open();
+  await screen.findByText('The locker code is 4471.');
+  await fireEvent.press(screen.getByTestId('reply.m1'));
+  expect(screen.getByTestId('room.replyPreview').props.children).toBe('Replying to “The locker code is 4471.”');
+  await waitFor(() => expect(screen.getByTestId('room.composer').props.editable).toBe(true));
+  await fireEvent.changeText(screen.getByTestId('room.composer'), 'On my way.');
+  await fireEvent.press(screen.getByTestId('room.send'));
+  await waitFor(() => expect(chat.send).toHaveBeenCalledWith(ROOM.id, 'On my way.', 60, 'm1', 'uuid-1'));
+});
+
+test('W2-7: the Secret-room composer refuses keyboard learning and autofill; Quick rooms are unchanged', async () => {
+  await open([]);
+  const secretInput = await screen.findByTestId('room.composer');
+  expect(secretInput.props.autoCorrect).toBe(false);
+  expect(secretInput.props.spellCheck).toBe(false);
+  expect(secretInput.props.autoCapitalize).toBe('none');
+  expect(secretInput.props.importantForAutofill).toBe('no');
+  expect(secretInput.props.textContentType).toBe('none');
+  expect(secretInput.props.autoComplete).toBe('off');
+  await screen.unmount();
+  chat.myRooms.mockResolvedValue([room({ id: ROOM.id, kind: 'quick', name: 'Vault handover', ttl: 60 })]);
+  await open([]);
+  const quickInput = await screen.findByTestId('room.composer');
+  expect(quickInput.props.autoCorrect).toBe(true);
+  expect(quickInput.props.spellCheck).toBeUndefined();
+  expect(quickInput.props.autoCapitalize).toBeUndefined();
+  expect(quickInput.props.importantForAutofill).toBeUndefined();
+  expect(quickInput.props.textContentType).toBeUndefined();
+});
+
+test('W2-2: the picker copy is deleted after a successful send, a failed send, on cancel and when oversize', async () => {
+  await open([]);
+  await waitFor(() => expect(screen.getByTestId('room.composer').props.editable).toBe(true));
+  // Success.
+  await fireEvent.press(screen.getByTestId('room.attach'));
+  await fireEvent.press(await screen.findByTestId('attach.photo'));
+  await screen.findByTestId('attach.picked');
+  expect(files().deletePicked).not.toHaveBeenCalledWith(mockPicked);
+  await fireEvent.press(screen.getByTestId('attach.send'));
+  await waitFor(() => expect(chat.sendFile).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(files().deletePicked).toHaveBeenCalledWith(mockPicked));
+  files().deletePicked.mockClear();
+  // Failure: the copy still goes.
+  chat.sendFile.mockRejectedValueOnce(Object.assign(new Error('failed: network'), { code: 'network' }));
+  await fireEvent.press(screen.getByTestId('room.attach'));
+  await fireEvent.press(await screen.findByTestId('attach.photo'));
+  await screen.findByTestId('attach.picked');
+  await fireEvent.press(screen.getByTestId('attach.send'));
+  await waitFor(() => expect(screen.getByTestId('room.error')).toBeTruthy());
+  expect(files().deletePicked).toHaveBeenCalledWith(mockPicked);
+  files().deletePicked.mockClear();
+  // Cancel.
+  await fireEvent.press(screen.getByTestId('room.attach'));
+  await fireEvent.press(await screen.findByTestId('attach.photo'));
+  await screen.findByTestId('attach.picked');
+  await fireEvent.press(screen.getByTestId('attach.cancel'));
+  await waitFor(() => expect(files().deletePicked).toHaveBeenCalledWith(mockPicked));
+  files().deletePicked.mockClear();
+  // Oversize: refused and deleted at once.
+  const big = { ...mockPicked, size: 60 * 1024 * 1024 };
+  files().pickPhoto.mockResolvedValueOnce(big);
+  await fireEvent.press(screen.getByTestId('room.attach'));
+  await fireEvent.press(await screen.findByTestId('attach.photo'));
+  expect(await screen.findByTestId('attach.error')).toBeTruthy();
+  expect(files().deletePicked).toHaveBeenCalledWith(big);
+  expect(chat.sendFile).toHaveBeenCalledTimes(2);
+});
+
+test('W2-4: the attach sheet says photos keep their embedded details', async () => {
+  await open([]);
+  await waitFor(() => expect(screen.getByTestId('room.composer').props.editable).toBe(true));
+  await fireEvent.press(screen.getByTestId('room.attach'));
+  expect((await screen.findByTestId('attach.exif')).props.children).toBe('Photos keep their embedded details, such as location, unless your phone removes them.');
 });

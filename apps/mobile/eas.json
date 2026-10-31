@@ -39,6 +39,16 @@
       "android": {
         "buildType": "app-bundle"
       }
+    },
+    "e2e": {
+      "extends": "development",
+      "env": {
+        "EXPO_PUBLIC_E2E": "1"
+      },
+      "ios": {
+        "simulator": true
+      },
+      "distribution": "internal"
     }
   },
   "submit": {

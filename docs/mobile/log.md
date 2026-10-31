@@ -4,6 +4,12 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-10-31
 
+- security-reviewer (S1, second pass) `phase-1-wave-2.md`: **no high or critical**; W1-1..W1-7 and W1-9 closed with tests,
+  W1-8 closed by decision, W1-10 with qa. Wave 2: mediums W2-1 (reply preview shows Secret text unheld) and W2-2
+  (picker cache copies never deleted), lows W2-3..W2-10. Dispatched: mobile-ui (W2-1, W2-2, W2-3, W2-4 honest sentence
+  instead of a re-encode library, W2-7 composer keyboard flags, W2-8 push re-registration, W2-9 AuthGate invariant +
+  test, W2-10 copy), backend (W2-5 table grants select/delete only). Lead: W2-6 `app.config.ts` throws when
+  `EXPO_PUBLIC_E2E=1` meets the preview or production EAS profile.
 - mobile-ui wave 2 (U3, U5, U7) merged: Locked screen as the provider cover (biometric wording, insecure-phone warning,
   Panic state), Conversation (sync/subscribe/poll, owner auto-admit like the web, hold-to-read with text absent from the
   tree until held, `markOpened` once, timers, replies, files via a viewer with cache temp files deleted on close,

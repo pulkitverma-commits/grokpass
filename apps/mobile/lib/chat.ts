@@ -338,3 +338,12 @@ export async function resetThisPhone(): Promise<void> {
   await authStorage.wipe();
   getLockStore().clear();
 }
+
+// ---------------------------------------------------------------------------- push (TEMP STUB)
+// core-crypto's real `push` export is merged on mobile/integration; this branch predates it. The
+// stub only lets the branch typecheck (Settings imports `push`); the lead drops this block at merge.
+export const push = {
+  async register(_platform: 'ios' | 'android', _token: string): Promise<void> { throw new Error('push_unavailable'); },
+  async unregister(): Promise<void> { throw new Error('push_unavailable'); },
+  async current(): Promise<boolean> { return false; },
+};

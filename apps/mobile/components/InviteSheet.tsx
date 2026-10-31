@@ -1,6 +1,7 @@
 // Invite sheet: the link the core built (token in the #fragment only), as a QR code, with Copy and
 // Share. The screen shows the link masked; the full link goes only to the clipboard or the share
-// sheet, never to any server from here.
+// sheet, never to any server from here. Security review W1-9: `invite.link` renders the full link
+// only in an E2E build (EXPO_PUBLIC_E2E=1, so Maestro can copy it); every other build masks it.
 import * as Clipboard from 'expo-clipboard';
 import { useState } from 'react';
 import { Share, StyleSheet, View } from 'react-native';
@@ -13,6 +14,9 @@ import { Text } from './Text';
 import { maskLink } from '@/lib/format';
 
 type Props = { open: boolean; link: string; kind: 'quick' | 'secret' | 'business'; onDone: () => void; expiresLabel?: string; usesLabel?: string };
+
+/** Build-time flag: E2E builds render the full invite link so the two-device flows can copy it. */
+const E2E = process.env.EXPO_PUBLIC_E2E === '1';
 
 export function InviteSheet({ open, link, kind, onDone, expiresLabel = '1 day', usesLabel = 'once' }: Props) {
   const [toast, setToast] = useState('');
@@ -33,7 +37,7 @@ export function InviteSheet({ open, link, kind, onDone, expiresLabel = '1 day', 
         <View style={styles.qrBox}><QRCode value={link} size={180} color="#000" backgroundColor="#fff" /></View>
       </View>
       <View style={styles.linkBox}>
-        <Text variant="mono" tone="muted" numberOfLines={1} ellipsizeMode="middle" style={styles.link} testID="invite.link" accessibilityLabel="Invite link, hidden">{maskLink(link)}</Text>
+        <Text variant="mono" tone="muted" numberOfLines={E2E ? undefined : 1} ellipsizeMode={E2E ? undefined : 'middle'} style={styles.link} testID="invite.link" accessibilityLabel="Invite link, hidden">{E2E ? link : maskLink(link)}</Text>
         <Button title="Copy" icon="copy" small block={false} onPress={copy} testID="invite.copy" />
       </View>
       <Text variant="meta" tone="muted" style={styles.hint}>

@@ -6,12 +6,12 @@ import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { LockCover, SecurityProvider, useSecurity, UNLOCK_PROMPT } from '@/security';
-import { Button } from '../components/Button';
+import { SecurityProvider } from '@/security';
 import { useEffect, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ChatProvider } from '../components/ChatProvider';
+import { LockedScreen } from '../components/LockedScreen';
 import { colors, fontAssets } from '../theme';
 import { auth, type AuthSession } from '@/lib/chat';
 
@@ -58,27 +58,6 @@ function AuthGate({ session }: { session: AuthSession | null }) {
   return null;
 }
 
-/**
- * Provisional cover shown while the app is locked, until mobile-ui's Locked screen (U3, wave 2)
- * replaces it. Offers the one action the lock state needs: unlock with biometrics / passcode.
- */
-function ProvisionalLocked() {
-  const { locked, unlock } = useSecurity();
-  return (
-    <LockCover>
-      {locked ? (
-        <Button
-          title={UNLOCK_PROMPT}
-          onPress={() => {
-            void unlock();
-          }}
-          testID="locked.unlock"
-        />
-      ) : null}
-    </LockCover>
-  );
-}
-
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts(fontAssets);
   const session = useSession();
@@ -91,7 +70,7 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bg }}>
       <SafeAreaProvider>
         <ChatProvider>
-          <SecurityProvider cover={<ProvisionalLocked />}>
+          <SecurityProvider cover={<LockedScreen />}>
             <StatusBar style="light" />
             <AuthGate session={session} />
             <Stack

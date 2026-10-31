@@ -32,8 +32,8 @@ export default function AuthCallbackScreen() {
       <View style={styles.body}>
         {failed ? (
           <>
-            <Notice tone="error" icon="alert" text="That sign-in link didn’t work. It may have expired or already been used." testID="auth.error" />
-            <Button title="Back to sign in" onPress={() => router.replace('/sign-in')} testID="auth.retry" />
+            <Notice tone="error" icon="alert" text="That sign-in link didn’t work. It may have expired, already been used, or been requested from another phone. Links only work on the phone that asked for them." testID="auth.error" />
+            <Button title="Request a new link" onPress={() => router.replace('/sign-in')} testID="auth.retry" />
           </>
         ) : (
           <>

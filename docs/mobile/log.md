@@ -87,3 +87,7 @@ Newest first. One line per decision, blocker or agent report.
   root 58/58. Findings for Phase 1: (a) the owner never sends a `nick` control message, so members see
   `null` for the owner (core-crypto, Phase 1: send nick on room creation); (b) `sync().newMessages` counts
   screenshot alerts (core exposes a separate `newAlerts` counter in Phase 1 so unread badges stay honest).
+- core-crypto review fixes (S0b M1–M3, L1–L6) merged: core 67 → 87 with Q1; interop test isolated per phone
+  (`wrapKeyId`). Full gate commands green on `024ffbd`. `security-reviewer` verifying the fixes (S0 close-out).
+- Lead: `docs/mobile/gates/phase-0.md` written. **Gate 0 status: complete except the device spike, which is
+  blocked on the Expo account (and Apple Developer Program for iOS).** Stopping for human approval.

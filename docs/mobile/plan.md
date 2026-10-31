@@ -1,6 +1,6 @@
 # OnePeek mobile apps: build plan
 
-Lead: Claude (lead engineer). Status: **Phase 0, planning, waiting for human approval** (2026-10-31).
+Lead: Claude (lead engineer). Status: **Gate 0 reached on `mobile/integration` (2026-10-31): everything done except the device spike, blocked on the Expo and Apple accounts. Waiting for human approval.** See `gates/phase-0.md`.
 Source of truth for scope and rules: the build prompt (sections 1, 3, 4). This file holds the task
 breakdown, owners, order and risks. The running log is `log.md`; gate evidence goes in `gates/`.
 

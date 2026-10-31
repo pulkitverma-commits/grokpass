@@ -37,3 +37,12 @@ Newest first. One line per decision, blocker or agent report.
   Hermes at acceptable speed", which only a device build can answer.
 - Lead: launched `core-crypto` (C1), `qa` (Q2) and `release` (R0) in parallel, each in its own worktree with
   node_modules symlinked to the main checkout (disk is at 6.6 GB free; a second install would not fit twice).
+- core-crypto (C3 + C1 review fixes, branch `mobile/core-crypto/rn-adapters`): RN adapters in
+  `packages/core/src/adapters/rn/` (SecureStore + SQLite keystore with the web's sealing format, quick-crypto
+  `installRnCrypto()`, `createRnPlatform` with env/lock/fileSource and a Supabase wrapper), exported from
+  `packages/core/src/rn.ts` only. Attachment bytes now cross the storage port as `Uint8Array`; the web adapter
+  wraps them in the same `Blob` as before (RN's Blob cannot be built from typed arrays). Review fixes M1 (shared
+  wrapping-key cache + re-read on decrypt failure, web and RN), M2 (keystore required), L1 (restricted globals
+  for `src/chat/**`, `src/crypto.ts`, `src/adapters/rn/**`), L4 (`ts-mls` declared), L2/L3 (origin/notify tests).
+  Root 58/58, core 50/50, web build green. Not run on a device: quick-crypto on Hermes and RN Blob/FileReader
+  behaviour remain C2's proof.

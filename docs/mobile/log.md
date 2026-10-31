@@ -4,6 +4,14 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-10-31
 
+- Wave 1 review fixes merged: core-crypto (W1-1 email link bound to the address requested on this phone within 1 h,
+  session email compared after `verifyOtp`, local sign-out on mismatch; W1-2 `push.register/unregister/current` with the
+  token sealed and unregistered before sign-out/reset; W1-6 Supabase URL must be `https://<ref>.supabase.co`), backend
+  (W1-2 `unique (token)` with owner takeover; W1-3 token shape `[A-Za-z0-9:_-]{32..512}`, 10 rows per owner, reads and
+  sends capped/chunked at 10; W1-5 http2 idle/deadline timeouts; `search_path = ''`), native-security (W1-4 no
+  `allowScreenCaptureAsync` anywhere, app key re-asserted on every foreground; W1-7 unlock generation counter).
+  Web 108, core 162, mobile 145 (before wave 2). Open from the review: W1-10 (qa, next pass). Accepted trade-off:
+  the pending email lives in module memory, so a link tapped after the app was killed asks for a new link.
 - security-reviewer (S1, wave 1) `phase-1-wave-1.md`: **one high** W1-1 (a `token_hash` email link is a bearer, so a
   crafted `onepeek://auth` link signs the phone into an attacker's account, after which `sync()` forgets the victim's
   rooms); mediums W1-2 (push token outlives the account on a shared phone; unique(owner, token)), W1-3 (no per-owner

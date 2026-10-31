@@ -96,6 +96,46 @@ describe('migration 008: push_devices', () => {
     expect(new Date(rows[0].last_seen).getTime()).toBeGreaterThan(new Date(before).getTime());
   });
 
+  it('registering the same (platform, token) twice keeps one row (same id, created_at) and advances last_seen (§1.5 d)', async () => {
+    await register(ALICE, 'ios', TOKEN_A);
+    await sys(`update public.push_devices set last_seen = now() - interval '1 day'`);
+    const first = (await sys(`select id, created_at, last_seen from public.push_devices`)).rows[0];
+    await register(ALICE, 'ios', TOKEN_A);
+    const rows = (await sys(`select id, owner, platform, token, created_at, last_seen from public.push_devices`)).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ owner: ALICE, platform: 'ios', token: TOKEN_A, id: first.id });
+    expect(new Date(rows[0].created_at).getTime()).toBe(new Date(first.created_at).getTime());
+    expect(new Date(rows[0].last_seen).getTime()).toBeGreaterThan(new Date(first.last_seen).getTime());
+    // A third time, back to back: still one row, last_seen never moves backwards.
+    await register(ALICE, 'ios', TOKEN_A);
+    const again = (await sys(`select last_seen from public.push_devices`)).rows;
+    expect(again).toHaveLength(1);
+    expect(new Date(again[0].last_seen).getTime()).toBeGreaterThanOrEqual(new Date(rows[0].last_seen).getTime());
+  });
+
+  it('stores exactly id, owner, platform, token, created_at, last_seen: no label, user agent, room or email (§1.5 f)', async () => {
+    const cols = (await sys(`select column_name from information_schema.columns where table_schema = 'public' and table_name = 'push_devices' order by column_name`)).rows.map(r => r.column_name);
+    expect(cols).toEqual(['created_at', 'id', 'last_seen', 'owner', 'platform', 'token']);
+    await register(ALICE, 'android', FCM_LIKE);
+    const dump = (await sys(`select row_to_json(d)::jsonb as j, d::text as t from public.push_devices d`)).rows;
+    expect(dump).toHaveLength(1);
+    expect(Object.keys(dump[0].j).sort()).toEqual(['created_at', 'id', 'last_seen', 'owner', 'platform', 'token']);
+    expect(dump[0].j.token).toBe(FCM_LIKE);          // written as given
+    expect(dump[0].j.owner).toBe(ALICE);
+    expect(dump[0].j.platform).toBe('android');
+    // The raw row text is the composite literal of those six values and nothing else.
+    const fields = dump[0].t.replace(/^\(|\)$/g, '').split(',');
+    expect(fields).toHaveLength(6);
+    expect(fields[1]).toBe(ALICE);
+    expect(fields[2]).toBe('android');
+    expect(fields[3]).toBe(FCM_LIKE);
+    for (const leak of ['user-agent', 'Mozilla', 'iPhone', 'Pixel', '@', 'chat', 'room', 'passport']) expect(dump[0].t).not.toContain(leak);
+    // Claims on the session (user agent, email) are not picked up by the RPC either.
+    await register(BOB, 'ios', TOKEN_B, { email: 'bob@example.com', user_agent: 'Mozilla/5.0 iPhone', user_metadata: { name: 'Bob' } });
+    const bob = (await sys(`select d::text as t from public.push_devices d where owner = $1`, [BOB])).rows[0].t;
+    for (const leak of ['bob@example.com', 'Mozilla', 'iPhone', 'Bob"', ',Bob']) expect(bob).not.toContain(leak);
+  });
+
   it('a token belongs to one owner: re-registering it from another account takes it over (W1-2)', async () => {
     await register(ALICE, 'ios', TOKEN_A);
     await register(BOB, 'ios', TOKEN_A);

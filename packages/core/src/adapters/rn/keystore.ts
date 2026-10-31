@@ -165,7 +165,13 @@ export function createRnKeyStore(opts: RnKeyStoreOptions): KeyStore {
   async function onMissingKey(): Promise<void> {
     const d = await ready();
     const any = await d.getFirstAsync<{ one: number }>('SELECT 1 AS one FROM sealed LIMIT 1', []);
-    if (!any) return;
+    if (!any) {
+      // N2: a wipe that died between its two deletes leaves the marker behind with an empty table.
+      // Clear it now; otherwise, once rows exist again under the new key, a genuine key loss would
+      // read as "finish the wipe" and silently delete them instead of raising keystore_unavailable.
+      await d.runAsync('DELETE FROM meta WHERE k = ?', [WIPING]);
+      return;
+    }
     const marker = await d.getFirstAsync<{ v: string }>('SELECT v FROM meta WHERE k = ?', [WIPING]);
     if (marker?.v === '1') {
       // A wipe deleted the key but was interrupted before the rows went: finish it.

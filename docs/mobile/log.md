@@ -74,3 +74,10 @@ Newest first. One line per decision, blocker or agent report.
   env; M3 panic lock must fail closed and persist synchronously, flag THIS_DEVICE_ONLY) and 6 low. Merged
   C3 + review into `mobile/integration`; fixes go on `mobile/core-crypto/review-fixes-2` before any screen
   uses the adapters. Root 58/58, core 50/50 after merge.
+- Lead: `apps/mobile` now depends on `@onepeek/core`; root layout calls `installRnCrypto()` first; Metro stubs
+  the five unused ts-mls ciphersuite packages (same list as `next.config.js`); `app/spike.tsx` is the Phase 0
+  spike screen (lead-owned, deleted after Gate 0). `react-native-nitro-modules` (quick-crypto's peer) had to be
+  added explicitly because `legacy-peer-deps` disables automatic peer installs.
+- Lead: `expo export` for Android and iOS bundles the whole app through Metro (1567 modules) and compiles it to
+  Hermes bytecode with no resolution errors. That proves the monorepo resolution, the core import and the
+  ts-mls stubs; it does not prove quick-crypto at runtime (needs a device build, blocked on EAS/Apple accounts).

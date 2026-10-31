@@ -124,6 +124,8 @@ export function createWebKeyStore(): KeyStore {
   async function wipe() {
     wrapKeys.delete(DB);
     await tx('meta', 'readwrite', s => s.delete('wrap'));
+    // Again: a put() that raced the delete above may have re-read and cached the old key.
+    wrapKeys.delete(DB);
     await tx('sealed', 'readwrite', s => s.clear());
   }
 

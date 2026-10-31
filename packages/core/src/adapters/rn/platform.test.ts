@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createRnEnv, createRnLockStore, createRnPlatform, fileSource, wrapRnSupabase, bodyToArrayBuffer, LOCK_ID } from './platform';
+import { createRnEnv, checkOnePeekUrl, createRnLockStore, createRnPlatform, fileSource, wrapRnSupabase, bodyToArrayBuffer, LOCK_ID } from './platform';
 import { createChatClient } from '../../chat/client';
 import type { KeyStore, SupabaseLike } from '../../chat/ports';
-import { createFetchRecorder, createSecureStoreMock } from '../../../test/rn-mocks';
+import { createFetchRecorder, createSecureStoreMock, WHEN_UNLOCKED_THIS_DEVICE_ONLY } from '../../../test/rn-mocks';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -46,32 +46,32 @@ describe('rn env', () => {
   });
 
   it('deviceLabel() is the injected model name, at most 40 characters, never a user agent', () => {
-    expect(createRnEnv({ siteUrl: 'https://x', apiBaseUrl: 'https://x', deviceLabel: 'Pixel 8' }).deviceLabel()).toBe('Pixel 8');
-    expect(createRnEnv({ siteUrl: 'https://x', apiBaseUrl: 'https://x', deviceLabel: 'A'.repeat(100) }).deviceLabel()).toHaveLength(40);
-    expect(createRnEnv({ siteUrl: 'https://x', apiBaseUrl: 'https://x', deviceLabel: '   ' }).deviceLabel()).toBe('Phone');
+    expect(createRnEnv({ siteUrl: 'https://onepeek.io', deviceLabel: 'Pixel 8' }).deviceLabel()).toBe('Pixel 8');
+    expect(createRnEnv({ siteUrl: 'https://onepeek.io', deviceLabel: 'A'.repeat(100) }).deviceLabel()).toHaveLength(40);
+    expect(createRnEnv({ siteUrl: 'https://onepeek.io', deviceLabel: '   ' }).deviceLabel()).toBe('Phone');
   });
 
   it('randomUUID() is a v4 UUID', () => {
-    const env = createRnEnv({ siteUrl: 'https://x', apiBaseUrl: 'https://x', deviceLabel: 'p' });
+    const env = createRnEnv({ siteUrl: 'https://onepeek.io', deviceLabel: 'p' });
     expect(env.randomUUID()).toMatch(UUID);
     expect(env.randomUUID()).not.toBe(env.randomUUID());
   });
 
   it('notify() POSTs {room} with the bearer to the absolute notify URL and nothing else', async () => {
     const rec = createFetchRecorder();
-    const env = createRnEnv({ siteUrl: 'https://onepeek.io', apiBaseUrl: 'https://api.onepeek.io/', deviceLabel: 'p', fetch: rec.fetch });
+    const env = createRnEnv({ siteUrl: 'https://onepeek.io', apiBaseUrl: 'https://www.onepeek.io/', deviceLabel: 'p', fetch: rec.fetch });
     await env.notify('room-9', 'tok-abc');
     expect(rec.calls).toHaveLength(1);
-    expect(rec.calls[0].url).toBe('https://api.onepeek.io/api/chat/notify');
+    expect(rec.calls[0].url).toBe('https://www.onepeek.io/api/chat/notify');
     expect(rec.calls[0].init?.method).toBe('POST');
     expect(rec.calls[0].init?.headers).toEqual({ 'Content-Type': 'application/json', Authorization: 'Bearer tok-abc' });
     expect(JSON.parse(String(rec.calls[0].init?.body))).toEqual({ room: 'room-9' });
   });
 
   it('notify() never throws (network down, no fetch)', async () => {
-    const env = createRnEnv({ siteUrl: 'https://x', apiBaseUrl: 'https://x', deviceLabel: 'p', fetch: createFetchRecorder(true).fetch });
+    const env = createRnEnv({ siteUrl: 'https://onepeek.io', deviceLabel: 'p', fetch: createFetchRecorder(true).fetch });
     await expect(env.notify('r', 't')).resolves.toBeUndefined();
-    const none = createRnEnv({ siteUrl: 'https://x', apiBaseUrl: 'https://x', deviceLabel: 'p', fetch: undefined as unknown as typeof fetch });
+    const none = createRnEnv({ siteUrl: 'https://onepeek.io', deviceLabel: 'p', fetch: undefined as unknown as typeof fetch });
     const saved = globalThis.fetch;
     (globalThis as { fetch?: typeof fetch }).fetch = undefined;
     try { await expect(none.notify('r', 't')).resolves.toBeUndefined(); } finally { globalThis.fetch = saved; }
@@ -86,6 +86,56 @@ describe('rn env', () => {
     expect(notify).toHaveBeenCalledWith('room-42', 'session-token');
     expect(notify.mock.calls[0]).toHaveLength(2);
   });
+
+  // ---- M2: the bearer and the invite links only ever go to onepeek.io
+
+  it('M2: accepts https://onepeek.io and https://www.onepeek.io (trailing slash tolerated), apiBaseUrl defaults to siteUrl', async () => {
+    for (const u of ['https://onepeek.io', 'https://onepeek.io/', 'https://www.onepeek.io', 'https://www.onepeek.io/']) {
+      expect(createRnEnv({ siteUrl: u, deviceLabel: 'p' }).origin()).toBe(u.replace(/\/$/, ''));
+      expect(checkOnePeekUrl('siteUrl', u)).toBe(u.replace(/\/$/, ''));
+    }
+    const rec = createFetchRecorder();
+    await createRnEnv({ siteUrl: 'https://www.onepeek.io/', deviceLabel: 'p', fetch: rec.fetch }).notify('r', 't');
+    expect(rec.calls[0].url).toBe('https://www.onepeek.io/api/chat/notify');
+  });
+
+  it('M2: rejects at construction anything that is not https to onepeek.io', () => {
+    const bad = [
+      'http://onepeek.io',                 // plaintext
+      'https://tunnel.example',            // a tunnel / typo'd host
+      'https://onepeek.io.evil.example',   // suffix trick
+      'https://evil.example/onepeek.io',   // host in the path
+      'https://api.onepeek.io',            // a subdomain is not in the allowlist
+      'https://onepeek.io:8443',           // a non-default port is a different origin
+      'https://user:pw@onepeek.io',        // credentials
+      'https://onepeek.io/chat',           // a path would change where /chat/join and /api/chat/notify land
+      'https://onepeek.io/?x=1',
+      'https://onepeek.io/#frag',
+      'http://localhost:3000',             // dev host without the explicit opt-in
+      'http://127.0.0.1:3000',
+      'onepeek.io',                        // not absolute
+      'javascript:alert(1)',
+      '',
+    ];
+    for (const u of bad) {
+      expect(() => createRnEnv({ siteUrl: u, deviceLabel: 'p' }), u).toThrow(/createRnEnv: siteUrl/);
+      expect(() => createRnEnv({ siteUrl: 'https://onepeek.io', apiBaseUrl: u, deviceLabel: 'p' }), u).toThrow(/createRnEnv: apiBaseUrl/);
+      expect(() => createRnPlatform({ supabase: null, keystore: nullKeystore, secureStore: createSecureStoreMock().module, siteUrl: u, deviceLabel: 'p' }), u).toThrow(/createRnEnv/);
+    }
+    // The message names the option, not the value (a bad URL could be anything).
+    expect(() => createRnEnv({ siteUrl: 'https://secret-tunnel.example', deviceLabel: 'p' })).toThrow(expect.not.stringContaining('secret-tunnel'));
+  });
+
+  it('M2: allowInsecureDev admits http://localhost and 127.0.0.1 only, and only when asked for', () => {
+    expect(createRnEnv({ siteUrl: 'http://localhost:8081', deviceLabel: 'p', allowInsecureDev: true }).origin()).toBe('http://localhost:8081');
+    expect(createRnEnv({ siteUrl: 'http://127.0.0.1:3000/', deviceLabel: 'p', allowInsecureDev: true }).origin()).toBe('http://127.0.0.1:3000');
+    expect(createRnEnv({ siteUrl: 'https://onepeek.io', deviceLabel: 'p', allowInsecureDev: true }).origin()).toBe('https://onepeek.io');
+    for (const u of ['http://onepeek.io', 'http://10.0.2.2:3000', 'http://tunnel.example', 'http://localhost.evil.example']) {
+      expect(() => createRnEnv({ siteUrl: u, deviceLabel: 'p', allowInsecureDev: true }), u).toThrow(/createRnEnv: siteUrl/);
+    }
+    expect(() => createRnEnv({ siteUrl: 'http://localhost:8081', deviceLabel: 'p' })).toThrow(/createRnEnv: siteUrl/);
+    expect(() => createRnEnv({ siteUrl: 'http://localhost:8081', deviceLabel: 'p', allowInsecureDev: false })).toThrow(/createRnEnv: siteUrl/);
+  });
 });
 
 describe('rn lock', () => {
@@ -96,7 +146,7 @@ describe('rn lock', () => {
     expect(lock.get()).toBe(false);
     lock.set();
     expect(lock.get()).toBe(true);           // before any await
-    await Promise.resolve();
+    await lock.pending;
     expect(secure.items.get(LOCK_ID)).toBe('1');
 
     const restarted = createRnLockStore(secure.module);   // simulated process restart
@@ -104,7 +154,7 @@ describe('rn lock', () => {
     expect(restarted.get()).toBe(true);
     restarted.clear();
     expect(restarted.get()).toBe(false);
-    await Promise.resolve();
+    await restarted.pending;
     expect(secure.items.has(LOCK_ID)).toBe(false);
   });
 
@@ -118,7 +168,72 @@ describe('rn lock', () => {
   });
 
   it('createRnPlatform needs a lock source', () => {
-    expect(() => createRnPlatform({ supabase: null, keystore: nullKeystore, siteUrl: 'https://x', apiBaseUrl: 'https://x', deviceLabel: 'p' })).toThrow(/lockStore or secureStore/);
+    expect(() => createRnPlatform({ supabase: null, keystore: nullKeystore, siteUrl: 'https://onepeek.io', deviceLabel: 'p' })).toThrow(/lockStore or secureStore/);
+  });
+
+  // ---- M3: fail closed, durable, THIS_DEVICE_ONLY
+
+  it('M3: reports locked until the flag has been read, and stays locked when the read throws', async () => {
+    const unreadable = createRnLockStore(createSecureStoreMock([], { failReads: true }).module);
+    expect(unreadable.get()).toBe(true);   // before the read settles
+    await unreadable.ready;                // never rejects
+    expect(unreadable.get()).toBe(true);   // and after it failed
+    unreadable.clear();                    // the app's own unlock still works
+    expect(unreadable.get()).toBe(false);
+
+    const unreadableSync = createRnLockStore(createSecureStoreMock([], { failReads: true, sync: true }).module);
+    await unreadableSync.ready;
+    expect(unreadableSync.get()).toBe(true);
+
+    const fine = createRnLockStore(createSecureStoreMock().module);
+    expect(fine.get()).toBe(true);         // unknown yet: locked
+    await fine.ready;
+    expect(fine.get()).toBe(false);        // nothing stored: unlocked
+  });
+
+  it('M3: with a synchronous SecureStore the flag is on disk before set() returns', () => {
+    const secure = createSecureStoreMock([], { sync: true });
+    const lock = createRnLockStore(secure.module);
+    expect(lock.get()).toBe(false);        // the sync read settled during construction
+    lock.set();
+    expect(secure.items.get(LOCK_ID)).toBe('1');   // no await at all
+    expect(secure.setOptions.get(LOCK_ID)).toEqual({ keychainAccessible: WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+    const restarted = createRnLockStore(secure.module);
+    expect(restarted.get()).toBe(true);    // read back synchronously too
+  });
+
+  it('M3: without the sync API, pending resolves once the write has landed and the flag is THIS_DEVICE_ONLY', async () => {
+    const secure = createSecureStoreMock();
+    const lock = createRnLockStore(secure.module);
+    await lock.ready;
+    lock.set();
+    await lock.pending;
+    expect(secure.items.get(LOCK_ID)).toBe('1');
+    expect(secure.setOptions.get(LOCK_ID)).toEqual({ keychainAccessible: WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+    expect(secure.setOptions.get(LOCK_ID)?.requireAuthentication).toBeUndefined();
+  });
+
+  it('M3: a failing sync write falls back to the async one, and pending never rejects', async () => {
+    const secure = createSecureStoreMock();
+    const items = secure.items;
+    secure.module.setItem = () => { throw new Error('keychain busy'); };
+    const lock = createRnLockStore(secure.module);
+    await lock.ready;
+    lock.set();
+    expect(lock.get()).toBe(true);
+    await lock.pending;
+    expect(items.get(LOCK_ID)).toBe('1');
+
+    const broken = createSecureStoreMock();
+    broken.module.setItemAsync = async () => { throw new Error('disk'); };
+    broken.module.deleteItemAsync = async () => { throw new Error('disk'); };
+    const l2 = createRnLockStore(broken.module);
+    await l2.ready;
+    l2.set();
+    await expect(l2.pending).resolves.toBeUndefined();
+    expect(l2.get()).toBe(true);           // in memory it is locked regardless
+    l2.clear();
+    await expect(l2.pending).resolves.toBeUndefined();
   });
 });
 
@@ -134,7 +249,7 @@ describe('rn fileSource', () => {
 
   it('an oversized or empty picked file is refused by sendFile before it is read', async () => {
     const read = vi.fn(async () => new Uint8Array(1));
-    const client = createChatClient(createRnPlatform({ supabase: fakeSupabase(() => null), keystore: nullKeystore, secureStore: createSecureStoreMock().module, siteUrl: 'https://x', apiBaseUrl: 'https://x', deviceLabel: 'p' }));
+    const client = createChatClient(createRnPlatform({ supabase: fakeSupabase(() => null), keystore: nullKeystore, secureStore: createSecureStoreMock().module, siteUrl: 'https://onepeek.io', deviceLabel: 'p' }));
     await expect(client.sendFile('r', fileSource({ uri: 'u', name: 'big', size: 50 * 1024 * 1024, read }), 60, false)).rejects.toMatchObject({ code: 'file_too_large' });
     await expect(client.sendFile('r', fileSource({ uri: 'u', name: 'empty', size: 0, read }), 60, false)).rejects.toMatchObject({ code: 'empty_file' });
     expect(read).not.toHaveBeenCalled();

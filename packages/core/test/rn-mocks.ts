@@ -10,20 +10,42 @@ export const WHEN_UNLOCKED_THIS_DEVICE_ONLY = 7701;
 export type SecureStoreMock = {
   module: SecureStoreLike;
   items: Map<string, string>;
-  /** Options passed to every setItemAsync, by key. */
+  /** Options passed to every setItemAsync / setItem, by key. */
   setOptions: Map<string, SecureStoreOptionsLike | undefined>;
+  /** Test hooks: awaited inside the matching module call before it touches `items`. */
+  hooks: { beforeDelete?: () => Promise<void> };
 };
 
-export function createSecureStoreMock(log: string[] = []): SecureStoreMock {
+export type SecureStoreMockOptions = {
+  /** Also expose the synchronous `setItem`/`getItem` of expo-secure-store >= 13. */
+  sync?: boolean;
+  /** Every read (`getItemAsync`, `getItem`) throws, like a Keychain that cannot be opened. */
+  failReads?: boolean;
+};
+
+export function createSecureStoreMock(log: string[] = [], opts: SecureStoreMockOptions = {}): SecureStoreMock {
   const items = new Map<string, string>();
   const setOptions = new Map<string, SecureStoreOptionsLike | undefined>();
+  const hooks: SecureStoreMock['hooks'] = {};
+  const read = (key: string) => {
+    log.push(`secure.get ${key}`);
+    if (opts.failReads) throw new Error('keychain unavailable');
+    return items.get(key) ?? null;
+  };
+  const write = (key: string, value: string, options: SecureStoreOptionsLike | undefined) => {
+    log.push(`secure.set ${key}`); setOptions.set(key, options); items.set(key, value);
+  };
   const module: SecureStoreLike = {
     WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-    async getItemAsync(key) { log.push(`secure.get ${key}`); return items.get(key) ?? null; },
-    async setItemAsync(key, value, options) { log.push(`secure.set ${key}`); setOptions.set(key, options); items.set(key, value); },
-    async deleteItemAsync(key) { log.push(`secure.delete ${key}`); items.delete(key); },
+    async getItemAsync(key) { return read(key); },
+    async setItemAsync(key, value, options) { write(key, value, options); },
+    async deleteItemAsync(key) { log.push(`secure.delete ${key}`); await hooks.beforeDelete?.(); items.delete(key); },
   };
-  return { module, items, setOptions };
+  if (opts.sync) {
+    module.getItem = (key) => read(key);
+    module.setItem = (key, value, options) => write(key, value, options);
+  }
+  return { module, items, setOptions, hooks };
 }
 
 // node:sqlite (Node 22.13+). @types/node 20 has no declarations for it, so the subset is typed here.
@@ -52,6 +74,10 @@ export type SqliteMock = {
   dump(): { key: string; iv: Uint8Array; ct: Uint8Array; expires_at: number | null }[];
   /** Re-inserts rows (e.g. captured before a wipe) into the last opened database. */
   insert(rows: { key: string; iv: Uint8Array; ct: Uint8Array; expires_at: number | null }[]): void;
+  /** Rows of the `meta` table of the last opened database. */
+  meta(): { k: string; v: string }[];
+  /** The next `runAsync` whose SQL matches throws once (simulates a failed statement). */
+  failOnce: RegExp | null;
 };
 
 export function createSqliteMock(log: string[] = []): SqliteMock {
@@ -63,6 +89,7 @@ export function createSqliteMock(log: string[] = []): SqliteMock {
     async execAsync(sql) { log.push(`sql ${sql}`); db.exec(sql); },
     async runAsync(sql, params: SqliteBindValue[]) {
       log.push(`sql ${sql}`);
+      if (mock.failOnce?.test(sql)) { mock.failOnce = null; throw new Error(`sqlite: injected failure for ${sql}`); }
       const r = db.prepare(sql).run(...params);
       return { changes: Number(r.changes) };
     },
@@ -85,15 +112,18 @@ export function createSqliteMock(log: string[] = []): SqliteMock {
   };
   type Row = { key: string; iv: Uint8Array; ct: Uint8Array; expires_at: number | null };
   const rows = (): Row[] => (last ? (last.prepare('SELECT key, iv, ct, expires_at FROM sealed ORDER BY key').all() as Row[]) : []);
-  return {
+  const mock: SqliteMock = {
     module,
     opened,
+    failOnce: null,
     dump: () => rows().map(r => ({ ...r, iv: new Uint8Array(r.iv), ct: new Uint8Array(r.ct) })),
     insert(rs) {
       if (!last) throw new Error('no database opened');
       for (const r of rs) last.prepare('INSERT OR REPLACE INTO sealed(key, iv, ct, expires_at) VALUES (?, ?, ?, ?)').run(r.key, r.iv, r.ct, r.expires_at);
     },
+    meta: () => (last ? (last.prepare('SELECT k, v FROM meta ORDER BY k').all() as { k: string; v: string }[]) : []),
   };
+  return mock;
 }
 
 /** A fetch recorder for env.notify tests. */

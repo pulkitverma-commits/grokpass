@@ -31,7 +31,15 @@ export function unpack<T>(b: ArrayBuffer): T {
   });
 }
 
-/** Encrypts a value under `wrap`. The record key is bound as associated data so sealed blobs can't be swapped between keys. */
+/**
+ * Encrypts a value under `wrap`. The record key is bound as associated data so sealed blobs can't
+ * be swapped between keys.
+ *
+ * Known limitation (format v1): `expiresAt` is stored beside the record and is NOT part of the
+ * AAD, so someone with write access to the local store (IndexedDB / the SQLite file) can extend or
+ * shorten a record's local lifetime without touching the ciphertext; the server enforces its own
+ * expiry independently. A format v2 would bind it (AAD = `key\0expiresAt`) and keep reading v1.
+ */
 export async function seal(wrap: CryptoKey, key: string, value: unknown, expiresAt?: number): Promise<Sealed> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(key) }, wrap, pack(value) as BufferSource);

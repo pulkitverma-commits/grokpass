@@ -4,26 +4,57 @@
 // ChatPlatform interface.
 
 import type { BinaryBody, ChatEnv, ChatPlatform, FileSource, KeyStore, LockStore, SupabaseLike, SupabaseSession } from '../../chat/ports';
-import type { SecureStoreLike } from './keystore';
+import type { SecureStoreLike, SecureStoreOptionsLike } from './keystore';
 
 // ---- Env
 
 export interface RnEnvOptions {
-  /** Where invite links point, e.g. `https://onepeek.io`. */
+  /** Where invite links point. Must be `https://onepeek.io` or `https://www.onepeek.io` (see `allowInsecureDev`). */
   siteUrl: string;
-  /** Where `/api/chat/notify` lives, e.g. `https://onepeek.io` (may equal siteUrl). */
-  apiBaseUrl: string;
+  /** Where `/api/chat/notify` lives. Same rule as `siteUrl`; defaults to `siteUrl`. */
+  apiBaseUrl?: string;
   /** Model name from the app, e.g. "iPhone 15" or "Pixel 8". Never the user-typed device name. */
   deviceLabel: string;
   /** Injected for tests; defaults to the global `fetch`. */
   fetch?: typeof fetch;
+  /**
+   * Spike / dev builds only: additionally accept `http://localhost` and `http://127.0.0.1` (any
+   * port). The production app never passes this; `notify()` posts the session token as a bearer
+   * to `apiBaseUrl`, so an arbitrary host here would be a token leak.
+   */
+  allowInsecureDev?: boolean;
 }
 
 const MAX_LABEL = 40;
 
+/** The only hosts the phones may send the session bearer to or point invite links at. */
+export const ALLOWED_HOSTS: readonly string[] = ['onepeek.io', 'www.onepeek.io'];
+const DEV_HOSTS: readonly string[] = ['localhost', '127.0.0.1'];
+
+/**
+ * Parses `value` and returns its origin (`scheme://host[:port]`, no trailing slash), or throws.
+ * Accepted: `https:` to an allowed host; with `allowInsecureDev`, also `http:`/`https:` to
+ * localhost. Credentials, a path, a query or a fragment are refused. The message names the option,
+ * never the value.
+ */
+export function checkOnePeekUrl(name: string, value: string, allowInsecureDev = false): string {
+  let u: URL;
+  try { u = new URL(value); } catch { throw new Error(`createRnEnv: ${name} is not an absolute URL`); }
+  const dev = allowInsecureDev && DEV_HOSTS.includes(u.hostname) && (u.protocol === 'http:' || u.protocol === 'https:');
+  const prod = u.protocol === 'https:' && ALLOWED_HOSTS.includes(u.hostname) && u.port === '';   // 443 only
+  if (!dev && !prod) {
+    throw new Error(`createRnEnv: ${name} must be https://onepeek.io or https://www.onepeek.io${allowInsecureDev ? ' (or http://localhost in a dev build)' : ''}`);
+  }
+  if (u.username || u.password) throw new Error(`createRnEnv: ${name} must not carry credentials`);
+  if ((u.pathname !== '/' && u.pathname !== '') || u.search || u.hash) throw new Error(`createRnEnv: ${name} must be an origin with no path, query or fragment`);
+  return u.origin;
+}
+
+/** Builds the phone's ChatEnv. Throws synchronously unless `siteUrl` and `apiBaseUrl` pass `checkOnePeekUrl`. */
 export function createRnEnv(opts: RnEnvOptions): ChatEnv {
-  const origin = opts.siteUrl.replace(/\/+$/, '');
-  const notifyUrl = `${opts.apiBaseUrl.replace(/\/+$/, '')}/api/chat/notify`;
+  const origin = checkOnePeekUrl('siteUrl', opts.siteUrl, opts.allowInsecureDev);
+  const apiBase = opts.apiBaseUrl === undefined ? origin : checkOnePeekUrl('apiBaseUrl', opts.apiBaseUrl, opts.allowInsecureDev);
+  const notifyUrl = `${apiBase}/api/chat/notify`;
   const label = (opts.deviceLabel.trim() || 'Phone').slice(0, MAX_LABEL);
   return {
     origin: () => origin,
@@ -54,30 +85,51 @@ export const LOCK_ID = 'onepeek.lock';
 export interface RnLockStore extends LockStore {
   /** Resolves once the flag has been read back from SecureStore (after a process restart). */
   ready: Promise<void>;
+  /**
+   * The persistence of the latest `set()`/`clear()`. With a synchronous SecureStore (`setItem`,
+   * expo-secure-store >= 13) `set()` has already landed when it returns and this is resolved;
+   * otherwise Panic Exit should await it before leaving the app. Never rejects.
+   */
+  readonly pending: Promise<void>;
 }
 
 /**
- * Panic lock on SecureStore. `set()` flips an in-memory flag synchronously so the UI can cover the
- * screen at once, and persists it in the background; a new instance after a restart reads it back
- * (`ready`). A set/clear made before the read lands wins over the stored value.
+ * Panic lock on SecureStore. Fails closed: `get()` reports locked until the stored flag has been
+ * read, and stays locked when the read fails (Keychain unavailable, e.g. launched while the phone
+ * is locked); the app clears it after its own unlock. `set()` flips the in-memory flag at once and
+ * persists synchronously when the module offers `setItem`, else in the background (`pending`).
+ * The flag is stored `WHEN_UNLOCKED_THIS_DEVICE_ONLY`, like the wrapping key. A set/clear made
+ * before the read lands wins over the stored value.
  */
 export function createRnLockStore(secureStore: SecureStoreLike): RnLockStore {
-  let locked = false;
+  const accessibility: SecureStoreOptionsLike = { keychainAccessible: secureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
+  let locked = true;   // until the flag is read, or when it cannot be
   let touched = false;
-  const ready = secureStore
-    .getItemAsync(LOCK_ID)
-    .then(v => { if (!touched && v === '1') locked = true; })
-    .catch(() => { /* unreadable flag: stay unlocked, the app can still lock explicitly */ });
+  let pending: Promise<void> = Promise.resolve();
+  const apply = (v: string | null) => { if (!touched) locked = v === '1'; };
+
+  let ready: Promise<void>;
+  if (typeof secureStore.getItem === 'function') {
+    try { apply(secureStore.getItem(LOCK_ID, accessibility)); } catch { /* unreadable: stay locked */ }
+    ready = Promise.resolve();
+  } else {
+    ready = secureStore.getItemAsync(LOCK_ID, accessibility).then(apply, () => { /* unreadable: stay locked */ });
+  }
+
   return {
     ready,
+    get pending() { return pending; },
     set() {
       locked = true; touched = true;
-      void secureStore.setItemAsync(LOCK_ID, '1').catch(() => {});
+      if (typeof secureStore.setItem === 'function') {
+        try { secureStore.setItem(LOCK_ID, '1', accessibility); pending = Promise.resolve(); return; } catch { /* fall back to the async write */ }
+      }
+      pending = secureStore.setItemAsync(LOCK_ID, '1', accessibility).catch(() => {});
     },
     get: () => locked,
     clear() {
       locked = false; touched = true;
-      void secureStore.deleteItemAsync(LOCK_ID).catch(() => {});
+      pending = secureStore.deleteItemAsync(LOCK_ID, accessibility).catch(() => {});
     },
   };
 }

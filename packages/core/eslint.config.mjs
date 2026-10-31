@@ -27,7 +27,7 @@ export default tseslint.config(
     rules: {
       'no-restricted-globals': [
         'error',
-        ...['window', 'navigator', 'localStorage', 'indexedDB', 'fetch', 'File', 'BroadcastChannel'].map(name => ({
+        ...['window', 'document', 'navigator', 'localStorage', 'sessionStorage', 'indexedDB', 'fetch', 'XMLHttpRequest', 'File', 'BroadcastChannel'].map(name => ({
           name,
           message: `${name} is platform-specific; the core must reach it through a port (chat/ports.ts).`,
         })),
@@ -40,10 +40,24 @@ export default tseslint.config(
     rules: {
       'no-restricted-globals': [
         'error',
-        ...['window', 'navigator', 'indexedDB', 'localStorage', 'File', 'Blob'].map(name => ({
+        ...['window', 'document', 'navigator', 'indexedDB', 'localStorage', 'sessionStorage', 'XMLHttpRequest', 'File', 'Blob'].map(name => ({
           name,
           message: `${name} does not exist on React Native; reach it through a port or the web adapter.`,
         })),
+      ],
+    },
+  },
+  {
+    // `no-restricted-globals` cannot see `globalThis.window`; close that door in both directories.
+    // (`globalThis.fetch` / `globalThis.FileReader` in adapters/rn/platform.ts are deliberate.)
+    files: ['src/chat/**/*.ts', 'src/crypto.ts', 'src/adapters/rn/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "MemberExpression[object.name='globalThis'][property.name=/^(window|document|localStorage|sessionStorage|indexedDB|XMLHttpRequest)$/]",
+          message: 'Browser-only global reached through globalThis; the core must go through a port (chat/ports.ts).',
+        },
       ],
     },
   },

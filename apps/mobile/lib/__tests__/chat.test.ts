@@ -3,7 +3,7 @@
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
-import { AUTH_REDIRECT_URL, auth, getChat, getLockStore, parseAuthCallback, resetThisPhone } from '../chat';
+import { AUTH_REDIRECT_URL, auth, getChat, getLockStore, parseAuthCallback, push, resetThisPhone } from '../chat';
 import type { FakeSqlite } from './fake-sqlite';
 
 const URL = 'https://xyzcompany.supabase.co';
@@ -11,6 +11,9 @@ const ANON = 'anon-key-for-tests';
 const USER = { id: '10000000-0000-4000-8000-000000000001', email: 'owner@example.test', is_anonymous: false };
 const REFRESH = 'rt-9f8e7d6c5b4a3f2e1d0c-REFRESH-TOKEN';
 const ACCESS = 'eyJhbGciOiJIUzI1NiJ9.ACCESS-TOKEN-PAYLOAD-7f3a9c1d2e4b.SIGNATURE-0a1b2c3d4e5f';
+const PUSH_TOKEN = 'apns-7b2e9c4d1f8a6e3b5c0d9f2a4e7b1c8d6a3f5e9b2c4d7a1f8e6b3c5d9a2f4e7b';
+const PUSH_TOKEN_2 = 'apns-ROTATED-0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d';
+const HOUR = 60 * 60 * 1000;
 
 jest.mock('expo-constants', () => ({
   __esModule: true,
@@ -39,7 +42,7 @@ jest.mock('@supabase/supabase-js', () => {
   return createFakeSupabase(jest.fn);
 });
 
-type Mocked = { __calls: { method: string; args: unknown[] }[]; __clients: Record<string, unknown>[] };
+type Mocked = { __calls: { method: string; args: unknown[] }[]; __clients: Record<string, unknown>[]; __otp: { email: string }; __failRpc: Set<string> };
 const sbMock = jest.requireMock('@supabase/supabase-js') as Mocked & { createClient: jest.Mock };
 const sqliteFake = (SQLite as unknown as { __fake: FakeSqlite }).__fake;
 const secureItems = (SecureStore as unknown as { __items: Map<string, string> }).__items;
@@ -57,9 +60,14 @@ function atRest(): string {
   return [...rows, ...secure].join('\n');
 }
 const callsOf = (method: string) => sbMock.__calls.filter(c => c.method === method);
+const rpcsOf = (fn: string) => callsOf('rpc').filter(c => c.args[0] === fn);
+/** Every string that reached the Supabase fake outside of RPC arguments. */
+const nonRpcCalls = () => JSON.stringify(sbMock.__calls.filter(c => c.method !== 'rpc'));
 
 beforeEach(() => {
   sbMock.__calls.length = 0;
+  sbMock.__otp.email = USER.email;
+  sbMock.__failRpc.clear();
 });
 
 describe('getChat / getLockStore', () => {
@@ -178,13 +186,90 @@ describe('auth', () => {
       expect(await auth.getSession()).toBeNull();
     });
 
-    it('finishes an email link carrying token_hash + type with verifyOtp (query or fragment)', async () => {
-      expect(await auth.completeFromUrl('onepeek://auth#token_hash=pkce_abc123&type=magiclink')).toBe(true);
-      expect(callsOf('verifyOtp')[0].args).toEqual([{ token_hash: 'pkce_abc123', type: 'magiclink' }]);
-      await auth.signOut();
-      expect(await auth.completeFromUrl('onepeek://auth?token_hash=h2&type=email')).toBe(true);
-      expect(callsOf('verifyOtp')[1].args).toEqual([{ token_hash: 'h2', type: 'email' }]);
-      await auth.signOut();
+    // W1-1: a token_hash is a bearer, not bound to this device like the PKCE code. The app accepts it
+    // only for the address sendEmailLink() asked for on this phone, and only once.
+    describe('email link (token_hash)', () => {
+      it('refuses a token_hash when no email link was requested on this phone, without calling verifyOtp', async () => {
+        expect(await auth.completeFromUrl('onepeek://auth?token_hash=pkce_abc123&type=magiclink')).toBe(false);
+        expect(callsOf('verifyOtp')).toEqual([]);
+        expect(await auth.getSession()).toBeNull();
+      });
+
+      it('finishes the link for the requested address with verifyOtp (query or fragment), case-insensitively, and only once', async () => {
+        await auth.sendEmailLink('  Owner@Example.test ');
+        expect(await auth.completeFromUrl('onepeek://auth#token_hash=pkce_abc123&type=magiclink')).toBe(true);
+        expect(callsOf('verifyOtp')[0].args).toEqual([{ token_hash: 'pkce_abc123', type: 'magiclink' }]);
+        expect(await auth.getSession()).toMatchObject({ email: USER.email, isAnonymous: false });
+        await auth.signOut();
+        // The pending address was consumed: the same link again is refused before Supabase is asked.
+        expect(await auth.completeFromUrl('onepeek://auth#token_hash=pkce_abc123&type=magiclink')).toBe(false);
+        expect(callsOf('verifyOtp')).toHaveLength(1);
+
+        await auth.sendEmailLink('owner@example.test');
+        expect(await auth.completeFromUrl('onepeek://auth?token_hash=h2&type=email')).toBe(true);
+        expect(callsOf('verifyOtp')[1].args).toEqual([{ token_hash: 'h2', type: 'email' }]);
+        await auth.signOut();
+      });
+
+      it.each(['recovery', 'signup', 'invite', 'email_change', 'sms', 'phone_change', 'MAGICLINK', ''])('refuses type=%s even with a pending address', async (type) => {
+        await auth.sendEmailLink('owner@example.test');
+        expect(await auth.completeFromUrl(`onepeek://auth?token_hash=h&type=${type}`)).toBe(false);
+        expect(callsOf('verifyOtp')).toEqual([]);
+        await auth.signOut();
+      });
+
+      it("signs out again when the link yields another account's session (login CSRF)", async () => {
+        await auth.sendEmailLink('me@x.test');
+        sbMock.__otp.email = 'other@evil.test';
+        expect(await auth.completeFromUrl('onepeek://auth?token_hash=attackers-hash&type=magiclink')).toBe(false);
+        expect(callsOf('verifyOtp')).toHaveLength(1);
+        expect(callsOf('signOut')[0].args).toEqual([{ scope: 'local' }]);
+        expect(await auth.getSession()).toBeNull();
+        expect(sqliteFake.files.get('onepeek-auth.db')!.sealed.size).toBe(0);
+        // The pending address was consumed by the attempt: a second link needs a new request.
+        sbMock.__otp.email = 'me@x.test';
+        expect(await auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(false);
+        expect(callsOf('verifyOtp')).toHaveLength(1);
+      });
+
+      it('a session without an email never matches', async () => {
+        await auth.sendEmailLink('me@x.test');
+        sbMock.__otp.email = '';
+        expect(await auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(false);
+        expect(callsOf('signOut')).toHaveLength(1);
+        expect(await auth.getSession()).toBeNull();
+      });
+
+      it('the pending address expires with the OTP lifetime (1 h)', async () => {
+        const t0 = Date.now();
+        const now = jest.spyOn(Date, 'now');
+        try {
+          now.mockReturnValue(t0);
+          await auth.sendEmailLink('me@x.test');
+          now.mockReturnValue(t0 + HOUR + 1);
+          expect(await auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(false);
+          expect(callsOf('verifyOtp')).toEqual([]);
+          // Expired means gone: back in time, the address is still not accepted.
+          now.mockReturnValue(t0 + 1);
+          expect(await auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(false);
+          expect(callsOf('verifyOtp')).toEqual([]);
+          // Just inside the lifetime is fine.
+          await auth.sendEmailLink('me@x.test');
+          now.mockReturnValue(t0 + HOUR);
+          sbMock.__otp.email = 'me@x.test';
+          expect(await auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(true);
+        } finally {
+          now.mockRestore();
+        }
+        await auth.signOut();
+      });
+
+      it('sign-out forgets the pending address (the recovery reset too: see resetThisPhone)', async () => {
+        await auth.sendEmailLink('me@x.test');
+        await auth.signOut();
+        expect(await auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(false);
+        expect(callsOf('verifyOtp')).toEqual([]);
+      });
     });
 
     it('refuses provider errors and implicit-flow tokens in the fragment', async () => {
@@ -217,10 +302,118 @@ describe('auth', () => {
   });
 });
 
+// W1-2: the push token reaches exactly two places (the RPC and the sealed auth store) and is forgotten
+// server-side before this phone's session is revoked.
+describe('push', () => {
+  const PUSH_ROW = 'auth:onepeek.push.token';
+  const authRows = () => [...sqliteFake.files.get('onepeek-auth.db')!.sealed.keys()].sort();
+
+  it('register calls register_push_device with the token and keeps it sealed, nowhere else', async () => {
+    expect(await auth.completeFromUrl('onepeek://auth?code=good-code')).toBe(true);
+    expect(await push.current()).toBe(false);
+    await push.register('ios', `  ${PUSH_TOKEN} `);
+    expect(rpcsOf('register_push_device').map(c => c.args[1])).toEqual([{ p_platform: 'ios', p_token: PUSH_TOKEN }]);
+    expect(await push.current()).toBe(true);
+    expect(authRows()).toEqual([PUSH_ROW, 'auth:sb-xyzcompany-auth-token']);
+    // Sealed at rest, absent from SecureStore, absent from every non-RPC call into supabase-js.
+    const disk = atRest();
+    for (const form of [PUSH_TOKEN, hex(PUSH_TOKEN), b64(PUSH_TOKEN)]) expect(disk).not.toContain(form);
+    expect([...secureItems.values()].join('\n')).not.toContain(PUSH_TOKEN);
+    expect(nonRpcCalls()).not.toContain(PUSH_TOKEN);
+    await auth.signOut();
+  });
+
+  it('register with a rotated token forgets the previous one', async () => {
+    expect(await auth.completeFromUrl('onepeek://auth?code=good-code')).toBe(true);
+    await push.register('android', PUSH_TOKEN);
+    await push.register('android', PUSH_TOKEN_2);
+    expect(rpcsOf('register_push_device').map(c => c.args[1])).toEqual([
+      { p_platform: 'android', p_token: PUSH_TOKEN },
+      { p_platform: 'android', p_token: PUSH_TOKEN_2 },
+    ]);
+    expect(rpcsOf('unregister_push_device').map(c => c.args[1])).toEqual([{ p_token: PUSH_TOKEN }]);
+    sbMock.__calls.length = 0;
+    await push.register('android', PUSH_TOKEN_2);   // same token again: nothing to forget
+    expect(rpcsOf('unregister_push_device')).toEqual([]);
+    await auth.signOut();
+    expect(rpcsOf('unregister_push_device').map(c => c.args[1])).toEqual([{ p_token: PUSH_TOKEN_2 }]);
+  });
+
+  it('a failed registration stores nothing', async () => {
+    expect(await auth.completeFromUrl('onepeek://auth?code=good-code')).toBe(true);
+    sbMock.__failRpc.add('register_push_device');
+    await expect(push.register('ios', PUSH_TOKEN)).rejects.toThrow();
+    expect(await push.current()).toBe(false);
+    expect(authRows()).toEqual(['auth:sb-xyzcompany-auth-token']);
+    await auth.signOut();
+  });
+
+  it('unregister calls unregister_push_device with the stored token and clears it; a second call is a no-op', async () => {
+    expect(await auth.completeFromUrl('onepeek://auth?code=good-code')).toBe(true);
+    await push.register('ios', PUSH_TOKEN);
+    sbMock.__calls.length = 0;
+    await push.unregister();
+    expect(rpcsOf('unregister_push_device').map(c => c.args[1])).toEqual([{ p_token: PUSH_TOKEN }]);
+    expect(await push.current()).toBe(false);
+    expect(authRows()).toEqual(['auth:sb-xyzcompany-auth-token']);
+    await push.unregister();
+    expect(rpcsOf('unregister_push_device')).toHaveLength(1);
+    expect(nonRpcCalls()).not.toContain(PUSH_TOKEN);
+    await auth.signOut();
+  });
+
+  it('signOut unregisters the token before revoking the session', async () => {
+    expect(await auth.completeFromUrl('onepeek://auth?code=good-code')).toBe(true);
+    await push.register('ios', PUSH_TOKEN);
+    sbMock.__calls.length = 0;
+    await auth.signOut();
+    const order = sbMock.__calls.map(c => (c.method === 'rpc' ? `rpc:${c.args[0]}` : c.method));
+    expect(order.indexOf('rpc:unregister_push_device')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('rpc:unregister_push_device')).toBeLessThan(order.indexOf('signOut'));
+    expect(callsOf('signOut')[0].args).toEqual([{ scope: 'local' }]);
+    expect(await auth.getSession()).toBeNull();
+    expect(await push.current()).toBe(false);
+    expect(authRows()).toEqual([]);
+    expect(nonRpcCalls()).not.toContain(PUSH_TOKEN);
+  });
+
+  it('signOut still signs out when the unregister RPC fails, and the local token is gone', async () => {
+    expect(await auth.completeFromUrl('onepeek://auth?code=good-code')).toBe(true);
+    await push.register('ios', PUSH_TOKEN);
+    sbMock.__failRpc.add('unregister_push_device');
+    await auth.signOut();
+    expect(rpcsOf('unregister_push_device')).toHaveLength(1);
+    expect(callsOf('signOut')[0].args).toEqual([{ scope: 'local' }]);
+    expect(await auth.getSession()).toBeNull();
+    expect(await push.current()).toBe(false);
+  });
+
+  it('signOut with no registered token calls no push RPC', async () => {
+    await auth.signInAsGuest();
+    sbMock.__calls.length = 0;
+    await auth.signOut();
+    expect(callsOf('rpc')).toEqual([]);
+    expect(callsOf('signOut')).toHaveLength(1);
+  });
+
+  it('resetThisPhone unregisters the token before the local sign-out', async () => {
+    expect(await auth.completeFromUrl('onepeek://auth?code=good-code')).toBe(true);
+    await push.register('ios', PUSH_TOKEN);
+    sbMock.__calls.length = 0;
+    await resetThisPhone();
+    const order = sbMock.__calls.map(c => (c.method === 'rpc' ? `rpc:${c.args[0]}` : c.method));
+    expect(order.indexOf('rpc:unregister_push_device')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('rpc:unregister_push_device')).toBeLessThan(order.indexOf('signOut'));
+    expect(sqliteFake.files.get('onepeek-auth.db')!.sealed.size).toBe(0);
+    expect(await push.current()).toBe(false);
+  });
+});
+
 describe('resetThisPhone', () => {
   it('signs out locally, wipes both sealed stores and the lock, and the next getChat() rebuilds', async () => {
     const before = getChat();
     expect(await auth.completeFromUrl('onepeek://auth?code=good-code')).toBe(true);
+    await auth.sendEmailLink('me@x.test');   // a pending email link: forgotten by the reset
     await before.keystore.put('room:r1:state', new Uint8Array([1, 2, 3]));
     getLockStore().set();
     expect(sqliteFake.files.get('onepeek-chat.db')!.sealed.size).toBeGreaterThan(0);
@@ -245,6 +438,8 @@ describe('resetThisPhone', () => {
     expect(after).not.toBe(before);
     expect(sbMock.createClient.mock.calls.length).toBe(builds + 1);
     expect(await auth.getSession()).toBeNull();
+    expect(await auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(false);
+    expect(callsOf('verifyOtp')).toEqual([]);
     // The new client starts clean and can store again (a fresh wrapping key is provisioned).
     await after.keystore.put('room:r2:state', new Uint8Array([4]));
     expect(await after.keystore.get('room:r2:state')).toEqual(new Uint8Array([4]));
@@ -269,5 +464,56 @@ describe('without Supabase configuration', () => {
       await resetThisPhone();
     }
     expect(sbMock.createClient).toHaveBeenCalled();
+  });
+
+  // W1-6: the Supabase host is where the refresh token and every RPC go. Anything but
+  // https://<ref>.supabase.co (the fetch lint's pattern) gets no client at all.
+  it.each([
+    'https://evil.example',
+    'https://evil.example/xyzcompany.supabase.co',
+    'https://xyzcompany.supabase.co.evil.example',
+    'https://xyzcompany.supabase.co/',
+    'https://xyzcompany.supabase.co/auth/v1',
+    'https://xyzcompany.supabase.co:443',
+    'https://xyzcompany.supabase.co?x=1',
+    'https://xyzcompany.supabase.co#f',
+    'http://xyzcompany.supabase.co',
+    'https://user@xyzcompany.supabase.co',
+    'https://XYZCOMPANY.supabase.co',
+    'https://.supabase.co',
+    'xyzcompany.supabase.co',
+  ])('%s is not a Supabase URL: no client is built and every call is not_configured', async (bad) => {
+    const extra = Constants.expoConfig!.extra as Record<string, string>;
+    const saved = { ...extra };
+    await resetThisPhone();
+    extra.supabaseUrl = bad;
+    const builds = sbMock.createClient.mock.calls.length;
+    try {
+      expect(getChat()).toBeTruthy();
+      expect(sbMock.createClient.mock.calls.length).toBe(builds);
+      await expect(auth.getSession()).rejects.toThrow('not_configured');
+      await expect(auth.sendEmailLink('owner@example.test')).rejects.toThrow('not_configured');
+      await expect(getChat().myRooms()).rejects.toThrow('not_configured');
+      expect(JSON.stringify(sbMock.__calls)).not.toContain('evil.example');
+    } finally {
+      Object.assign(extra, saved);
+      await resetThisPhone();
+    }
+  });
+
+  it('the exact project host is accepted, surrounding whitespace trimmed', async () => {
+    const extra = Constants.expoConfig!.extra as Record<string, string>;
+    const saved = { ...extra };
+    await resetThisPhone();
+    extra.supabaseUrl = '  https://xyzcompany.supabase.co\n';
+    const builds = sbMock.createClient.mock.calls.length;
+    try {
+      getChat();
+      expect(sbMock.createClient.mock.calls.length).toBe(builds + 1);
+      expect(sbMock.createClient.mock.calls[builds][0]).toBe(URL);
+    } finally {
+      Object.assign(extra, saved);
+      await resetThisPhone();
+    }
   });
 });

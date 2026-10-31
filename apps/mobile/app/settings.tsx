@@ -1,7 +1,8 @@
 // Settings (design 12). Account, privacy and security (lock state from the security module, Lock
 // now, Panic Exit), chats (notifications through `push`, devices with chat keys), what each
 // protection honestly does (PROTECTION_COPY), sign out, reset this phone, version. The push token
-// is opaque: it goes from expo-notifications to `push.register` and is never shown or logged.
+// is opaque: it goes from expo-notifications to the lib's `push.register` and is never shown or logged.
+// Panic Exit is a single tap, as on the web: a mistaken tap only costs an unlock.
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
@@ -20,9 +21,8 @@ import { Screen } from '../components/Screen';
 import { SectionLabel } from '../components/SectionLabel';
 import { Text } from '../components/Text';
 import { colors, radii, spacing, touchTarget } from '../theme';
-import { auth, type AuthSession } from '@/lib/chat';
+import { auth, push, type AuthSession } from '@/lib/chat';
 import { errorCode, friendlyError } from '@/lib/format';
-import { getPush } from '@/lib/push';
 
 type Device = { id: string; label: string; created_at: string; last_seen: string; revoked_at: string | null };
 
@@ -42,7 +42,6 @@ export default function SettingsScreen() {
   const [thisDevice, setThisDevice] = useState('');
   const [confirmDevice, setConfirmDevice] = useState<Device | null>(null);
   const [deviceBusy, setDeviceBusy] = useState<string | null>(null);
-  const [confirmPanic, setConfirmPanic] = useState(false);
 
   const loadDevices = useCallback(async () => {
     try {
@@ -54,7 +53,7 @@ export default function SettingsScreen() {
 
   useEffect(() => {
     auth.getSession().then(setSession).catch(() => setSession(null));
-    getPush().current().then(setNotify).catch(() => {});
+    push.current().then(setNotify).catch(() => {});
     Promise.resolve().then(loadDevices);
   }, [loadDevices]);
 
@@ -72,10 +71,10 @@ export default function SettingsScreen() {
         const perm = await Notifications.requestPermissionsAsync();
         if (!perm.granted) { setNotifyErr('Notifications are off for OnePeek in the phone settings.'); return; }
         const token = await Notifications.getDevicePushTokenAsync();
-        await getPush().register(Platform.OS === 'ios' ? 'ios' : 'android', String(token.data));
+        await push.register(Platform.OS === 'ios' ? 'ios' : 'android', String(token.data));
         setNotify(true);
       } else {
-        await getPush().unregister();
+        await push.unregister();
         setNotify(false);
       }
     } catch (e) {
@@ -112,17 +111,8 @@ export default function SettingsScreen() {
           trailing={<Badge label={deviceInsecure ? 'Off' : 'Always on'} tone={deviceInsecure ? 'danger' : 'secure'} />} testID="settings.lock" />
         <ListRow title="Screen protection" subtitle={Platform.OS === 'android' ? 'Screenshots and recordings blocked in chats' : 'Screenshots reported to the chat; recordings hidden'} trailing={<Badge label={Platform.OS === 'android' ? 'Always on' : 'Reported'} tone="secure" />} testID="settings.protection" />
         <ListRow title="Lock now" subtitle="Hide chats until you unlock with the phone" onPress={lockNow} chevron testID="settings.lockNow" />
-        <ListRow title="Panic Exit" subtitle="Chats lock on this device until you unlock them. Nothing is deleted." tone="danger" onPress={() => setConfirmPanic(true)} chevron divider={false} testID="panic" />
+        <ListRow title="Panic Exit" subtitle="Chats lock on this device until you unlock them. Nothing is deleted." tone="danger" onPress={panic} chevron divider={false} testID="panic" />
       </View>
-      {confirmPanic ? (
-        <View style={styles.confirmBox} testID="panic.confirmBox">
-          <Text variant="sub">Lock every chat on this phone now? The app stays locked until you unlock it with the phone, even after a restart.</Text>
-          <View style={styles.rowBtns}>
-            <Button title="Panic Exit" variant="destructive" small block={false} style={styles.flex} onPress={() => { setConfirmPanic(false); panic(); }} testID="panic.confirm" />
-            <Button title="Cancel" variant="ghost" small block={false} style={styles.flex} onPress={() => setConfirmPanic(false)} testID="panic.cancel" />
-          </View>
-        </View>
-      ) : null}
 
       <SectionLabel>Chats</SectionLabel>
       <View style={styles.card}>

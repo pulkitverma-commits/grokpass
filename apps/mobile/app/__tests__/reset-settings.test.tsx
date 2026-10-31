@@ -75,12 +75,11 @@ test('Notifications: a refused permission shows a notice and registers nothing',
   expect(push.register).not.toHaveBeenCalled();
 });
 
-test('Panic Exit asks once, then calls panic(); Lock now calls lockNow()', async () => {
+test('Panic Exit is a single tap that calls panic(); Lock now calls lockNow()', async () => {
   await renderScreen(<SettingsScreen />);
   await fireEvent.press(await screen.findByTestId('panic'));
-  expect(mockSecurity.panic).not.toHaveBeenCalled();
-  await fireEvent.press(screen.getByTestId('panic.confirm'));
   expect(mockSecurity.panic).toHaveBeenCalledTimes(1);
+  expect(screen.queryByTestId('panic.confirm')).toBeNull();
   await fireEvent.press(screen.getByTestId('settings.lockNow'));
   expect(mockSecurity.lockNow).toHaveBeenCalledTimes(1);
 });

@@ -26,6 +26,8 @@ test('a link the core rejects shows a retry, not the URL', async () => {
   auth.completeFromUrl.mockResolvedValueOnce(false);
   await render(<AuthCallbackScreen />);
   expect(await screen.findByTestId('auth.error')).toBeTruthy();
+  expect(screen.getByText(/requested from another phone/)).toBeTruthy();
+  expect(screen.getByText('Request a new link')).toBeTruthy();
   expect(router.replace).not.toHaveBeenCalled();
   expect(JSON.stringify(screen.toJSON())).not.toContain('SECRET_TOKEN');
 });

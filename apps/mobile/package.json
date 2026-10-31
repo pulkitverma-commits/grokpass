@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
+    "@expo-google-fonts/geist-mono": "^0.4.3",
     "@expo-google-fonts/questrial": "^0.4.1",
     "@onepeek/core": "*",
     "@supabase/supabase-js": "^2.118.0",

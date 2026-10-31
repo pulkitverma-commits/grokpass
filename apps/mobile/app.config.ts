@@ -4,6 +4,15 @@ import type { ConfigContext, ExpoConfig } from 'expo/config';
 
 const BUNDLE_ID = 'io.onepeek.app';
 
+// EXPO_PUBLIC_E2E=1 makes the invite sheet render the full invite link (a bearer token) so Maestro
+// can read it. That must never reach a build people install from a store or a preview link
+// (security review W2-6), so the config refuses to evaluate for those EAS profiles.
+const E2E = process.env.EXPO_PUBLIC_E2E === '1';
+const PROFILE = process.env.EAS_BUILD_PROFILE ?? '';
+if (E2E && (PROFILE === 'preview' || PROFILE === 'production')) {
+  throw new Error(`EXPO_PUBLIC_E2E=1 is not allowed for the "${PROFILE}" build profile`);
+}
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'OnePeek',

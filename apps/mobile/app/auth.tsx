@@ -32,7 +32,7 @@ export default function AuthCallbackScreen() {
       <View style={styles.body}>
         {failed ? (
           <>
-            <Notice tone="error" icon="alert" text="That sign-in link didn’t work. It may have expired, already been used, or been requested from another phone. Links only work on the phone that asked for them." testID="auth.error" />
+            <Notice tone="error" icon="alert" text="That sign-in link didn’t work. It may have expired, already been used, been requested from another phone, or OnePeek was closed in between. Ask for a new link on this phone." testID="auth.error" />
             <Button title="Request a new link" onPress={() => router.replace('/sign-in')} testID="auth.retry" />
           </>
         ) : (

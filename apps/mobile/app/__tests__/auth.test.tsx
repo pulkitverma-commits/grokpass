@@ -26,7 +26,8 @@ test('a link the core rejects shows a retry, not the URL', async () => {
   auth.completeFromUrl.mockResolvedValueOnce(false);
   await render(<AuthCallbackScreen />);
   expect(await screen.findByTestId('auth.error')).toBeTruthy();
-  expect(screen.getByText(/requested from another phone/)).toBeTruthy();
+  // Honest copy (W2-10): the pending address lives in memory, so a closed app is the common cause.
+  expect(screen.getByText(/requested from another phone, or OnePeek was closed in between\. Ask for a new link on this phone\./)).toBeTruthy();
   expect(screen.getByText('Request a new link')).toBeTruthy();
   expect(router.replace).not.toHaveBeenCalled();
   expect(JSON.stringify(screen.toJSON())).not.toContain('SECRET_TOKEN');

@@ -10,11 +10,14 @@ export const router = {
   canGoBack: jest.fn(() => true),
 };
 
-export const resetRouter = () => { router.push.mockReset(); router.replace.mockReset(); router.back.mockReset(); router.canGoBack.mockReset().mockReturnValue(true); };
+export const resetRouter = () => { router.push.mockReset(); router.replace.mockReset(); router.back.mockReset(); router.canGoBack.mockReset().mockReturnValue(true); segments = []; };
 
 export const useRouter = () => router;
 export const useFocusEffect = (cb: () => void | (() => void)) => { useEffect(cb, [cb]); };
-export const useSegments = () => [] as string[];
+let segments: string[] = [];
+/** The route segments `useSegments()` reports (layout tests). Reset to [] by resetRouter(). */
+export const setSegments = (s: string[]) => { segments = s; };
+export const useSegments = () => segments;
 export const usePathname = () => '/';
 export let localParams: Record<string, string> = {};
 export const setLocalParams = (p: Record<string, string>) => { localParams = p; };

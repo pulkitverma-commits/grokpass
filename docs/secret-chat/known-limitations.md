@@ -36,3 +36,16 @@ Plain statements of what Secret Chat does not do. The public page (/secret-chat)
    touching the ciphertext (they still cannot read, forge or move it). Accepted for now because the
    server enforces its own expiry independently and such an attacker already controls the device; a
    v2 format would bind the stamp as well (`packages/core/src/chat/keystore.ts`).
+10. **Photos keep their embedded details.** The phone app sends a picked photo as the photo library hands
+   it over (re-encoded by the picker, but with its EXIF metadata, including GPS location and camera
+   model, wherever the phone keeps it). OnePeek does not strip it in this build; the attach sheet says
+   so. Use the phone's own "remove location" option when sharing from the library, or send a screenshot
+   of the photo, if the location matters more than the image quality.
+11. **Keyboards.** In Secret rooms the phone app's composer turns off autocorrect, spell check,
+   auto-capitalisation and autofill so a draft is not offered to the keyboard's personal dictionary.
+   A third-party keyboard still sees every keystroke; the app cannot change that. Use the system
+   keyboard for Secret rooms if that matters.
+12. **Sent and opened files on the sender's phone.** The phone app deletes the picker's plaintext copy of a
+   sent file once the send has settled, and sweeps the picker and viewer cache folders on every launch
+   and on "Reset chats on this phone". The original photo stays in the phone's photo library, and a
+   document picked from Files/iCloud Drive stays where it was; both are the user's, not OnePeek's.

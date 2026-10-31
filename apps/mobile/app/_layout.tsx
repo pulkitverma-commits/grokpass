@@ -12,8 +12,10 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ChatProvider } from '../components/ChatProvider';
 import { LockedScreen } from '../components/LockedScreen';
+import { PushRefresher } from '../components/PushRefresher';
 import { colors, fontAssets } from '../theme';
 import { auth, type AuthSession } from '@/lib/chat';
+import { clearPickerCaches } from '@/lib/files';
 
 installRnCrypto();
 
@@ -46,7 +48,16 @@ function useSession() {
   return session;
 }
 
-/** Sends signed-out users to Welcome and signed-in users away from the sign-in screens. */
+/**
+ * Sends signed-out users to Welcome and signed-in users away from the sign-in screens.
+ *
+ * Invariant (review W1-1 / W2-9): AuthGate never redirects away from `auth` on a session change.
+ * `auth.completeFromUrl` installs the session an email link carries BEFORE it has checked that the
+ * link was requested on this phone, and signs a mismatched session out a moment later; in between,
+ * `onChange` reports a session that may belong to someone else. The only exit from `auth` is the
+ * screen's own `router.replace('/')` once completeFromUrl has returned `ok`. Do not add a
+ * "signed in → go home" rule that fires on `auth`, and do not mount a syncing screen there.
+ */
 function AuthGate({ session }: { session: AuthSession | null }) {
   const segments = useSegments();
   const router = useRouter();
@@ -65,11 +76,15 @@ export default function RootLayout() {
   useEffect(() => {
     if (ready) SplashScreen.hideAsync().catch(() => {});
   }, [ready]);
+  // Plaintext left in the cache by a kill mid-send or mid-view (picker copies, viewer temp files) goes
+  // on every launch (reviews W2-2, W2-3).
+  useEffect(() => { clearPickerCaches().catch(() => {}); }, []);
   if (!ready) return null;
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bg }}>
       <SafeAreaProvider>
         <ChatProvider>
+          <PushRefresher />
           <SecurityProvider cover={<LockedScreen />}>
             <StatusBar style="light" />
             <AuthGate session={session} />

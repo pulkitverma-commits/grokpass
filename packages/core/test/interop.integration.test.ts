@@ -12,7 +12,7 @@ import * as mls from '../src/chat/mls';
 import type { ChatEnv, FileSource } from '../src/chat/ports';
 import { fromB64Url } from '../src/crypto';
 import { createWebPlatform } from '../src/adapters/web/platform';
-import { createRnKeyStore, WRAP_KEY_ID } from '../src/adapters/rn/keystore';
+import { createRnKeyStore } from '../src/adapters/rn/keystore';
 import { createRnPlatform, createRnLockStore, LOCK_ID } from '../src/adapters/rn/platform';
 import {
   createSecureStoreMock, createSqliteMock, createFetchRecorder, hasNodeSqlite, WHEN_UNLOCKED_THIS_DEVICE_ONLY,
@@ -54,6 +54,8 @@ type Device = {
   run<T>(fn: (c: ChatClient) => Promise<T>): Promise<T>;
   // Phone only.
   secure?: SecureStoreMock;
+  /** This phone's SecureStore entry for the wrapping key (one per simulated device: the cache is process-wide per entry). */
+  wrapKeyId?: string;
   sqlite?: SqliteMock;
   fetchCalls?: ReturnType<typeof createFetchRecorder>['calls'];
 };
@@ -87,7 +89,8 @@ async function device(kind: Kind, name: string, anonymous = false): Promise<Devi
   const secure = createSecureStoreMock(log);
   const sqlite = createSqliteMock(log);
   const rec = createFetchRecorder();
-  const keystore = createRnKeyStore({ secureStore: secure.module, sqlite: sqlite.module, dbName: ':memory:' });
+  const wrapKeyId = `onepeek.wrap.${userId}`;
+  const keystore = createRnKeyStore({ secureStore: secure.module, sqlite: sqlite.module, dbName: ':memory:', wrapKeyId });
   const platform = createRnPlatform({
     supabase: fake, keystore, secureStore: secure.module,
     siteUrl: PHONE_ORIGIN, apiBaseUrl: PHONE_ORIGIN, deviceLabel: 'iPhone 15', fetch: rec.fetch,
@@ -95,7 +98,7 @@ async function device(kind: Kind, name: string, anonymous = false): Promise<Devi
   const notify = vi.fn<ChatEnv['notify']>(platform.env.notify);
   platform.env = { ...platform.env, notify };
   const c = createChatClient(platform);
-  return { ...base, c, notify, origin: PHONE_ORIGIN, run: fn => fn(c), secure, sqlite, fetchCalls: rec.calls };
+  return { ...base, c, notify, origin: PHONE_ORIGIN, run: fn => fn(c), secure, wrapKeyId, sqlite, fetchCalls: rec.calls };
 }
 
 const tokenOf = (link: string) => link.split('#')[1];
@@ -122,7 +125,7 @@ function secureDump(d: Device): string {
   return [...d.secure!.items].map(([k, v]) => `${k}=${v}`).join('\n');
 }
 function wrapKeyBytes(d: Device): Uint8Array {
-  const v = d.secure!.items.get(WRAP_KEY_ID);
+  const v = d.secure!.items.get(d.wrapKeyId!);
   expect(v, `${d.name} has a wrapping key in SecureStore`).toBeTruthy();
   return fromB64Url(v!);
 }
@@ -196,8 +199,8 @@ async function sweep(devices: Device[], extra: Forbidden[] = [], tokens: string[
   for (const d of phones) {
     expectClean(sealedDump(d), [...secrets, ...wraps, ...tokenList, ...codeList], `${d.name} SQLite`);
     expectClean(secureDump(d), [...secrets, ...tokenList, ...codeList], `${d.name} SecureStore`);
-    expect([...d.secure!.items.keys()].every(k => k === WRAP_KEY_ID || k === LOCK_ID)).toBe(true);
-    expect(d.secure!.setOptions.get(WRAP_KEY_ID)).toEqual({ keychainAccessible: WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+    expect([...d.secure!.items.keys()].every(k => k === d.wrapKeyId || k === LOCK_ID)).toBe(true);
+    expect(d.secure!.setOptions.get(d.wrapKeyId!)).toEqual({ keychainAccessible: WHEN_UNLOCKED_THIS_DEVICE_ONLY });
   }
 
   // 5. notify(roomId, token) and nothing else; on the phone each call is one POST {room} with the bearer.

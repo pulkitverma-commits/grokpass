@@ -22,7 +22,7 @@ installRnCrypto();
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 /** Routes a signed-out user may see. Joining is public (guests), and the recovery screen must always open. */
-const PUBLIC = new Set(['welcome', 'sign-in', 'auth', 'join', 'chat', 'reset', 'spike']);
+const PUBLIC = new Set(['welcome', 'sign-in', 'auth', 'join', 'chat', 'reset']);
 
 function useSession() {
   const [session, setSession] = useState<AuthSession | null | undefined>(undefined);

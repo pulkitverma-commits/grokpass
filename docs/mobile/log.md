@@ -4,6 +4,16 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-10-31
 
+- Wave 2 review fixes merged: backend W2-5 (`push_devices` grants select/delete only) and the four §1.5 test gaps
+  (push-devices 17 tests, alerts.native 37: fixture sweep over every request, credentials never in errors); mobile-ui
+  W2-1 (Secret reply preview content-free, cleared on screenshot/inactive), W2-2/W2-3 (picker copies deleted after
+  send/cancel/oversize, caches swept on launch and reset), W2-4 (EXIF sentence; `expo-image-manipulator` deferred to
+  Phase 3), W2-7 (Secret composer: no autocorrect/spellcheck/autofill), W2-8 (`PushRefresher` re-registers at start and
+  on rotation, never prompts), W2-9 (AuthGate invariant + test), W2-10 (copy). Decisions: Secret reply dropped on every
+  inactive (safer default); re-register after sign-in added in Phase 2 (W2-8 follow-up). Web parity note for the
+  human: the website's reply preview (`app/chat/r/[id]/page.tsx`) shows Secret text the same way (W2-1); a one-line
+  web fix with a web test is recommended but outside the mobile scope. Totals: web 123, core 194, mobile 193; iOS
+  bundle 2577 modules. Final verification review running.
 - qa wave 2 merged: W1-10 closed (expo-insights/expo-updates imports; off-device sinks Clipboard/Share/Linking/
   WebBrowser/Alert/WebSocket/XHR flagged with secret-named arguments; `redact` arrays), TESTIDS reconciled to the code
   (168 ids), flows 03–09 on real ids, new 10 (notifications) and 11 (safety number), test plan v1.2 (§1.5 review of the

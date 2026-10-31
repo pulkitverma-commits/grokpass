@@ -1,0 +1,46 @@
+# 06 Device A: attach a photo as view-once and send. The system picker is not under the testID
+# contract; the first photo is picked by the OS label (seed one with `xcrun simctl addmedia` /
+# `adb push` before the run). TODO(testid): attach.photo, attach.viewOnce, attach.send (proposed).
+# Dry until those ids exist and a device run confirms the picker labels.
+appId: io.onepeek.app
+name: 06-file-view-once
+tags:
+  - ios
+  - android
+  - two-device
+  - device-a
+---
+- runFlow: _common/open-room.yaml
+# The reply from 05.peer closes the round trip.
+- extendedWaitUntil:
+    visible:
+      id: "msg\\..+"
+      index: 1
+    timeout: 30000
+- tapOn:
+    id: "room.attach"
+- tapOn:
+    id: "attach.photo"
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn:
+          text: "Photo.*"
+          index: 0
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn:
+          text: "Photo.*"
+          index: 0
+- tapOn:
+    id: "attach.viewOnce"
+- tapOn:
+    id: "attach.send"
+- extendedWaitUntil:
+    visible:
+      id: "msg\\..+"
+      index: 2
+    timeout: 30000

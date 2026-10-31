@@ -1,0 +1,24 @@
+# 08 (peer) Device B: the burned room disappears here too, and stays gone after a relaunch.
+appId: io.onepeek.app
+name: 08-burn.peer
+tags:
+  - ios
+  - android
+  - two-device
+  - device-b
+---
+- extendedWaitUntil:
+    notVisible:
+      id: "room.screen"
+    timeout: 30000
+- runFlow: _common/back-to-chats.yaml
+- assertNotVisible:
+    id: "chats.room"
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "chats.screen"
+    timeout: 15000
+- assertNotVisible:
+    id: "chats.room"

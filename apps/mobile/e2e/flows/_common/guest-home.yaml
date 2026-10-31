@@ -1,0 +1,20 @@
+# Sub-flow: fresh install → Welcome → Get started → Sign in → Continue as guest → Chats home.
+# clearKeychain is iOS-only and wipes SecureStore, so a fresh run never starts from a wrapping key
+# left by a previous one (keystore_unavailable would otherwise be a legitimate screen here).
+appId: io.onepeek.app
+---
+- launchApp:
+    clearState: true
+    clearKeychain: true
+- assertVisible:
+    id: "welcome.getStarted"
+- tapOn:
+    id: "welcome.getStarted"
+- assertVisible:
+    id: "signin.guest"
+- tapOn:
+    id: "signin.guest"
+- extendedWaitUntil:
+    visible:
+      id: "chats.screen"
+    timeout: 15000

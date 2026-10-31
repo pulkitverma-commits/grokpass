@@ -1,0 +1,56 @@
+# 09 Panic → locked screen → still locked after a relaunch → biometric unlock.
+# The biometric prompt cannot be answered by Maestro. MAESTRO_BIOMETRIC=skip (default, CI) ends at
+# the locked screen; MAESTRO_BIOMETRIC=sim asks the relay to accept the simulator's biometric
+# (iOS `simctl … notifyutil -p com.apple.BiometricKit_Sim.fingerTouch.match`, Android
+# `adb emu finger touch 1`) and asserts Chats home comes back. Nothing is asserted on room content.
+appId: io.onepeek.app
+name: 09-panic-lock
+tags:
+  - ios
+  - android
+  - single
+  - device-a
+env:
+  MAESTRO_BIOMETRIC: skip
+  MAESTRO_RELAY: http://127.0.0.1:4311
+  MAESTRO_DEVICE: ""
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "(room|chats)\\.screen"
+    timeout: 15000
+- tapOn:
+    id: "panic"
+- assertVisible:
+    id: "locked.screen"
+- assertNotVisible:
+    id: "chats.screen"
+- assertNotVisible:
+    id: "room.screen"
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "locked.screen"
+    timeout: 15000
+- assertVisible:
+    id: "locked.unlock"
+- assertNotVisible:
+    id: "chats.screen"
+- runFlow:
+    when:
+      true: ${MAESTRO_BIOMETRIC == 'sim'}
+    commands:
+      - tapOn:
+          id: "locked.unlock"
+      - runScript:
+          file: ../scripts/relay-trigger.js
+          env:
+            RELAY_ACTION: biometric
+      - extendedWaitUntil:
+          visible:
+            id: "chats.screen"
+          timeout: 15000
+      - assertNotVisible:
+          id: "locked.screen"

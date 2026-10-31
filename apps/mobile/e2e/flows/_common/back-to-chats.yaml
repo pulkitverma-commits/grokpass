@@ -1,0 +1,25 @@
+# Sub-flow: from any screen back to Chats home. Android has a system back; iOS does not, so the
+# flow swipes from the left edge (native-stack back gesture). TODO(testid): `room.back` would make
+# this one tap on both platforms (TESTIDS.md, proposed).
+appId: io.onepeek.app
+---
+- runFlow:
+    when:
+      notVisible:
+        id: "chats.screen"
+      platform: Android
+    commands:
+      - back
+- runFlow:
+    when:
+      notVisible:
+        id: "chats.screen"
+      platform: iOS
+    commands:
+      - swipe:
+          start: 2%, 50%
+          end: 90%, 50%
+- extendedWaitUntil:
+    visible:
+      id: "chats.screen"
+    timeout: 10000

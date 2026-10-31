@@ -1,0 +1,31 @@
+# 08 Device A (owner): menu → burn → confirm → the room is gone, and stays gone after a relaunch.
+# This is also the clean-up of the two-device run: the throwaway room ends here.
+appId: io.onepeek.app
+name: 08-burn
+tags:
+  - ios
+  - android
+  - two-device
+  - device-a
+---
+- runFlow: _common/open-room.yaml
+- tapOn:
+    id: "room.menu"
+- tapOn:
+    id: "room.burn"
+- tapOn:
+    id: "room.burn.confirm"
+- extendedWaitUntil:
+    visible:
+      id: "chats.screen"
+    timeout: 15000
+- assertNotVisible:
+    id: "chats.room"
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "chats.screen"
+    timeout: 15000
+- assertNotVisible:
+    id: "chats.room"

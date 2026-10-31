@@ -4,6 +4,15 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-10-31
 
+- qa (Q3, Q4) merged: leak-guard lint rules in both configs (telemetry calls and imports, ad-hoc loggers, stringify of
+  secret-named identifiers into sinks, literal `fetch` hosts outside onepeek.io/supabase.co) with 53 ESLint-API probe
+  tests + static `console.` sweep; `packages/core/src/log.ts` (`log` no-op, `redact`) now exported from the package
+  root; 14 Maestro flows (9 journeys, two-device ones via a local relay, no screenshots ever), `TESTIDS.md` as the
+  single source of truth, `check-flows.mjs`; test plan v1.1 with the Gate 1 criteria map (§8). Core 101 → 162.
+  Decisions: the 13 proposed testIDs are accepted (mobile-ui wave 2 uses them; `invite.link` renders the full link,
+  `locked.screen` is the only container while locked); strict `console.` grep stays; E2E runner recommendation is
+  GitHub Actions (`macos-15` + `ubuntu` KVM), Maestro Cloud only for the `single` set, final call and the
+  `MAESTRO_EMAIL` inbox are the human's (cost); the first two-device run happens once a dev build exists.
 - core-crypto Phase 1 merged: `createRoom({ nickname })` announces the owner's nick (and re-announces after each
   admit, since joiners cannot read rows before their Welcome); `SyncResult.newAlerts` (web room page refreshes on
   alerts too, web integration test asserts the split); N2 stale `wiping` marker cleared; `createRnAuthStorage`

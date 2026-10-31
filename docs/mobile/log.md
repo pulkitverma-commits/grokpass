@@ -37,3 +37,11 @@ Newest first. One line per decision, blocker or agent report.
   Hermes at acceptable speed", which only a device build can answer.
 - Lead: launched `core-crypto` (C1), `qa` (Q2) and `release` (R0) in parallel, each in its own worktree with
   node_modules symlinked to the main checkout (disk is at 6.6 GB free; a second install would not fit twice).
+- qa (Q2) done: `docs/mobile/test-plan.md` v1 (572 lines), merged. Lead's answers to its open questions:
+  (1) push payload: the web already sends `url:/chat/r/<room>` and `tag:chat-<room>`; the native payload may
+  carry the room id as an opaque routing key (no content, sender or room name), so `ROOM_IN_PAYLOAD=true`.
+  (2) FLAG_SECURE also covers the Chats list: yes (N1 scope). (3) Q1 may extract the harness into
+  `supabase/tests/harness.ts` as long as the web test's assertions are untouched. (4) owner nickname: core-crypto
+  to confirm in C1 review. (5) no simulators on this Mac: Maestro runs on a GitHub `macos` runner or Maestro
+  Cloud; decision deferred to Phase 1, flows get written regardless. (6) use `better-sqlite3`-free approach:
+  Node 22.22 here supports `node:sqlite`; CI pins Node 22 (setup-node `22` resolves ≥22.13). (7) noted.

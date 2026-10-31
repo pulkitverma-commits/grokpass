@@ -1,0 +1,5 @@
+node_modules
+.next
+package-lock.json
+docs/mobile/design
+public/sw.js

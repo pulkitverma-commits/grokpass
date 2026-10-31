@@ -14,3 +14,19 @@ Newest first. One line per decision, blocker or agent report.
 - Lead: wrote `plan.md` and the seven agent files in `.claude/agents/`. Branch `mobile/phase-0-plan`.
 - **Blocked on human:** approval of the plan and the open questions in `plan.md` §8 (staging,
   accounts, lint scope, Node, `gh`, bundle ids). No agent launched yet.
+- Lead (Phase 0 started, human approved): `mobile/integration` created. L1 npm workspaces (`packages/*`, `apps/*`),
+  root scripts fan out with `--workspaces --if-present`. L2 ESLint 9 flat config + Prettier; web code passes with
+  0 errors / 60 warnings (grandfathered). `@next/eslint-plugin-next@15` is used only for its rules because the
+  v14 plugin crashes on ESLint 9. L3 `apps/mobile` on Expo SDK 58 (RN 0.88, React 19.3), Expo Router, strict TS,
+  `app.config.ts` with `io.onepeek.app`, scheme `onepeek`, Universal Links / App Links intent filters,
+  `allowBackup=false`, `ITSAppUsesNonExemptEncryption=true`, native deps installed (secure-store, sqlite,
+  quick-crypto, notifications, local-authentication, screen-capture, camera, pickers, sharing, apple-auth).
+- Lead: monorepo React split. The web (Next 14) needs React 18, the app React 19, so `.npmrc` sets
+  `legacy-peer-deps=true` and `apps/mobile/metro.config.js` resolves from the app's node_modules first with
+  `disableHierarchicalLookup=true`. expo-doctor reports those two as warnings; the device build at Gate 0 is
+  the real check.
+- Lead: **no Xcode, Android Studio, Java or emulator on this Mac** (only CommandLineTools). Device and
+  simulator builds must go through EAS Build in the cloud, which needs the human's Expo account, and the
+  Apple Developer Program for the iPhone build. C2 (device spike) is blocked on that; everything else proceeds.
+- Lead: assumed answers to plan §8 (human said "approved" without picking): Q1 (b) production with throwaway
+  rooms for Phase 0; Q3 yes; Q4 newspop Node; Q5 PRs via web UI; Q6 `io.onepeek.app`.

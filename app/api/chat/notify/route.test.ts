@@ -45,7 +45,7 @@ function admin() {
         case 'notify_prefs': return { select: () => ({ in: async () => ({ data: [{ owner: QUIET, push_on: false }] }) }) };
         case 'push_subscriptions': return { select: () => ({ eq: async (_c: string, owner: string) => ({ data: subs[owner] || [] }) }), delete: () => ({ eq: async () => ({}) }) };
         case 'push_devices': return {
-          select: () => ({ eq: async (_c: string, owner: string) => ({ data: devices[owner] || [] }) }),
+          select: () => ({ eq: (_c: string, owner: string) => ({ order: () => ({ limit: async (n: number) => ({ data: (devices[owner] || []).slice(0, n) }) }) }) }),
           delete: () => ({ eq: (_c: string, owner: string) => ({ in: async (_t: string, tokens: string[]) => { deletedDevices.push({ owner, tokens }); return {}; } }) }),
         };
         default: throw new Error(`unexpected table ${table}`);

@@ -108,7 +108,7 @@ push exactly as before. Without `APPLE_TEAM_ID`/`ANDROID_SHA256_CERT_FINGERPRINT
 `.well-known` files return 404 on purpose, so a half-configured deploy fails app verification instead of
 silently serving an empty file.
 
-The push payloads are fixed strings (`OnePeek` / `New activity in a chat`) plus the room id as an
+The push payloads are fixed strings (`OnePeek` / `You have a new message in a private chat.`) plus the room id as an
 opaque routing key. Nothing else ever goes to Apple or Google (`lib/alerts.native.test.ts`,
 `app/api/chat/notify/route.test.ts`).
 
@@ -121,4 +121,4 @@ opaque routing key. Nothing else ever goes to Apple or Google (`lib/alerts.nativ
   fingerprint. Google's checker:
   `https://digitalassetlinks.googleapis.com/v1/statements:list?source.web.site=https://onepeek.io&relation=delegate_permission/common.handle_all_urls`.
 - Push: with a development build and `APNS_USE_SANDBOX=1`, send from the website to a room the phone is
-  in; the banner reads "OnePeek / New activity in a chat" and nothing else.
+  in; the banner reads "OnePeek / You have a new message in a private chat." and nothing else.

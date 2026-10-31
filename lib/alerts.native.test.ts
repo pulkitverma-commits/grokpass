@@ -72,7 +72,7 @@ afterEach(() => { vi.unstubAllEnvs(); });
 describe('native push: payload shapes', () => {
   it('APNs payload is exactly the fixed shape plus the room id', () => {
     expect(alerts.apnsPayload({ room: ROOM })).toEqual({
-      aps: { alert: { title: 'OnePeek', body: 'New activity in a chat' }, sound: 'default', 'thread-id': ROOM },
+      aps: { alert: { title: 'OnePeek', body: 'You have a new message in a private chat.' }, sound: 'default', 'thread-id': ROOM },
       room: ROOM,
     });
   });
@@ -81,7 +81,7 @@ describe('native push: payload shapes', () => {
     expect(alerts.fcmMessage('tok', { room: ROOM })).toEqual({
       message: {
         token: 'tok',
-        notification: { title: 'OnePeek', body: 'New activity in a chat' },
+        notification: { title: 'OnePeek', body: 'You have a new message in a private chat.' },
         data: { room: ROOM },
         android: { priority: 'high', notification: { tag: `chat-${ROOM}` } },
       },

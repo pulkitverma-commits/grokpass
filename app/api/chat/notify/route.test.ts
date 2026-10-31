@@ -129,7 +129,7 @@ describe('/api/chat/notify', () => {
     await post({ room: ROOM, text: FORBIDDEN[3], nickname: 'Alice', file: 'passport.pdf' });
     for (const [req] of http2Request.mock.calls) {
       const r = req as unknown as { body: string; headers: Record<string, string> };
-      expect(JSON.parse(r.body)).toEqual({ aps: { alert: { title: 'OnePeek', body: 'New activity in a chat' }, sound: 'default', 'thread-id': ROOM }, room: ROOM });
+      expect(JSON.parse(r.body)).toEqual({ aps: { alert: { title: 'OnePeek', body: 'You have a new message in a private chat.' }, sound: 'default', 'thread-id': ROOM }, room: ROOM });
       expectClean(r.body); expectClean(JSON.stringify(r.headers));
       expect(JSON.parse(r.body).aps).not.toHaveProperty('mutable-content');
       expect(JSON.parse(r.body).aps.alert).not.toHaveProperty('subtitle');
@@ -137,7 +137,7 @@ describe('/api/chat/notify', () => {
     for (const [url, init] of fetchMock.mock.calls) {
       if (!String(url).includes('messages:send')) continue;
       const m = JSON.parse(String(init!.body)).message;
-      expect(m).toEqual({ token: 'bob-pixel', notification: { title: 'OnePeek', body: 'New activity in a chat' }, data: { room: ROOM }, android: { priority: 'high', notification: { tag: `chat-${ROOM}` } } });
+      expect(m).toEqual({ token: 'bob-pixel', notification: { title: 'OnePeek', body: 'You have a new message in a private chat.' }, data: { room: ROOM }, android: { priority: 'high', notification: { tag: `chat-${ROOM}` } } });
       expect(Object.keys(m.data)).toEqual(['room']);
       expect(m.notification).not.toHaveProperty('image');
       expectClean(String(init!.body));

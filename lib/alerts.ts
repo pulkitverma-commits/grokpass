@@ -115,7 +115,7 @@ export async function notifyAnswered(admin: SupabaseClient, requestId: string, o
 // tests capture what would be sent. Without APNS_*/FCM_* env the senders are no-ops returning 0.
 // ---------------------------------------------------------------------------------------
 export const NATIVE_TITLE = 'OnePeek';
-export const NATIVE_BODY = 'New activity in a chat';
+export const NATIVE_BODY = 'You have a new message in a private chat.';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

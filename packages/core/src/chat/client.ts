@@ -492,6 +492,29 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     } catch { /* best effort */ }
   }
 
+  // ---------------------------------------------------------------------------- push devices (phones)
+
+  /**
+   * Registers this phone's push token for content-free "new message" nudges (migration 008,
+   * `register_push_device`: upsert, owner = auth.uid()). The token is an opaque APNs / FCM device
+   * token; it and the platform are the only things sent. Needs a signed-in session.
+   */
+  async function registerPushDevice(platform: 'ios' | 'android', token: string) {
+    if (platform !== 'ios' && platform !== 'android') throw new ChatError('bad_platform');
+    const t = token.trim();
+    if (!t) throw new ChatError('bad_token');
+    if (!(await ensureSession(false))) throw new ChatError('not_signed_in');
+    await rpc('register_push_device', { p_platform: platform, p_token: t });
+  }
+
+  /** Forgets a push token registered by this user (`unregister_push_device`). Needs a signed-in session. */
+  async function unregisterPushDevice(token: string) {
+    const t = token.trim();
+    if (!t) throw new ChatError('bad_token');
+    if (!(await ensureSession(false))) throw new ChatError('not_signed_in');
+    await rpc('unregister_push_device', { p_token: t });
+  }
+
   async function sendControl(roomId: string, payload: mls.ChatPayload) {
     const dev = await ensureDevice();
     const state = await loadState(roomId);
@@ -685,6 +708,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     send, sendScreenshotAlert, sendFile, openFile, markViewed, notifyRoom, sync, markOpened, setTimer,
     safetyNumberWith, markVerified,
     leave, burn, lock, isLocked, unlock, subscribe,
+    registerPushDevice, unregisterPushDevice,
     keystore: ks,
   };
 }

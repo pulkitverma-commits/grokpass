@@ -1,7 +1,8 @@
-# 04 Device B: open the join link → access code → nickname → submit → waits to be let in.
-# Precondition: 01 ran on this device. The link comes from MAESTRO_ROOM_LINK, or from the relay
-# when the variable is empty (scripts/relay-get.js). Simulators do not verify Universal Links, so
-# the https link is rewritten to the `onepeek://` scheme unless MAESTRO_UNIVERSAL_LINKS=1.
+# 04 Device B: open the join link → access code → nickname → submit → the room opens in its waiting
+# state. Precondition: 01 ran on this device. The link comes from MAESTRO_ROOM_LINK, or from the
+# relay when the variable is empty (scripts/relay-get.js). Simulators do not verify Universal Links,
+# so the https link is rewritten to the `onepeek://` scheme unless MAESTRO_UNIVERSAL_LINKS=1.
+# Negative path first: a wrong code shows `join.error` and stays on Join.
 appId: io.onepeek.app
 name: 04-join-with-code
 tags:
@@ -27,19 +28,39 @@ env:
     visible:
       id: "join.code"
     timeout: 15000
+- assertVisible:
+    id: "join.screen"
 - tapOn:
     id: "join.code"
-- inputText: ${MAESTRO_ACCESS_CODE}
+- inputText: "wrong-code-00"
 - tapOn:
     id: "join.nick"
 - inputText: ${MAESTRO_NICK}
 - hideKeyboard
 - tapOn:
     id: "join.submit"
-# Waiting for the owner. TODO(testid): assert `join.waiting` once it exists.
 - extendedWaitUntil:
-    notVisible:
-      id: "join.submit"
+    visible:
+      id: "join.error"
     timeout: 15000
 - assertNotVisible:
     id: "room.screen"
+- tapOn:
+    id: "join.code"
+- eraseText: 20
+- inputText: ${MAESTRO_ACCESS_CODE}
+- hideKeyboard
+- tapOn:
+    id: "join.submit"
+# Redeem succeeded: Join replaces itself with the room, which waits for the owner.
+- extendedWaitUntil:
+    visible:
+      id: "room.screen"
+    timeout: 20000
+- extendedWaitUntil:
+    visible:
+      id: "room.waiting"
+    timeout: 15000
+- assertVisible:
+    id: "room.send"
+    enabled: false

@@ -1,0 +1,48 @@
+# 11 Device A (owner): room menu → Verify people → the safety number for the one other member
+# shows → published to the relay → "They match — mark verified" → the member list shows Verified.
+# Runs after 05 (both devices admitted). The safety number is made to be compared out of band and
+# is not a secret; it is the one value these flows copy besides the invite link. No screenshot.
+appId: io.onepeek.app
+name: 11-verify-safety-number
+tags:
+  - ios
+  - android
+  - two-device
+  - device-a
+env:
+  MAESTRO_RELAY: http://127.0.0.1:4311
+---
+- runFlow: _common/open-room.yaml
+- tapOn:
+    id: "room.menu"
+- assertVisible:
+    id: "room.menuSheet"
+- tapOn:
+    id: "room.menu.verify"
+# One other member: it is selected automatically, no `verify.member` list first.
+- extendedWaitUntil:
+    visible:
+      id: "verify.number"
+    timeout: 30000
+- copyTextFrom:
+    id: "verify.number"
+- evalScript: ${output.safety = maestro.copiedText.replace(/[^0-9]/g, '')}
+- assertTrue: ${output.safety.length == 60}
+- runScript:
+    file: ../scripts/relay-put.js
+    env:
+      RELAY_KEY: safety_number
+      RELAY_VALUE: ${output.safety}
+- tapOn:
+    id: "verify.mark"
+- extendedWaitUntil:
+    visible:
+      id: "verify.member"
+    timeout: 15000
+- assertVisible: "Verified"
+- tapOn:
+    id: "sheet.handle"
+- assertNotVisible:
+    id: "room.menuSheet"
+- assertVisible:
+    id: "room.screen"

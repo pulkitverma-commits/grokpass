@@ -1,4 +1,5 @@
-# 08 (peer) Device B: the burned room disappears here too, and stays gone after a relaunch.
+# 08 (peer) Device B: the burned room ends here too (`room.ended`), Back to chats shows no room,
+# and it stays gone after a relaunch.
 appId: io.onepeek.app
 name: 08-burn.peer
 tags:
@@ -8,10 +9,17 @@ tags:
   - device-b
 ---
 - extendedWaitUntil:
-    notVisible:
-      id: "room.screen"
+    visible:
+      id: "room.ended"
     timeout: 30000
-- runFlow: _common/back-to-chats.yaml
+- assertNotVisible:
+    id: "room.composer"
+- tapOn:
+    id: "room.back"
+- extendedWaitUntil:
+    visible:
+      id: "chats.screen"
+    timeout: 10000
 - assertNotVisible:
     id: "chats.room"
 - stopApp

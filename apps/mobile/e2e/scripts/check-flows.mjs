@@ -1,5 +1,5 @@
 // Static check of the Maestro flows (no device needed): every YAML parses, every `id:` a flow
-// uses is in TESTIDS.md (contract, wave-2 or proposed; proposed ones are listed as dry), every
+// uses is in TESTIDS.md (contract or proposed; proposed ones are listed as dry), every
 // top-level flow has the app id and tags, and no flow takes a screenshot or recording.
 //   node apps/mobile/e2e/scripts/check-flows.mjs
 // Uses js-yaml, which the root ESLint already brings in; no new dependency.
@@ -19,6 +19,10 @@ for (const line of readFileSync(path.join(e2e, 'TESTIDS.md'), 'utf8').split('\n'
 }
 const known = [...ids.keys()];
 const concrete = id => id.replace(/<[a-z]+>/g, 'x1'); // msg.<id> → msg.x1
+// A template id stands for a family of literals: `<id>` (a message id) is one non-dot segment,
+// `<s>` / `<n>` (seconds, a count) are digits: `new.timer.3600` in a flow matches `new.timer.<s>`.
+const templateRe = id => new RegExp(`^${id.split(/(<[a-z]+>)/).map(p => (p === '<s>' || p === '<n>' ? '\\d+' : p.startsWith('<') ? '[^.]+' : p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('')}$`);
+const literalMatches = id => known.filter(k => k === id || (k.includes('<') && templateRe(k).test(id)));
 
 function* walk(dir) {
   for (const name of readdirSync(dir, { withFileTypes: true })) {
@@ -67,7 +71,7 @@ for (const file of walk(flowsDir)) {
     if (typeof node.id !== 'string') continue;
     const id = node.id;
     const isPattern = /[\\()|+*?[\]]/.test(id);
-    const matches = isPattern ? known.filter(k => new RegExp(`^(?:${id})$`).test(concrete(k))) : known.includes(id) ? [id] : [];
+    const matches = isPattern ? known.filter(k => new RegExp(`^(?:${id})$`).test(concrete(k))) : literalMatches(id);
     if (matches.length === 0) problems.push(`${rel}: id "${id}" is not in TESTIDS.md`);
     for (const k of matches) if (ids.get(k) === 'proposed') dry.set(k, [...(dry.get(k) ?? []), rel]);
   }

@@ -8,7 +8,7 @@ import prettier from 'eslint-config-prettier';
 // core's tooling). packages/core/test/leak-guard.test.ts probes this config too, so the two copies
 // cannot drift silently. esquery regexes cannot contain `/`, hence `\x2f` inside String.raw.
 const TELEMETRY = String.raw`/^(Sentry|crashlytics|analytics|Bugsnag|datadog|mixpanel|amplitude|posthog)$/i`;
-const TELEMETRY_IMPORT = String.raw`/^(@sentry\x2f|@bugsnag\x2f|@datadog\x2f|mixpanel|@amplitude\x2f|posthog|@react-native-firebase\x2f(crashlytics|analytics)|@segment\x2f|expo-analytics|react-native-google-analytics)/`;
+const TELEMETRY_IMPORT = String.raw`/^(@sentry\x2f|@bugsnag\x2f|@datadog\x2f|mixpanel|@amplitude\x2f|posthog|@react-native-firebase\x2f(crashlytics|analytics)|@segment\x2f|expo-analytics|expo-insights|expo-updates|react-native-google-analytics)/`;
 const LOGGER = String.raw`/^(log|logger)$/`;
 const LOGGER_VERBS = String.raw`/^(log|info|warn|error|debug|trace|fatal|verbose|silly|notice|critical)$/`;
 const SINKS = String.raw`/^(console|Sentry|crashlytics|analytics|Bugsnag|datadog|mixpanel|amplitude|posthog|log|logger)$/i`;
@@ -16,6 +16,12 @@ const SENSITIVE = String.raw`/^(message|body|plaintext|token|accessCode|code|sec
 const STRINGIFY = "CallExpression.arguments[callee.object.name='JSON'][callee.property.name='stringify']";
 const TELEMETRY_MSG = 'No crash reporting or analytics SDK in OnePeek: it would receive whatever the screen holds. Use log() from @onepeek/core/src/log with redact().';
 const STRINGIFY_MSG = 'JSON.stringify of a sensitive value passed to a sink. Pass it through redact() from @onepeek/core/src/log, or do not log it.';
+// W1-10: calls that carry a value off the phone or into another app (clipboard, share sheet, another
+// app via a URL, the system browser, a WebSocket) or onto the screen outside our own views (Alert).
+// They are legitimate with a link or a literal (InviteSheet, Welcome, sign-in), so only an argument
+// that is a secret-named identifier, member, template expression or object-property value is an error.
+const OFF_DEVICE = ":matches(CallExpression:matches([callee.object.name='Clipboard'][callee.property.name=/^set(String|Url|Image)(Async)?$/], [callee.object.name='Share'][callee.property.name=/^(share|open)$/], [callee.object.name='Linking'][callee.property.name=/^(openURL|sendIntent|openSettings)$/], [callee.object.name='WebBrowser'][callee.property.name=/^open[A-Za-z]*Async$/], [callee.object.name='Alert'][callee.property.name=/^(alert|prompt)$/]), NewExpression[callee.name=/^(WebSocket|XMLHttpRequest)$/])";
+const OFF_DEVICE_MSG = 'A secret-named value is handed to a sink that leaves the phone or our own views (clipboard, share sheet, URL, browser, WebSocket, Alert). Only links, literals and redact()ed fields may go there.';
 
 const LEAK_GUARD = [
   { selector: `CallExpression[callee.type='MemberExpression'][callee.object.name=${TELEMETRY}]`, message: TELEMETRY_MSG },
@@ -33,6 +39,12 @@ const LEAK_GUARD = [
   { selector: `CallExpression[callee.object.callee.name=${TELEMETRY}] > ${STRINGIFY} > Identifier.arguments:first-child[name=${SENSITIVE}]`, message: STRINGIFY_MSG },
   { selector: `CallExpression[callee.name=${LOGGER}] > ${STRINGIFY} > Identifier.arguments:first-child[name=${SENSITIVE}]`, message: STRINGIFY_MSG },
   { selector: `CallExpression[callee.name=${LOGGER}] > ${STRINGIFY} > MemberExpression.arguments:first-child[property.name=${SENSITIVE}]`, message: STRINGIFY_MSG },
+  { selector: `${OFF_DEVICE} > Identifier.arguments[name=${SENSITIVE}]`, message: OFF_DEVICE_MSG },
+  { selector: `${OFF_DEVICE} > MemberExpression.arguments[property.name=${SENSITIVE}]`, message: OFF_DEVICE_MSG },
+  { selector: `${OFF_DEVICE} > TemplateLiteral.arguments > Identifier.expressions[name=${SENSITIVE}]`, message: OFF_DEVICE_MSG },
+  { selector: `${OFF_DEVICE} > TemplateLiteral.arguments > MemberExpression.expressions[property.name=${SENSITIVE}]`, message: OFF_DEVICE_MSG },
+  { selector: `${OFF_DEVICE} > ObjectExpression.arguments > Property > Identifier.value[name=${SENSITIVE}]`, message: OFF_DEVICE_MSG },
+  { selector: `${OFF_DEVICE} > ObjectExpression.arguments > Property > MemberExpression.value[property.name=${SENSITIVE}]`, message: OFF_DEVICE_MSG },
 ];
 
 // The phone talks to two hosts. A literal URL anywhere else (another host, plain http, or a

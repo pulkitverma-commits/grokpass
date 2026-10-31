@@ -2,6 +2,8 @@
 # `maestro test apps/mobile/e2e --include-tags single` runs the one-device journeys in order.
 # Two-device journeys (tag `two-device`) are driven by scripts/run-two-device.sh, which runs each
 # half on its own simulator and passes the room link between them (see README.md).
+# 10 (tag `push`) needs a device that can mint a push token; exclude it with `--exclude-tags push`
+# on an iOS simulator without APNs support or an emulator without Google Play.
 flows:
   - "flows/*.yaml"
 executionOrder:
@@ -10,6 +12,7 @@ executionOrder:
     - 01-welcome-guest
     - 02-signin-email
     - 03-create-secret-room
+    - 10-settings-notifications
     - 09-panic-lock
 platform:
   ios:

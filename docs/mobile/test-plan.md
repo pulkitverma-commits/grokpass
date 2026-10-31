@@ -1,8 +1,12 @@
 # OnePeek mobile: test plan v1
 
-Owner: `qa`. Status: v1.1. v1 written 2026-10-31 for task Q2 (`plan.md` §2) and merged; v1.1 (same day,
+Owner: `qa`. Status: v1.2. v1 written 2026-10-31 for task Q2 (`plan.md` §2) and merged; v1.1 (same day,
 tasks Q3/Q4) records what was built: §1.6 the leak guard as landed, §3 the Maestro flows as written, §8 the
-Gate 1 criteria map, and the §1.3 siteUrl correction from the S0 close-out (N4).
+Gate 1 criteria map, and the §1.3 siteUrl correction from the S0 close-out (N4). v1.2 (same day, Phase 1
+wave 2): §1.5 the qa review of backend's push tests (pass/gap per item), §1.6 the W1-10 rules, §3 the flows
+reconciled with the merged screens plus 10 and 11, §4 the native-security device checks S1–S20 folded in
+with owners, §6.2 the jest timeout and the Expo config check before the first push test, §8 the W1 fixes'
+tests.
 Covers tasks Q1 (interop), Q3 (Maestro), Q4 (unit tests, log lint), Q5 (cross-platform secrets) and the
 Phase 3 device matrix. The automated parts reuse the web harness in `lib/chat/client.integration.test.ts`
 and the SQL tests in `supabase/tests/secret-chat.test.ts`; nothing here invents a second way of testing.
@@ -254,7 +258,44 @@ mocked to capture what would be sent:
   `404/410` path is unchanged (regression); (8) the credentials (`APNS_*`, `FCM_SERVICE_ACCOUNT_JSON`)
   never appear in a thrown error message or in the captured payload (add them to the forbidden list).
 
-### 1.6 Leak guard (Q4, as built 2026-10-31)
+**qa review of the two files, wave 2 (2026-10-31, read in full, not run in isolation; both pass in the
+root `npm test`: web 108/108).** Pass means the test exists and asserts what the item asks; gap names the
+exact missing assertion for backend to close.
+
+`supabase/tests/push-devices.test.ts` (14 tests, PGlite, 006 + 007 + 008, up/down/up):
+
+| item | result | where / what is missing |
+| --- | --- | --- |
+| (a) owner = `auth.uid()`, forged owner impossible | **pass** | the RPC takes `(p_platform, p_token)`, no owner argument; "lets an owner register and see only their own row" asserts `owner = ALICE`; a direct `insert … owner = ALICE` as BOB is refused by RLS ("keeps other users from…") |
+| (b) anon denied | **pass** | "denies anon the table and both RPCs" (`permission denied` on select and both RPCs) |
+| (c) guest may register | **pass** | "lets a chat guest (anonymous user) register" |
+| (d) same token re-registered → one row, `last_seen` bumped | **pass with a gap** | "re-registering the same token updates last_seen and platform" re-registers with a *different* platform (`ios` → `android`). The literal case, same `(platform, token)` twice, is only implied by the W1-3 test's row count. **Gap:** add `register(ALICE,'ios',TOKEN_A)` twice and assert one row with a later `last_seen` |
+| (e) token held by another owner moves to the caller, old row gone | **pass** | "a token belongs to one owner… (W1-2)": one row, Bob's; Alice's unregister touches nothing; service role sees one row; direct insert of a held token hits the unique constraint |
+| (f) token stored as given; nothing else stored (`row::text` dump) | **gap** | token equality is asserted (`TOKEN_A`), but no test dumps a row as `row::text` / `row_to_json` or lists `information_schema.columns` for `push_devices`. **Gap:** assert the column set is exactly `{id, owner, platform, token, created_at, last_seen}` (whatever 008 defines) and that `row::text` of a registered row contains nothing but those values: no device label, user agent, room id or email |
+| (g) `platform` constrained | **pass, plan corrected** | 008 allows `ios | android` only (`bad_platform` for `web`, asserted); the plan's `web` was wrong (web push lives in `push_subscriptions`). Only `web` is tried as the bad value; good enough, the check is the same `in` test |
+| (h) RLS after registration | **pass** | owner select = 1 row, other user = 0 rows, non-owner `insert` rejected (`row-level security`), non-owner `update`/`delete`/`unregister` leave the row untouched |
+| extra | **pass** | W1-3 cap of 10 per owner (oldest dropped, other owners untouched), token shape `[A-Za-z0-9:_-]{32,512}` incl. an FCM-shaped token and the table check constraint, `search_path = ''` on both RPCs, service-role read, cascade on user delete, down/up leaves 006 intact |
+
+`lib/alerts.native.test.ts` (25 tests, mocked HTTP/2 and fetch, throwaway EC/RSA keys):
+
+| item | result | where / what is missing |
+| --- | --- | --- |
+| (1) forbidden-strings context from the §1.1 fixtures via `forbidden()` (text, hex, base64, base64url) | **gap** | the file uses its own 7-string `FORBIDDEN` list (a decoy body, nickname, file name, code, invite token, room name, sender uuid) in text form only; it does not import `packages/core/test/fixtures.ts`. Since `apnsPayload`/`fcmMessage` take `{ room }` only and the shapes are `toEqual`-exact, no other byte can ride along, so this is a *consistency* gap, not a leak. **Gap:** import `BODY, BODY2, FILE_NAME, FILE_BODY, ACCESS_CODE, NICK, OWNER_NICK, ROOM_NAME` and `forbidden()`/`expectClean()` from `../packages/core/test/fixtures` and sweep with them (plus the item 8 credentials) |
+| (2) every captured request (URL, headers, body) swept | **pass with a gap** | APNs: body and headers swept, `authority`/`path` asserted exactly; FCM: body swept, the send URL and the `authorization` header asserted exactly but not swept. **Gap:** `expectClean(JSON.stringify(call))` over every `http2Request`/`fetch` call in one helper |
+| (3) exact APNs and FCM shapes | **pass** | "APNs payload is exactly the fixed shape plus the room id" (`aps.alert.title/body`, `sound`, `thread-id` mirror, `room`); FCM `notification.title/body`, `data: { room }`, `android.notification.tag = chat-<room>`, no `apns` block; `toEqual` excludes `mutable-content`, `subtitle`, `category`, `image` by construction |
+| (4) the only UUID is the room id | **pass, plan corrected** | asserted as "every UUID in the serialised payload equals `ROOM`" rather than `count == 1`: the id appears twice on purpose (`room` + `thread-id`, `data.room` + `tag`). The plan's `count == 1` is replaced by "all UUIDs equal the room id" |
+| (5) `apns-topic`, `apns-push-type`, FCM URL | **pass** | `io.onepeek.app`, `alert`, `https://fcm.googleapis.com/v1/projects/onepeek-test/messages:send`; the only other host is `https://oauth2.googleapis.com/token` (the token exchange, asserted exactly); sandbox host under `APNS_USE_SANDBOX=1` |
+| (6) opt-out → zero requests | **pass (route level)** | not in this file: `app/api/chat/notify/route.test.ts` "sends web and native pushes to the other active members, skipping the sender and opted-out users" covers `notify_prefs.push_on = false` for both `pushTo` and `pushToNative`; the throttle is "still throttles via chat_rate_ok before sending anything" |
+| (7) dead tokens | **pass** | APNs `410` / `BadDeviceToken` / `Unregistered` dead, `503` kept; FCM `UNREGISTERED` / `NOT_FOUND` dead, `429` kept; `pushToNative` deletes dead rows for that owner only; web `404/410` regression ("pushTo is unchanged") |
+| (8) credentials never in a payload or an error | **gap** | `APNS_KEY_ID`, `APNS_TEAM_ID`, the EC and RSA PEMs and the FCM `client_email` are not in `FORBIDDEN`; no test makes a transport throw and inspects the error message. **Gap:** add the five values to the forbidden list, sweep every captured request with them, and add one test where `http2Request` / `fetch` rejects and the surfaced error (`sendApns` swallows to "kept", so assert on the rejection reason through a spy, or on `nodeHttp2Request`'s rejection message) contains none of them |
+| extra | **pass** | ES256 provider JWT (`kid`, `iss`, `iat`, signature verified, cached 50 min), RS256 assertion (scope, aud, 1 h, verified, cached), W1-3 concurrency of 10 on both transports and read cap of 10, W1-5 `nodeHttp2Request` settles on close/timeout/deadline/connect throw and only once, no-op without env |
+
+Net: 4 gaps, all additive assertions, none a leak today: (d) same-platform re-register, (f) `row::text` /
+column-set dump, (1)+(2) fixtures-based sweep over every captured request, (8) credentials in the forbidden
+list plus an error-path test. Backend closes them in its next pass; §8 keeps "push with no content" at
+"tests landed, 4 review gaps open" until then.
+
+### 1.6 Leak guard (Q4, as built 2026-10-31; W1-10 additions same day)
 
 The rule set lives in `packages/core/eslint.config.mjs` and, as a kept-in-sync copy, in
 `apps/mobile/eslint.config.mjs` (the app's lint must not import the core's tooling). Everything is an
@@ -265,9 +306,10 @@ selectors (esquery; regexes use `\x2f` for `/`):
 | --- | --- | --- |
 | console | `console.log(x)`, `if (__DEV__) console.warn(x)` | all files (`no-console`, pre-existing) |
 | telemetry call | `Sentry.captureMessage(x)`, `Sentry.Native.captureException(e)`, `crashlytics().log(x)`, `analytics.track(...)`, `posthog.capture(...)`, also `Bugsnag`, `datadog`, `mixpanel`, `amplitude`, any method, case-insensitive | all files |
-| telemetry import | `import … from '@sentry/*'`, `@bugsnag/*`, `@datadog/*`, `mixpanel*`, `@amplitude/*`, `posthog*`, `@react-native-firebase/crashlytics|analytics`, `@segment/*`, `expo-analytics`; also `require(...)` of the same | all files |
+| telemetry import | `import … from '@sentry/*'`, `@bugsnag/*`, `@datadog/*`, `mixpanel*`, `@amplitude/*`, `posthog*`, `@react-native-firebase/crashlytics|analytics`, `@segment/*`, `expo-analytics`, `expo-insights`, `expo-updates` (both phone home with device data; W1-10); also `require(...)` of the same | all files |
 | ad-hoc logger | `logger.info(x)`, `log.warn(x)` and the other logging verbs (`log info warn error debug trace fatal verbose silly notice critical`) on an identifier named `log` or `logger`. `log.push(...)` on an array is not matched | all files |
 | stringify to a sink | `JSON.stringify(<ident>)` or `JSON.stringify(<obj>.<prop>)` where the identifier/property is one of `message body plaintext token accessCode code secret key nick fileName name`, passed to any sink above, to `log(...)`/`logger(...)` or to `console.*` | all files |
+| off-device sink (W1-10) | `Clipboard.setString*/setUrl*/setImage*`, `Share.share/open`, `Linking.openURL/sendIntent/openSettings`, `WebBrowser.open*Async`, `Alert.alert/prompt`, `new WebSocket(...)`, `new XMLHttpRequest(...)` when an **argument** is a secret-named identifier (`token`), member (`m.body`), a template expression (`` `…${accessCode}` ``) or an object-property value (`{ message: plaintext }`), same `SENSITIVE` list. The call itself is allowed: `Clipboard.setStringAsync(link)`, `Share.share({ message: link, url: link })`, `WebBrowser.openBrowserAsync('https://onepeek.io/terms')`, `openAuthSessionAsync(url, redirect)` and a fixed `Alert.alert` (InviteSheet, Welcome, sign-in, Settings) lint clean | all files |
 | fetch host | `fetch('<literal>')`, `globalThis.fetch('<literal>')` or an expression-free template literal whose URL is not `https://onepeek.io/…`, `https://*.onepeek.io/…` or `https://<project>.supabase.co/…`: another host, a look-alike (`onepeek.io.evil.example`), plain `http:`, or a relative path | `apps/mobile/**`, `packages/core/src/adapters/rn/**` (the web adapter keeps its relative `/api/chat/notify`) |
 
 The approved path is `packages/core/src/log.ts`: `log(event, fields?)` is a **no-op** in every build
@@ -275,27 +317,47 @@ The approved path is `packages/core/src/log.ts`: `log(event, fields?)` is a **no
 sink is ever wired in there (lead + security-reviewer decision), nothing sensitive can reach it:
 sensitive keys (`SENSITIVE_KEY`: message, body, plain, text, token, access, code, secret, key, nick,
 file, name, password, email, link, url, session, jwt, state; case-insensitive, anywhere in the key) become
-`[redacted]`, strings are capped at 32 chars, byte buffers become `[bytes:n]`, errors keep only `name`
-and the trailing `[a-z_]+` code, depth stops at 4. Screens import it as `@onepeek/core/src/log` (same
-style as `_layout.tsx` imports `src/rn`; re-export from `index.ts` is `core-crypto`'s call).
-`packages/core/src/log.test.ts` (8 tests) covers each rule.
+`[redacted]`, strings are capped at 32 chars **except inside arrays, where every string is redacted
+whole at any depth** (W1-10: `redact({ ids: [token] })` used to keep the token's first 32 characters because
+`ids` is not a sensitive key), byte buffers become `[bytes:n]`, errors keep only `name` and the trailing
+`[a-z_]+` code, depth stops at 4. Screens import it from the package root (`log`, `redact` are exported
+from `index.ts` since Q4 merged) or as `@onepeek/core/src/log`. `packages/core/src/log.test.ts` (9 tests)
+covers each rule.
 
-`packages/core/test/leak-guard.test.ts` (53 tests, ~0.7 s) runs ESLint programmatically with both
-configs: 23 probe files (one per forbidden pattern) are written to the scratchpad, read back and linted
+`packages/core/test/leak-guard.test.ts` (84 tests, ~0.6 s) runs ESLint programmatically with both
+configs: 39 probe files (one per forbidden pattern; 16 added for W1-10: the two imports and a `require`,
+clipboard identifier/member, share object-property identifier/member, `Linking.openURL` template with an
+identifier/member, `WebBrowser` identifier and auth-session member, `Alert` identifier/member, `new
+WebSocket` identifier/template) are written to the scratchpad, read back and linted
 under a virtual path inside the package (`src/chat/…`, `src/adapters/rn/…`, `app/…`), each must be
 reported with the matching message and nothing else at error level; a clean file (`log` + `redact`,
 `fetch` to onepeek.io/supabase.co/computed URL, `JSON.stringify({ roomId })`) must pass both; the fetch
 rule must stay scoped (web adapter's relative fetch passes); `log.push` must not be mistaken for a
-logger. The temp dir is removed in `afterAll`. The same file holds the **static sweep**: walks
+logger; the off-device rule is about the argument, not the call (`Linking.openURL(href)`, `Alert.alert('Chat
+' + roomId)`, `new WebSocket(href)` pass; the clean file also carries the InviteSheet/Welcome/sign-in
+shapes). The temp dir is removed in `afterAll`. The same file holds the **static sweep**: walks
 `apps/mobile/**/*.{ts,tsx}` (minus `node_modules`, `ios`, `android`, `.expo`, `e2e`, `__tests__`,
 `*.test.*`) and `packages/core/src/**/*.ts` (minus tests) and fails on any line matching `console\.` or
 `__DEV__\s*&&\s*console`, grep-style (comments included: a shipped file does not mention the console
-with a dot after it). Ran 3× on 2026-10-31, 61/61 each time, no flake.
+with a dot after it). Ran 3× on 2026-10-31 (wave 1), 61/61 each time; ran 3× after the W1-10 additions
+(leak-guard + log, `npm test -w packages/core -- test/leak-guard.test.ts src/log.test.ts`), 93/93 each
+time, no flake. `npm run lint` stays at 0 errors with the merged wave-2 screens.
 
-Not covered (by design, named so nobody assumes otherwise): string concatenation or template literals
-of a secret into a sink (`log('x ' + token)`) is not matched beyond `JSON.stringify`; a sink imported
-under another name (`import { captureMessage as cm }`) is caught by the import rule, not the call rule;
-`fetch` with a computed URL is the adapter's responsibility (`checkOnePeekUrl`).
+Not covered (by design, named so nobody assumes otherwise): string concatenation of a secret into a
+sink (`log('x ' + token)`, `Clipboard.setStringAsync('code: ' + code)`) is not matched (template literals
+are, for the off-device sinks; `JSON.stringify` is, for the logging sinks); a value renamed first
+(`const s = token; Share.share({ message: s })`) or reached through a non-sensitive name (`row.value`,
+`fields[0]`) is not matched, the rule is lexical and `SENSITIVE` is a fixed list (`message body plaintext
+token accessCode code secret key nick fileName name`); a sink imported under another name (`import {
+captureMessage as cm }`) is caught by the import rule, not the call rule, and a module alias
+(`import * as C from 'expo-clipboard'; C.setStringAsync(token)`) is not caught at all, the object name must
+be `Clipboard`/`Share`/`Linking`/`WebBrowser`/`Alert`; `fetch` with a computed URL is the adapter's
+responsibility (`checkOnePeekUrl`); `Image source={{ uri }}` with a remote URI, `expo-file-system`
+uploads/downloads, `expo-sharing` (`shareBytes` in `lib/files.ts`, used by the viewer on purpose),
+`expo-mail-composer`/`expo-sms`, `Intent` extras and iOS user-activity/Spotlight APIs are not sinks the
+lint knows; `XMLHttpRequest` is banned as a global in the core (`no-restricted-globals`) but in the app only
+a secret-named constructor argument is flagged, `xhr.send(body)` is not. The rule set is a net under the
+reviewer, not a replacement: every PR that adds an off-device call is read by security-reviewer.
 
 ## 2. Interop test design (Q1)
 
@@ -464,9 +526,15 @@ parses every YAML, requires every `id:` to exist in `apps/mobile/e2e/TESTIDS.md`
 ### 3.1 Setup facts (changes from v1)
 
 - **testIDs**: the binding list moved from this file to `apps/mobile/e2e/TESTIDS.md` (single source of
-  truth, lead's contract of 2026-10-31: 31 wave-1 ids, 10 wave-2 ids, plus 13 **proposed** ids the flows
-  need and the lead has not accepted yet). The v1 table in this section is superseded; `mobile-ui` builds
-  against `TESTIDS.md` only.
+  truth). Wave 2 (2026-10-31): reconciled with the code after mobile-ui wave 2 merged, 168 ids under
+  `contract` (grep over `app/`, `components/`, `security/`), 1 `proposed` (`verify.qr`, optional). The 13
+  ids proposed in wave 1 all landed, three under another name (`signin.sent` → `signin.emailSent`,
+  `join.waiting` → `room.waiting`, `new.timer.1h` → `new.timer.3600`). `check-flows.mjs` now matches a
+  literal flow id against template ids (`new.timer.<s>`, `msg.<id>`). Panic Exit is a **single tap**
+  (`panic` in Settings, `room.panic` in the room menu, no `panic.confirm*`), as the lead decided.
+- **E2E build (W1-9)**: `invite.link` is masked (`…#••••••`) in every build except one that sets
+  `EXPO_PUBLIC_E2E=1`; flow 03 needs the full link. `eas.json` needs an `e2e` profile (extends
+  `development`, `env: { EXPO_PUBLIC_E2E: "1" }`, iOS `simulator: true`); `release` owns the file (§7.11).
 - **Second participant**: v1 planned a Node "companion" running the web core. Replaced, on the lead's
   instruction, by **two flows per two-device journey** (`<nn>-<journey>.yaml` on device A,
   `<nn>-<journey>.peer.yaml` or `04-let-in.yaml` on device B) sharing `MAESTRO_*` env and sequenced by
@@ -495,8 +563,11 @@ parses every YAML, requires every `id:` to exist in `apps/mobile/e2e/TESTIDS.md`
 - Tags: `ios`, `android` on every flow; `single` (one device: 01, 02, 03, 09); `two-device` +
   `device-a`/`device-b` (03 to 08). `maestro test apps/mobile/e2e --include-tags single` for one device;
   `MAESTRO_DEVICE_A=… MAESTRO_DEVICE_B=… apps/mobile/e2e/scripts/run-two-device.sh` for two.
-- `msg.<id>` is matched as the regex `msg\..+` with an `index`; `chats.room` is one id for every row,
-  picked by index. `invite.link` must render the full link (README "Rendering requirements").
+- `msg.<id>` / `file.<id>` / `timer.<id>` are matched as the regex `msg\..+` etc. with an `index`;
+  `chats.room` is one id for every row, picked by index. `invite.link` renders the full link only on the
+  E2E build (README / TESTIDS.md "Rendering requirements"); switches are asserted with `checked:`, disabled
+  controls with `enabled: false`. Positive text assertions are on fixed UI copy only; the push token is never
+  rendered or asserted; the safety number (11) is the one value besides the link that crosses the relay.
 
 ### 3.3 Flows
 
@@ -504,19 +575,24 @@ parses every YAML, requires every `id:` to exist in `apps/mobile/e2e/TESTIDS.md`
 | --- | --- | --- | --- |
 | 01 | `01-welcome-guest.yaml` | Welcome → Get started → Continue as guest → Chats home | wave-1 screens |
 | 02 | `02-signin-email.yaml` | Welcome → Sign in → email → "check your inbox"; stops there (link in a mailbox: manual M1); `MAESTRO_EMAIL` must be a team inbox, production sends a real mail | wave-1 screens |
-| 03 | `03-create-secret-room.yaml` | New chat → Secret → name, nick, code, timer → create → invite sheet → copy → done; publishes the link | wave-1; timer option tapped by label until `new.timer.1h` |
-| 04 | `04-join-with-code.yaml` (B) + `04-let-in.yaml` (A) | B: open link → code → nick → submit → waits; A: Chats home shows Let in → tap → open room | wave-1 |
-| 05 | `05-message-roundtrip.yaml` (A) + `.peer.yaml` (B) | A types and sends; B: bubble visible, body **not** visible, hold-to-read, release, body not visible again, reply | wave-2 (`room.composer`, `room.send`, `msg.<id>`) |
-| 06 | `06-file-view-once.yaml` (A) + `.peer.yaml` (B) | A attaches a photo as view-once; B opens once, second open refused, still refused after relaunch | **dry**: proposed `attach.*`, `viewer.*`; system picker labels need a device run |
-| 07 | `07-screenshot-notice.peer.yaml` (B, first) + `07-screenshot-notice.yaml` (A) | system screenshot on B → notice row on A. Android: black image with `FLAG_SECURE`; the app learns of it only on Android 14+ (older Android: manual M2) | **dry**: proposed `room.notice`; iOS ⌘S trigger to confirm on first run |
-| 08 | `08-burn.yaml` (A) + `.peer.yaml` (B) | menu → burn → confirm → room gone on both, still gone after relaunch; also the run's clean-up | wave-2 (`room.menu`, `room.burn`, `room.burn.confirm`) |
-| 09 | `09-panic-lock.yaml` | panic → `locked.screen` (Chats and room **not** visible) → relaunch still locked → unlock only with `MAESTRO_BIOMETRIC=sim` (CI default `skip` ends on the locked screen) | wave-2 (`panic`, `locked.*`) |
+| 03 | `03-create-secret-room.yaml` | New chat → Secret → `new.timer.3600` (asserted `checked`) → code, name, nick → create → `invite.sheet` → copy (`invite.toast`) → done → room → `room.back` to Chats (the room screen would auto-admit; 04-let-in needs the explicit row); publishes the link | E2E build (masked link otherwise: the flow's `assertTrue` stops it) |
+| 04 | `04-join-with-code.yaml` (B) + `04-let-in.yaml` (A) | B: open link → wrong code → `join.error` → right code → nick → submit → `room.screen` with `room.waiting`, send disabled; A: `chats.pending` + `chats.letIn` → tap → open room | device build |
+| 05 | `05-message-roundtrip.yaml` (A) + `.peer.yaml` (B) | A: `room.timer` → `room.timer.60` → pill reads "1m" → types, sends; B: `room.waiting` gone, bubble shows "Hold to read", body **not** visible, hold, body still not asserted, `timer.<id>` shows, reply | device build |
+| 11 | `11-verify-safety-number.yaml` (A) + `.peer.yaml` (B) | A: menu → `room.menu.verify` → `verify.number` (60 digits, copied to the relay) → `verify.mark` → `verify.member` "Verified" → close sheet; B: same, and asserts its digits equal A's | device build |
+| 06 | `06-file-view-once.yaml` (A) + `.peer.yaml` (B) | A: `attach.sheet`, `attach.viewOnce` `checked` (never tapped), `attach.send` disabled until `attach.picked`, system picker by label, send; own `file.<id>` disabled. B: `file.<id>` → `viewer.screen` with `viewer.hold`, no `viewer.share`, `viewer.done`; row `enabled: false`, tap opens nothing, still disabled after relaunch | device build; picker label `Photo.*` confirmed on the first run |
+| 07 | `07-screenshot-notice.peer.yaml` (B, first) + `07-screenshot-notice.yaml` (A) | system screenshot on B → `room.notice` on A with the web wording, no new `msg.<id>`. Android: black image with `FLAG_SECURE`; the app learns of it only on Android 14+ (older Android: manual S1/M2) | device build; iOS ⌘S trigger to confirm on first run |
+| 08 | `08-burn.yaml` (A) + `.peer.yaml` (B) | A: menu (`room.panic` present) → `room.burn` → `confirm.cancel` → burn → `room.burn.confirm` → Chats, no room, still none after relaunch; B: `room.ended` → `room.back` → no room, still none after relaunch | device build |
+| 10 | `10-settings-notifications.yaml` | Settings → `settings.notify` off → tap → OS prompt (`launchApp permissions` + "Allow" fallback) → `checked: true`, no `settings.notifyError` → relaunch keeps it → off again. The token is never rendered or asserted | a device that can mint a push token (tag `push`; `MAESTRO_PUSH=1` in the run script, `--exclude-tags push` otherwise) |
+| 09 | `09-panic-lock.yaml` | Chats → `chats.settings` → `panic` (one tap) → `locked.screen` + "Locked by Panic Exit", Settings/Chats/room **not** visible → relaunch still locked → unlock only with `MAESTRO_BIOMETRIC=sim` (CI default `skip` ends on the locked screen) | device build |
 
-Sub-flows: `_common/guest-home.yaml`, `_common/back-to-chats.yaml` (Android `back` / iOS edge swipe;
-`room.back` proposed), `_common/open-room.yaml`. Count: 9 journeys, 14 top-level flow files, 3 sub-flows,
-17 YAML files; expected at Gate 1: 14 flows × 2 platforms = 28 runs, 02 allowed to end at the sent state,
-06 and 07 counted as dry until their ids land. v1's 03-lock-unlock (60 s auto-lock), 13-settings,
-14-timer and 15-safety-number are not v1 journeys in the lead's list and stay manual (M6, M13) or Phase 3.
+Sub-flows: `_common/guest-home.yaml`, `_common/back-to-chats.yaml` (`room.back` in a room, else Android
+`back` / iOS edge swipe, twice), `_common/open-room.yaml`. Count: 11 journeys, 17 top-level flow files, 3
+sub-flows, 20 YAML files, 0 dry steps (`check-flows.mjs`: `17 flows, 168 ids in TESTIDS.md (1 proposed)`,
+`flows OK`); expected at Gate 1: 17 flows × 2 platforms = 34 runs, 02 allowed to end at the sent state, 10
+skipped by tag where no push token can be minted and reported as skipped with the reason. The run script
+sequence is 01 A, 01 B, 03, 04, 04-let-in, 05, 05.peer, 11, 11.peer, 06, 06.peer, 07.peer, 07, 08, 08.peer,
+[10 with `MAESTRO_PUSH=1`], 09 (last: it leaves A locked). v1's 03-lock-unlock (60 s auto-lock) stays
+manual (S10/S11); the former 14-timer and 15-safety-number journeys are now inside 05 and 11.
 
 ## 4. Manual security checks
 
@@ -528,15 +604,17 @@ Rooms are throwaway (§0).
 
 | # | Check | Steps | Expected: Android | Expected: iOS |
 | --- | --- | --- | --- | --- |
-| M1 | Sign-in methods | Passkey, Apple (iOS), Google, email link; each then `locked.root` on relaunch | all four reach `chats.root`; email link opens the app via App Link | same; Apple sign-in sheet is native; passkey uses the system sheet |
+| M1 | Sign-in methods | Apple (iOS), Google, email link (passkeys are hidden for Gate 1); each then `locked.screen` on relaunch | all reach `chats.screen`; the email link opens the app via App Link **and is refused unless it was requested on this phone within 1 h** (W1-1: tap a link requested from another device → "ask for a new link", never a session) | same; Apple sign-in sheet is native |
 | M2 | Screenshot in a room | hold a received Secret bubble, press the hardware screenshot combo | toast "Can't take screenshot due to security policy" (wording varies by OEM); no image in Photos; **no alert is sent** (nothing happened) | the screenshot **is taken** and shows what was on screen; within 5 s the other device shows the "may have taken a screenshot" notice; the SQL side shows ciphertext only. Store copy must say exactly this |
-| M3 | Screen recording | start the system recorder, open a room, hold a bubble, stop | recording shows black for every chat screen; the Chats list is black too if N1 covers it (lead decision, §1.4) | recording shows the `app.cover` view (logo on `#0A0C0F`) for the whole time the app is captured; audio is irrelevant; the moment recording stops, content returns without re-auth |
+| M3 | Screen recording | start the system recorder, open a room, hold a bubble, stop | recording shows black for every screen (N1 is app-wide, lead decision) | recording shows the `app.cover` view (logo on `#0A0C0F`) for the whole time the app is captured; audio is irrelevant; the moment recording stops, content returns without re-auth |
 | M4 | Screen mirroring / AirPlay | mirror to a TV or Mac | black (same as M3) | `app.cover` shown while mirrored |
 | M5 | App switcher | open a room, swipe to the switcher | the thumbnail is black or shows the cover | the thumbnail shows `app.cover`, never a bubble |
-| M6 | Auto-lock after 60 s | open a room, background the app, wait 65 s, return | `locked.root`; biometric prompt; after success the same room is shown without a reload | same; also check the 59 s case does **not** lock |
-| M7 | Panic Exit | in a room, Settings → Panic Exit (or the gesture mobile-ui ships) | cover within one frame, `locked.root`; a force-quit and relaunch is still locked; nothing deleted | same |
+| M6 | Auto-lock after 60 s | open a room, background the app, wait 65 s, return | `locked.screen`; biometric prompt; after success the same room is shown without a reload | same; also check the 59 s case does **not** lock |
+| M7 | Panic Exit | in a room: menu → Panic Exit (`room.panic`), or Settings → Panic Exit (`panic`); **one tap, no confirmation** | cover within one frame, `locked.screen` with "Locked by Panic Exit"; a force-quit and relaunch is still locked; nothing deleted | same |
 | M8 | Push on the lock screen | lock the device; from the other side send `BODY` | banner says "OnePeek" / "You have a new message in a private chat." and nothing else; expanding it shows no more; tapping it opens the app **locked** (M6 state), then the room after unlock | same; with the notification preview set to "Always" the body is still only the fixed string |
-| M9 | Links | tap an invite link in another app (Messages, Mail) | App Link opens the app directly (no chooser) when `assetlinks.json` verifies; `join.root` shows | Universal Link opens the app; the `#token` fragment is never sent to the server (check the Vercel log for `/chat/join` requests: path only) |
+| M9 | Links | tap an invite link in another app (Messages, Mail) | App Link opens the app directly (no chooser) when `assetlinks.json` verifies; `join.screen` shows | Universal Link opens the app; the `#token` fragment is never sent to the server (check the Vercel log for `/chat/join` requests: path only) |
+| M16 | Invite link on screen (W1-9) | create a room, open the invite sheet on a store/preview build | `invite.link` shows `…#••••••`, the QR and Copy/Share carry the full link; the E2E build (`EXPO_PUBLIC_E2E=1`) is the only one that shows it in full and is never distributed | same |
+| M17 | Push token lifecycle (W1-2) | Settings → Notifications on; sign out; sign in as another account on the same phone; send a message to the first account's room from another device | no notification reaches the phone for the first account (its row was unregistered on sign-out; the token now belongs to the second account's row if it registered) | same |
 | M10 | Backup exclusion, iOS | Finder → back up to this Mac, unencrypted; then `sqlite3 ~/Library/Application\ Support/MobileSync/Backup/<udid>/Manifest.db "select relativePath from Files where domain='AppDomain-io.onepeek.app'"` | n/a | the app's SQLite database file and `-wal`/`-shm` are **absent**; Keychain items are not in an unencrypted backup by definition; document any file that is present |
 | M11 | Backup exclusion, Android | `adb backup -f qa.ab io.onepeek.app` on a debug build (Android 11 and below); `adb shell bmgr backupnow io.onepeek.app` then `adb shell bmgr list sets`; on Android 12+ confirm `dumpsys backup` lists the package as not eligible | `qa.ab` is header-only (~1 KB) or the command reports the app opted out; `bmgr` shows no data set for the package; no `databases/` content anywhere in the archive | n/a |
 | M12 | Device loss simulation | copy the app sandbox off a rooted test device / jailbroken test iPhone (or the simulator's data directory) to another install | the copied SQLite holds only ciphertext; without the Keystore-held wrapping key nothing decrypts (the §1.3 test shows this in code; here it is confirmed on the real store) | same with the Keychain |
@@ -546,6 +624,41 @@ Rooms are throwaway (§0).
 
 What we do not test because it is not true: "iOS blocks screenshots", "the server cannot see who is
 in a room" (it sees user ids and device ids), "push delivery is invisible" (`known-limitations.md` 7).
+
+### 4.1 Native protections: device checks S1–S20 (from `apps/mobile/security/MANUAL-CHECKS.md`)
+
+native-security's list, folded in as the device-matrix checks for N1–N5 and the W1-4/W1-7 fixes. Each is
+run on every device in §5.1 once per release candidate and recorded as `S<n> <device> PASS|FAIL <date>
+<evidence>`; the steps and per-platform expectations are in `MANUAL-CHECKS.md` (kept there, one source).
+Owner = who runs it and signs the gate line; qa reviews every result; a FAIL is a security-reviewer finding.
+Overlaps with the M table are noted so each pair is run once and recorded under both numbers.
+
+| # | Protection | Owner | Platform | Overlaps | What a FAIL means |
+| --- | --- | --- | --- | --- | --- |
+| S1 | N1 `FLAG_SECURE` in a room: hardware screenshot refused, nothing in Photos, no alert on Android ≤ 13 (record 14+ behaviour) | native-security | Android | M2 | the window flag is not set in `onCreate` |
+| S2 | N1 everywhere, incl. after leaving a room, after force-stop/relaunch into the background, with a permission dialog up | native-security | Android | — | **W1-4 regression** if a screenshot succeeds on Chats after leaving a room: record the Android version and launch path |
+| S3 | N1 recording / cast shows black for the whole app | native-security | Android | M3, M4 | flag not app-wide |
+| S4 | N1/N2 app switcher thumbnail blank (Android) / cover (iOS), also after leaving a room | native-security | both | M5 | cover not shown on inactive |
+| S5 | N2 iOS screenshot **is taken**, other side shows the notice within 5 s, taker sees its own notice, SQL log ciphertext only | qa | iOS | M2 (iOS column), flow 07 | screenshot listener or `sendScreenshotAlert` broken; a *black* iOS screenshot is a best-effort observation, record the iOS version, it changes no copy |
+| S6 | N2 recording / AirPlay shows the cover from the moment capture starts; stopping removes it without relocking | native-security | iOS | M3, M4 | `isCaptured` not observed |
+| S7 | N2 inactive cover (Control Centre, call, switcher), removed on return within 60 s without a prompt | native-security | both | — | AppState handling |
+| S8 | N4 cold start → Locked screen; no chat content in the accessibility tree behind it | qa | both | flow 09 (relaunch half) | children mounted while locked |
+| S9 | N4 unlock: biometric success / cancel / fallback to passcode | qa | both | — | `disableDeviceFallback` or the cancel path |
+| S10 | N4 auto-lock 59 s: no prompt | qa | both | M6 | timer too short |
+| S11 | N4 auto-lock 61 s: Locked, rooms intact after unlock | qa | both | M6 | timer too long or data wiped |
+| S11b | N4 stale unlock (**W1-7**): prompt left open across a 65 s background trip; answering the old sheet must not unlock, a fresh Unlock must | native-security | iOS (Android cancels the prompt) | — | the unlock generation counter is not checked on resolve |
+| S12 | N4 Panic Exit from a room, then force-quit and relaunch: still locked, nothing deleted | qa | both | M7, flow 09 | lock store not persisted synchronously |
+| S13 | N4 panic flag written from outside while backgrounded → locked on foreground (reload on active) | native-security | both (debug build) | — | lock store not reloaded on active |
+| S14 | N4 insecure device (no screen lock): warning shown, Unlock opens without a prompt, re-adding a PIN restores it | native-security | both | — | `probeDeviceAuth` wrong |
+| S15 | N3 iOS unencrypted backup has no `onepeek-chat.db` / `-wal` / `-shm` | release | iOS | M10 | `isExcludedFromBackup` not applied |
+| S16 | N3 iOS device transfer: no chats, `keystore_unavailable` or clean, "Reset chats on this phone" offered | release | iOS | M12 | wrapping key not `ThisDeviceOnly` |
+| S17 | N3 Android `adb backup` header-only / opted out, `bmgr` no data set, `dumpsys` not eligible | release | Android | M11 | backup rules plugin |
+| S18 | N3 Android "Copy data" to a new phone: no OnePeek data | release | Android | M12 | data-extraction rules |
+| S19 | N5 watermark readable in a photo while held, does not intercept taps | qa | both | M13 | overlay or `pointerEvents` |
+| S20 | A11y: with VoiceOver/TalkBack the alert is still sent, cover announced "OnePeek is hidden", watermark not read | qa | both | A7 | accessibility props |
+
+Not tested because it is not true (unchanged from `MANUAL-CHECKS.md`): "iOS blocks screenshots", "a camera
+is stopped", "a rooted or jailbroken phone keeps the flags".
 
 ## 5. Phase 3: device matrix, performance, offline, accessibility
 
@@ -640,16 +753,35 @@ npx vitest run packages/core/test/interop.integration.test.ts
 npx vitest run lib/chat/client.integration.test.ts     # web regression, must stay 8 passed
 npm test -w packages/core -- test/leak-guard.test.ts src/log.test.ts   # leak guard, run 3× before a report
 node apps/mobile/e2e/scripts/check-flows.mjs            # Maestro flows: YAML, ids vs TESTIDS.md, no screenshots
+npx vitest run lib/alerts.native.test.ts supabase/tests/push-devices.test.ts app/api/chat/notify/route.test.ts   # push (§1.5)
 
 # Maestro (a machine with simulators; see apps/mobile/e2e/README.md "Where to run")
 maestro test apps/mobile/e2e --include-tags single --include-tags ios     --format junit --output apps/mobile/e2e/results/ios.xml
 maestro test apps/mobile/e2e --include-tags single --include-tags android --format junit --output apps/mobile/e2e/results/android.xml
-MAESTRO_DEVICE_A=<udid> MAESTRO_DEVICE_B=<udid> apps/mobile/e2e/scripts/run-two-device.sh   # 14 flows, A/B alternating
+MAESTRO_DEVICE_A=<udid> MAESTRO_DEVICE_B=<udid> apps/mobile/e2e/scripts/run-two-device.sh   # 16 flows, A/B alternating; MAESTRO_PUSH=1 adds 10
+maestro test apps/mobile/e2e --include-tags single --exclude-tags push   # when the device cannot mint a push token
 
 # Device perf
 adb shell am start -W -n io.onepeek.app/.MainActivity
 adb logcat -s ReactNativeJS | grep '^perf '
 ```
+
+Notes on the commands:
+
+- **Jest timeout (`apps/mobile`).** The first transform of `ts-mls` / `@hpke` on a cold cache once pushed the
+  chats suite past jest's 5 s default (one run, not reproduced warm). The lead set `testTimeout: 20000` in
+  `apps/mobile/jest.config.js`. By §6.1 that was a failing run until the cause was understood: the cause is
+  transform time, not the test, so the raised timeout is the fix and not a quarantine. If a mobile suite ever
+  exceeds 20 s, treat it as failing, not as "slow".
+- **Expo config check before the first push test (lead, carried from wave 2).** `app.config.ts` lists the
+  `expo-notifications` plugin, but nothing yet proves the iOS build carries the `aps-environment`
+  entitlement (`development` for the dev build, `production` for TestFlight/App Store) or that the Android
+  build has `google-services.json` (`GOOGLE_SERVICES_JSON` EAS secret) wired through `googleServicesFile`.
+  Before 10 or M8 runs: `npx expo config --type introspect` on the EAS build's commit and check
+  `ios.entitlements["aps-environment"]` and `android.googleServicesFile`; without them
+  `getDevicePushTokenAsync` rejects and 10 ends on `settings.notifyError`, which is a build problem, not a
+  product one, and is reported as such. `APNS_USE_SANDBOX=1` on the server side must match a
+  `development` entitlement.
 
 ### 6.3 Reporting format (every agent, every report and gate document)
 
@@ -694,14 +826,21 @@ verbatim and the fixture string it leaked, if any.
    alternative is `better-sqlite3` (native build, slower install). Recommendation: `node:sqlite`.
 7. **Older iPhone.** Confirm the minimum iOS after the first prebuild so the second iPhone in §5.1 is
    bought or borrowed early.
-8. **Proposed testIDs.** 13 ids the flows need are not in the contract (`TESTIDS.md` "Proposed"):
-   `signin.sent`, `join.waiting`, `join.error`, `new.timer.1h` (+ `.30s/.5m/.1d`), `room.back`,
-   `attach.photo/.file/.viewOnce/.send`, `viewer.screen/.close/.gone`, `room.notice`. Accept, rename or
-   reject; 06 and 07 stay dry until then.
-9. **`log` export.** `packages/core/src/log.ts` is not re-exported from `src/index.ts` (core-crypto's
-   file). Screens import `@onepeek/core/src/log`; say if you want it on the package root.
+8. **Proposed testIDs.** Answered 2026-10-31: all 13 accepted and built by mobile-ui wave 2 (three under
+   another name, §3.1). `TESTIDS.md` is reconciled with the code; 0 dry steps. One new optional proposal:
+   `verify.qr`.
+9. **`log` export.** Answered: `log`/`redact` are exported from the package root since Q4 merged.
 10. **`MAESTRO_EMAIL`.** Flow 02 sends a real magic link from production; the default
    `qa-maestro@onepeek.io` must be an inbox the team controls, or the lead names one.
+11. **`eas.json` `e2e` profile (release).** Flow 03 needs `EXPO_PUBLIC_E2E=1` (W1-9). Proposed:
+   `"e2e": { "extends": "development", "env": { "EXPO_PUBLIC_E2E": "1" }, "ios": { "simulator": true } }`,
+   plus a note in `release/versioning.md` that the profile is never distributed to testers. qa does not
+   touch `eas.json`.
+12. **Push-capable runner for 10.** An iOS simulator needs Apple Silicon + Xcode 14+ for a device token; an
+   Android emulator needs a Google Play image. If the chosen runner has neither, 10 is excluded by tag and
+   M8/M17 carry the proof on physical devices.
+13. **Backend review gaps (§1.5).** Four additive assertions (d, f, 1+2, 8); backend's next pass. Not a
+   blocker for the gate's "no content" line (the shapes are exact), a blocker for calling §1.5 complete.
 
 ## 8. Phase 1: Gate 1 criteria map
 
@@ -713,13 +852,17 @@ proof exists or is specified but needs the EAS development build (blocked on the
 | Gate 1 criterion | Automated proof | Manual proof | Owner | Status 2026-10-31 |
 | --- | --- | --- | --- | --- |
 | Phone ↔ browser end to end on the live project | `packages/core/test/interop.integration.test.ts` (20 scenarios, roles swapped, every artefact swept; PGlite, not the live project, by rule §0.1) | one throwaway room on production: phone dev build + browser, create → join → text both ways → file → view-once → burn; evidence per §6.3 in `gates/phase-1.md` | qa (test), lead (live run) | test green (87/87 core); live run **pending device build** |
-| Push with no content | `lib/alerts.native.test.ts` forbidden-strings sweep (§1.5, spec written, backend writes it, qa reviews in wave 2); `supabase/tests/push-devices.test.ts` RLS + `register_push_device` (§1.5) | M8: banner shows only `OnePeek` / `You have a new message in a private chat.`, expanding shows nothing more, tap opens the app locked | backend (tests), qa (review, M8) | `push-devices.test.ts` landed (12 tests, qa review pending); `alerts.native.test.ts` pending B2/B4; M8 pending device build + APNs/FCM keys |
-| Black screenshots on Android | `apps/mobile/security` tests (§1.4 `secureFlag.test.ts`: `preventScreenCaptureAsync` on every `/room`, `/secret`, `/join` route, and the Chats list per the lead's answer); Maestro 07 asserts the notice side only, and only on Android 14+ | M2 Android: hardware screenshot in a room → OEM toast, no image in Photos; M5 switcher thumbnail black | native-security (N1, tests), qa (M2, M5) | **pending N1 + device build**; note: Maestro cannot verify that an image is black; M2 is the proof |
-| Blanked recording on iOS | `capture.test.ts` (§1.4: `UIScreen.isCaptured` true → cover shown; cover reasons independent) | M3 iOS: system recorder shows the cover for the whole capture; M4 mirroring | native-security (N2, tests), qa (M3, M4) | **pending N2 + device build** (simulators cannot record the screen the way a device does) |
-| Lock works | `autoLock.test.ts`, `biometric.test.ts` (§1.4); core `platform.test.ts` M3 fail-closed lock (landed, 87/87); Maestro 09 (panic → locked, relaunch still locked; unlock with `MAESTRO_BIOMETRIC=sim`) | M6 60 s auto-lock (and the 59 s non-lock), M7 Panic Exit | native-security (N4), qa (09, M6, M7) | core part landed; app tests **pending N4**; 09 written, **pending device build** |
+| Push with no content | `lib/alerts.native.test.ts` (25: exact APNs/FCM shapes, forbidden-strings sweep, dead tokens, W1-3 cap and concurrency, W1-5 http2 deadline, web regression); `supabase/tests/push-devices.test.ts` (14: RLS, both RPCs, W1-2 one owner per token, W1-3 cap 10 + token shape, `search_path`, rollback); `app/api/chat/notify/route.test.ts` (opt-out, throttle, fan-out); app side `apps/mobile/lib/__tests__/chat.test.ts` (W1-2 `push.register/unregister/current`, sealed token, unregister before sign-out/reset) and `packages/core/src/chat/client.push.test.ts` | M8: banner shows only `OnePeek` / `You have a new message in a private chat.`, expanding shows nothing more, tap opens the app locked; M17 token lifecycle; flow 10 | backend (tests), qa (review, M8, M17, 10) | tests landed and reviewed (§1.5): **4 review gaps open** (d, f, 1+2, 8), none a leak; M8/M17/10 pending device build + APNs/FCM keys + the Expo config check (§6.2) |
+| Black screenshots on Android | `apps/mobile/security/__tests__/secureScreen.test.tsx` (app-wide `withSecureWindow` plugin + `useSecureScreen`; **W1-4**: unmount never calls `allowScreenCaptureAsync`, a rejected prevent is never followed by an allow) and `SecurityProvider.test.tsx` (**W1-4**: app key asserted on mount and re-asserted on every active transition, MissingActivity retried once); Maestro 07 asserts the notice side only, and only on Android 14+ | S1, S2 (the W1-4 regression check: screenshot on Chats *after* leaving a room), S3; M2, M5 | native-security (N1, tests, S1–S3), qa (M2, M5) | tests landed (mobile jest 172/172); device checks **pending device build**; Maestro cannot verify that an image is black, S1/M2 is the proof |
+| Blanked recording on iOS | `SecurityProvider.test.tsx` (`isCaptured` true → cover shown; cover reasons independent); `screenshot.test.tsx` (alert sent once with room id and ttl) | S5, S6, S7; M3 iOS, M4 | native-security (N2, tests, S6, S7), qa (S5, M3, M4) | tests landed; **pending device build** (simulators cannot record the screen the way a device does) |
+| Lock works | `SecurityProvider.test.tsx` (cold start locked, 60 s auto-lock, panic → lock store + `chat.lock()`, lock-store reload on active; **W1-7**: an unlock in flight across a 61 s trip, `lockNow` or panic during an unlock, is stale and keeps the app locked); `components/__tests__/locked.test.tsx` (Locked screen copy, Panic state, insecure-device warning); core `platform.test.ts` M3 fail-closed lock; Maestro 09 (Settings → single-tap panic → locked, relaunch still locked; unlock with `MAESTRO_BIOMETRIC=sim`) | S8–S14 incl. S11b (W1-7 on a device); M6, M7 | native-security (N4, tests, S11b, S13, S14), qa (09, S8–S12, M6, M7) | tests landed; 09 written, **pending device build** |
+| Sign-in cannot be hijacked by a crafted link (W1-1, high, fixed) | `apps/mobile/lib/__tests__/chat.test.ts`: a `token_hash` link is refused unless an email link was requested on this phone within 1 h; the session email is compared after `verifyOtp` and a mismatch signs out again (login CSRF); the raw URL reaches only the parser; implicit-flow fragments and provider errors are refused; the pending address is forgotten on sign-out/reset | M1 (tap a link requested from another device: asks for a new link) | core-crypto (fix + tests), qa (M1) | tests landed; M1 **pending device build** |
+| Supabase host pinned (W1-6) | `chat.test.ts` W1-6 block: anything but `https://<ref>.supabase.co` (suffix trick, path, trailing slash, http) gets no client; `packages/core/src/adapters/rn/platform.test.ts` M2 `checkOnePeekUrl` | — | core-crypto | landed |
 | No open high findings | — | security-reviewer's Phase 1 report in `docs/mobile/security-review/`; every PR reviewed before merge (S1) | security-reviewer | S0 closed with no open high/critical (log.md 2026-10-31); S1 ongoing |
-| Leak guard (not a gate line, but the rule-1 proof the gate relies on) | `packages/core/test/leak-guard.test.ts` 53/53 ×3, `npm run lint` 0 errors, static sweep clean (§1.6) | — | qa | **landed** 2026-10-31 |
-| Maestro journeys 01-09 | `check-flows.mjs` static check: 14 flows, 54 ids, 7 dry steps on proposed ids | run on two simulators per README; 02 ends at the sent state by design | qa (flows), lead (runner decision, §7.5) | **written, not run**; pending runner decision, wave-2 ids, proposed ids (§7.8) |
+| Leak guard (not a gate line, but the rule-1 proof the gate relies on) | `packages/core/test/leak-guard.test.ts` 84 + `src/log.test.ts` 9 = 93/93 ×3 (W1-10: `expo-insights`/`expo-updates` imports, off-device sinks with a secret-named argument, `redact()` of strings in arrays), `npm run lint` 0 errors with the wave-2 screens, static sweep clean (§1.6) | — | qa | **landed** 2026-10-31, W1-10 closed |
+| Maestro journeys 01–11 | `check-flows.mjs` static check: 17 flows, 168 ids, 0 dry steps (1 optional proposed id unused) | run on two simulators per README; 02 ends at the sent state by design; 10 only on a push-capable device | qa (flows), lead (runner decision, §7.5), release (`e2e` EAS profile, §7.11) | **written, not run**; pending the `e2e` build profile (W1-9), runner decision |
 
 Reporting at the gate follows §6.3: counts from the tools, dry steps listed by id, manual checks as
-`M<n> <device> PASS|FAIL <date> <evidence>`.
+`M<n>` / `S<n>` `<device> PASS|FAIL <date> <evidence>`. Counts on 2026-10-31 after wave 2 (`npm test` from
+the root): web 108/108, core 194/194, mobile jest 172/172; `npm run typecheck` clean; `npm run lint` 0
+errors (55 grandfathered warnings).

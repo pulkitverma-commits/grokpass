@@ -6,7 +6,10 @@
 #   MAESTRO_DEVICE_A=<udid|serial> MAESTRO_DEVICE_B=<udid|serial> apps/mobile/e2e/scripts/run-two-device.sh
 #
 # Optional: MAESTRO_BIOMETRIC=sim (unlock in 09), MAESTRO_UNIVERSAL_LINKS=1 (physical devices),
-# KEEP_DEBUG=1 (keep Maestro's debug logs; screenshots and recordings are always deleted).
+# MAESTRO_PUSH=1 (run 10, which needs a device that can mint a push token), KEEP_DEBUG=1 (keep
+# Maestro's debug logs; screenshots and recordings are always deleted).
+# The installed build must be the `e2e` EAS profile (EXPO_PUBLIC_E2E=1): 03 reads the full invite
+# link from `invite.link`, which every other build masks (W1-9).
 # Nothing in this script echoes a variable, and `set -x` is never enabled: the room link carries
 # the invite token.
 set -euo pipefail
@@ -53,11 +56,15 @@ run "$B" 04-join-with-code.yaml              # reads it back; waits to be let in
 run "$A" 04-let-in.yaml
 run "$A" 05-message-roundtrip.yaml
 run "$B" 05-message-roundtrip.peer.yaml
+run "$A" 11-verify-safety-number.yaml       # publishes the safety number (not a secret)
+run "$B" 11-verify-safety-number.peer.yaml  # compares it with its own
 run "$A" 06-file-view-once.yaml
 run "$B" 06-file-view-once.peer.yaml
 run "$B" 07-screenshot-notice.peer.yaml      # system screenshot on B (B must be frontmost on iOS)
 run "$A" 07-screenshot-notice.yaml
 run "$A" 08-burn.yaml                        # also the clean-up: the throwaway room ends here
 run "$B" 08-burn.peer.yaml
-run "$A" 09-panic-lock.yaml
-printf 'two-device run: 14 flows passed (A=%s B=%s)\n' "${A:0:8}…" "${B:0:8}…"
+n=16
+if [ "${MAESTRO_PUSH:-0}" = "1" ]; then run "$A" 10-settings-notifications.yaml; n=17; fi
+run "$A" 09-panic-lock.yaml                  # last: it leaves A locked
+printf 'two-device run: %s flows passed (A=%s B=%s)\n' "$n" "${A:0:8}…" "${B:0:8}…"

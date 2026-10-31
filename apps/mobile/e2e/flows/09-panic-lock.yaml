@@ -1,8 +1,9 @@
-# 09 Panic → locked screen → still locked after a relaunch → biometric unlock.
-# The biometric prompt cannot be answered by Maestro. MAESTRO_BIOMETRIC=skip (default, CI) ends at
-# the locked screen; MAESTRO_BIOMETRIC=sim asks the relay to accept the simulator's biometric
-# (iOS `simctl … notifyutil -p com.apple.BiometricKit_Sim.fingerTouch.match`, Android
-# `adb emu finger touch 1`) and asserts Chats home comes back. Nothing is asserted on room content.
+# 09 Settings → Panic Exit (single tap, no confirmation) → locked screen → still locked after a
+# relaunch → biometric unlock. The biometric prompt cannot be answered by Maestro.
+# MAESTRO_BIOMETRIC=skip (default, CI) ends at the locked screen; MAESTRO_BIOMETRIC=sim asks the
+# relay to accept the simulator's biometric (iOS `simctl … notifyutil -p
+# com.apple.BiometricKit_Sim.fingerTouch.match`, Android `adb emu finger touch 1`) and asserts
+# Chats home comes back. Nothing is asserted on room content.
 appId: io.onepeek.app
 name: 09-panic-lock
 tags:
@@ -18,16 +19,31 @@ env:
 - launchApp
 - extendedWaitUntil:
     visible:
-      id: "(room|chats)\\.screen"
+      id: "(room|chats|settings)\\.screen"
     timeout: 15000
+- runFlow: _common/back-to-chats.yaml
+- tapOn:
+    id: "chats.settings"
+- extendedWaitUntil:
+    visible:
+      id: "settings.screen"
+    timeout: 10000
+- assertVisible:
+    id: "settings.lockNow"
 - tapOn:
     id: "panic"
-- assertVisible:
-    id: "locked.screen"
+# One tap is enough: no confirmation sheet exists.
+- extendedWaitUntil:
+    visible:
+      id: "locked.screen"
+    timeout: 5000
+- assertNotVisible:
+    id: "settings.screen"
 - assertNotVisible:
     id: "chats.screen"
 - assertNotVisible:
     id: "room.screen"
+- assertVisible: "Locked by Panic Exit"
 - stopApp
 - launchApp
 - extendedWaitUntil:
@@ -38,6 +54,8 @@ env:
     id: "locked.unlock"
 - assertNotVisible:
     id: "chats.screen"
+- assertNotVisible:
+    id: "settings.screen"
 - runFlow:
     when:
       true: ${MAESTRO_BIOMETRIC == 'sim'}

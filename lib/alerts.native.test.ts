@@ -3,6 +3,7 @@
 // sign the provider JWTs correctly, do nothing without env, and that web push is unchanged.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { generateKeyPairSync, verify as cryptoVerify } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 
 const sendNotification = vi.fn();
 const setVapidDetails = vi.fn();
@@ -48,16 +49,23 @@ const fcmOk = (url: string) => url.includes('oauth2') ? { status: 200, body: { a
 
 function fakeAdmin(devices: { platform: string; token: string }[]) {
   const deleted: { owner: string; tokens: string[] }[] = [];
+  const reads: { order: [string, { ascending: boolean }]; limit: number }[] = [];
   const admin = {
     from(table: string) {
       expect(table).toBe('push_devices');
       return {
-        select: () => ({ eq: async () => ({ data: devices }) }),
+        select: () => ({
+          eq: () => ({
+            order: (col: string, o: { ascending: boolean }) => ({
+              limit: async (n: number) => { reads.push({ order: [col, o], limit: n }); return { data: devices.slice(0, n) }; },
+            }),
+          }),
+        }),
         delete: () => ({ eq: (_c: string, owner: string) => ({ in: async (_t: string, tokens: string[]) => { deleted.push({ owner, tokens }); return { data: null }; } }) }),
       };
     },
   };
-  return { admin: admin as never, deleted };
+  return { admin: admin as never, deleted, reads };
 }
 
 beforeEach(async () => {
@@ -238,6 +246,156 @@ describe('native push: pushToNative fan-out', () => {
     expect(await alerts.pushToNative(admin, 'o', ROOM, { http2Request: h, fetch: f })).toBe(1);
     expect(f).not.toHaveBeenCalled();
     expect(deleted).toEqual([]);
+  });
+
+  it('reads at most the 10 most recently seen tokens per owner, even if the table holds more (W1-3)', async () => {
+    setApnsEnv();
+    const many = Array.from({ length: 25 }, (_, i) => ({ platform: 'ios', token: `tok${i}` }));
+    const { admin, reads } = fakeAdmin(many);
+    const h = http2Mock(200);
+    expect(await alerts.pushToNative(admin, 'o', ROOM, { http2Request: h })).toBe(10);
+    expect(reads).toEqual([{ order: ['last_seen', { ascending: false }], limit: 10 }]);
+    expect(h).toHaveBeenCalledTimes(10);
+    expect(alerts.MAX_TOKENS_PER_OWNER).toBe(10);
+  });
+});
+
+describe('native push: bounded concurrency (W1-3)', () => {
+  // A transport that resolves only when released, so the test can count what is in flight.
+  function gate() {
+    let inFlight = 0, peak = 0, started = 0;
+    const pending: (() => void)[] = [];
+    const h = vi.fn((_req: Http2Req) => new Promise<{ status: number; body: string }>(resolve => {
+      inFlight++; started++; peak = Math.max(peak, inFlight);
+      pending.push(() => { inFlight--; resolve({ status: 200, body: '' }); });
+    }));
+    const releaseAll = async () => { while (pending.length) { pending.shift()!(); await Promise.resolve(); } await new Promise(r => setImmediate(r)); };
+    return { h, releaseAll, inFlight: () => inFlight, peak: () => peak, started: () => started };
+  }
+
+  it('APNs: 25 tokens go out 10 at a time, never more than 10 in flight', async () => {
+    setApnsEnv();
+    const g = gate();
+    const tokens = Array.from({ length: 25 }, (_, i) => `tok${i}`);
+    const p = alerts.sendApns(tokens, { room: ROOM }, { http2Request: g.h });
+    await new Promise(r => setImmediate(r));
+    expect(g.inFlight()).toBe(10);
+    expect(g.started()).toBe(10);
+    await g.releaseAll();
+    expect(g.started()).toBe(20);
+    expect(g.inFlight()).toBe(10);
+    await g.releaseAll();
+    expect(g.started()).toBe(25);
+    await g.releaseAll();
+    expect(await p).toEqual({ sent: 25, dead: [] });
+    expect(g.peak()).toBe(10);
+    expect(alerts.SEND_CONCURRENCY).toBe(10);
+  });
+
+  it('FCM: 25 tokens go out 10 at a time as well', async () => {
+    setFcmEnv();
+    let inFlight = 0, peak = 0;
+    const f = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('oauth2')) return { ok: true, status: 200, json: async () => ({ access_token: 'ya29.test', expires_in: 3600 }), text: async () => '' } as Response;
+      inFlight++; peak = Math.max(peak, inFlight);
+      await new Promise(r => setTimeout(r, 2));
+      inFlight--;
+      return { ok: true, status: 200, json: async () => ({}), text: async () => '' } as Response;
+    });
+    const tokens = Array.from({ length: 25 }, (_, i) => `tok${i}`);
+    expect(await alerts.sendFcm(tokens, { room: ROOM }, { fetch: f })).toEqual({ sent: 25, dead: [] });
+    expect(peak).toBe(10);
+    expect(f).toHaveBeenCalledTimes(26);
+  });
+});
+
+describe('native push: nodeHttp2Request always settles (W1-5)', () => {
+  const REQ = { authority: 'api.push.apple.com', path: '/3/device/t', headers: { 'content-type': 'application/json' }, body: '{}' };
+
+  function fakeHttp2() {
+    const stream = Object.assign(new EventEmitter(), {
+      setTimeout: vi.fn(), end: vi.fn(), close: vi.fn(),
+    });
+    const session = Object.assign(new EventEmitter(), {
+      setTimeout: vi.fn(), destroy: vi.fn(), close: vi.fn(),
+      request: vi.fn(() => stream),
+    });
+    const connect = vi.fn(() => session) as unknown as Alerts['nodeHttp2Request'] extends (r: unknown, o?: { connect?: infer C }) => unknown ? C : never;
+    return { stream, session, connect };
+  }
+
+  it('resolves on a normal response and destroys the session', async () => {
+    const { stream, session, connect } = fakeHttp2();
+    const p = alerts.nodeHttp2Request(REQ, { connect });
+    stream.emit('response', { ':status': 200 });
+    stream.emit('data', Buffer.from('ok'));
+    stream.emit('end');
+    expect(await p).toEqual({ status: 200, body: 'ok' });
+    expect(session.destroy).toHaveBeenCalledTimes(1);
+    expect(stream.end).toHaveBeenCalledWith('{}');
+    expect(stream.setTimeout).toHaveBeenCalledWith(alerts.HTTP2_IDLE_MS);
+    expect(session.setTimeout).toHaveBeenCalledWith(alerts.HTTP2_IDLE_MS);
+    expect(connect).toHaveBeenCalledWith('https://api.push.apple.com');
+  });
+
+  it('rejects when the stream emits only close (the old code hung here)', async () => {
+    const { stream, session, connect } = fakeHttp2();
+    const p = alerts.nodeHttp2Request(REQ, { connect });
+    stream.emit('close');
+    await expect(p).rejects.toThrow(/http2_stream_closed/);
+    expect(session.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves with the status seen when close arrives without end', async () => {
+    const { stream, connect } = fakeHttp2();
+    const p = alerts.nodeHttp2Request(REQ, { connect });
+    stream.emit('response', { ':status': 410 });
+    stream.emit('data', Buffer.from('{"reason":"Unregistered"}'));
+    stream.emit('close');
+    expect(await p).toEqual({ status: 410, body: '{"reason":"Unregistered"}' });
+  });
+
+  it('rejects on a stream or session timeout and on session close', async () => {
+    for (const [target, event, why] of [['stream', 'timeout', 'http2_stream_timeout'], ['session', 'timeout', 'http2_session_timeout'], ['session', 'close', 'http2_session_closed']] as const) {
+      const f = fakeHttp2();
+      const p = alerts.nodeHttp2Request(REQ, { connect: f.connect });
+      f[target].emit(event);
+      await expect(p).rejects.toThrow(why);
+      expect(f.session.destroy).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('rejects by the hard deadline when nothing is ever emitted, and settles only once', async () => {
+    vi.useFakeTimers();
+    try {
+      const { stream, session, connect } = fakeHttp2();
+      const p = alerts.nodeHttp2Request(REQ, { connect });
+      let settled = false;
+      p.then(() => { settled = true; }, () => { settled = true; });
+      await vi.advanceTimersByTimeAsync(alerts.HTTP2_DEADLINE_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(p).rejects.toThrow(/http2_deadline/);
+      expect(session.destroy).toHaveBeenCalledTimes(1);
+      // A late 'end' after the deadline changes nothing.
+      stream.emit('response', { ':status': 200 });
+      stream.emit('end');
+      expect(session.destroy).toHaveBeenCalledTimes(1);
+      expect(alerts.HTTP2_DEADLINE_MS).toBe(15_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects when connect itself throws', async () => {
+    const connect = (() => { throw new Error('ENOTFOUND'); }) as unknown as Parameters<Alerts['nodeHttp2Request']>[1] extends { connect?: infer C } | undefined ? C : never;
+    await expect(alerts.nodeHttp2Request(REQ, { connect })).rejects.toThrow(/ENOTFOUND/);
+  });
+
+  it('sendApns keeps a token whose request rejected (not dead) and still returns', async () => {
+    setApnsEnv();
+    const h = vi.fn(async (req: { path: string }) => { if (req.path.endsWith('/slow')) throw new Error('http2_deadline'); return { status: 200, body: '' }; });
+    expect(await alerts.sendApns(['ok', 'slow'], { room: ROOM }, { http2Request: h })).toEqual({ sent: 1, dead: [] });
   });
 });
 

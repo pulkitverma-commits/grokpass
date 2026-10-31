@@ -90,6 +90,12 @@ select proname from pg_proc where proname in ('register_push_device', 'unregiste
 Rollback: run `008_mobile_push_tokens_down.sql`. It drops the table (all registered tokens) and the
 two RPCs, nothing else.
 
+Security review wave 1 (`docs/mobile/security-review/phase-1-wave-1.md`), folded into 008 before it is applied anywhere:
+
+- **W1-2** — a token belongs to one owner: `unique (token)`; `register_push_device` from another account takes the row over (`on conflict (token) do update set owner = auth.uid(), …`), so a shared or handed-on phone stops getting the previous account's pushes as soon as the new account registers.
+- **W1-3** — tokens must be 32–512 chars of `[A-Za-z0-9:_-]` (else `bad_token`, also a table check); each owner is trimmed to their 10 most recently seen tokens after every registration; `pushToNative` reads at most 10 (`order last_seen desc limit 10`) and sends 10 requests at a time instead of all at once. Both RPCs run with `search_path = ''` and schema-qualified names.
+- **W1-5** — `nodeHttp2Request` always settles: `close`/`timeout` on the stream and the session reject (or resolve with the status already seen), the session has an idle timeout, and a 15 s hard deadline rejects and destroys the session, so one slow APNs stream can no longer hang `/api/chat/notify`.
+
 ### Vercel env (server only, never in the app or `apps/mobile`)
 
 | Variable | What | Where it comes from |

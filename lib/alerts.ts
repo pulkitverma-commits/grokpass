@@ -202,21 +202,66 @@ function apnsJwt(c: ApnsConfig, now: number) {
   return jwt;
 }
 
-function nodeHttp2Request(req: { authority: string; path: string; headers: Record<string, string>; body: string }): Promise<Http2Response> {
+/** Idle timeout on the HTTP/2 session and stream, and the hard deadline for one request. */
+export const HTTP2_IDLE_MS = 10_000;
+export const HTTP2_DEADLINE_MS = 15_000;
+
+/** The subset of http2.connect / ClientHttp2Session this file uses; injectable so tests can fake it. */
+export type Http2Connect = (authority: string) => http2.ClientHttp2Session;
+export type Http2Options = { connect?: Http2Connect; deadlineMs?: number; idleMs?: number };
+
+/**
+ * One POST over a fresh HTTP/2 session. Always settles (security review W1-5): 'end' resolves;
+ * 'error', 'close' without a response, 'timeout' on the stream or the session, and a hard deadline
+ * all reject; whichever comes first wins and the session is destroyed either way.
+ */
+export function nodeHttp2Request(req: { authority: string; path: string; headers: Record<string, string>; body: string }, opts: Http2Options = {}): Promise<Http2Response> {
+  const connect: Http2Connect = opts.connect ?? (authority => http2.connect(authority));
+  const deadlineMs = opts.deadlineMs ?? HTTP2_DEADLINE_MS;
+  const idleMs = opts.idleMs ?? HTTP2_IDLE_MS;
   return new Promise((resolve, reject) => {
-    const session = http2.connect(`https://${req.authority}`);
-    const done = (fn: () => void) => { session.close(); fn(); };
-    session.on('error', e => done(() => reject(e)));
-    const stream = session.request({ ':method': 'POST', ':path': req.path, ...req.headers });
-    const chunks: Buffer[] = [];
-    let status = 0;
-    stream.on('response', h => { status = Number(h[':status'] || 0); });
-    stream.on('data', (c: Buffer) => chunks.push(c));
-    stream.on('end', () => done(() => resolve({ status, body: Buffer.concat(chunks).toString('utf8') })));
-    stream.on('error', e => done(() => reject(e)));
-    stream.setTimeout(10_000, () => stream.close(http2.constants.NGHTTP2_CANCEL));
-    stream.end(req.body);
+    let settled = false;
+    let session: http2.ClientHttp2Session | undefined;
+    const timer = setTimeout(() => fail('http2_deadline'), deadlineMs);
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { session?.destroy(); } catch { /* already gone */ }
+      fn();
+    };
+    const fail = (why: string) => settle(() => reject(new Error(why)));
+    try {
+      session = connect(`https://${req.authority}`);
+      session.on('error', e => settle(() => reject(e)));
+      session.on('close', () => fail('http2_session_closed'));
+      session.on('timeout', () => fail('http2_session_timeout'));
+      session.setTimeout(idleMs);
+      const stream = session.request({ ':method': 'POST', ':path': req.path, ...req.headers });
+      const chunks: Buffer[] = [];
+      let status = 0;
+      stream.on('response', h => { status = Number(h[':status'] || 0); });
+      stream.on('data', (c: Buffer) => chunks.push(c));
+      stream.on('end', () => settle(() => resolve({ status, body: Buffer.concat(chunks).toString('utf8') })));
+      stream.on('error', e => settle(() => reject(e)));
+      // 'close' without 'end': resolve with the status we saw (the body may be short) or reject.
+      stream.on('close', () => status ? settle(() => resolve({ status, body: Buffer.concat(chunks).toString('utf8') })) : fail('http2_stream_closed'));
+      stream.on('timeout', () => fail('http2_stream_timeout'));
+      stream.setTimeout(idleMs);
+      stream.end(req.body);
+    } catch (e) {
+      settle(() => reject(e));
+    }
   });
+}
+
+/** How many tokens an owner can hold (migration 008 trims to this) and how many requests are in flight at once. */
+export const MAX_TOKENS_PER_OWNER = 10;
+export const SEND_CONCURRENCY = 10;
+
+/** Runs fn over items in groups of `size`; each group finishes before the next starts, so at most `size` are in flight. */
+async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<void>) {
+  for (let i = 0; i < items.length; i += size) await Promise.all(items.slice(i, i + size).map(fn));
 }
 
 const APNS_DEAD_REASONS = new Set(['BadDeviceToken', 'Unregistered', 'DeviceTokenNotForTopic', 'ExpiredToken']);
@@ -229,7 +274,7 @@ export async function sendApns(tokens: string[], payload: NativePayload, t?: Par
   const body = JSON.stringify(apnsPayload(payload));
   const room = roomOf(payload);
   const result: NativeResult = { sent: 0, dead: [] };
-  await Promise.all(tokens.map(async token => {
+  await inChunks(tokens, SEND_CONCURRENCY, async token => {
     try {
       const res = await tr.http2Request({
         authority: c.host, path: `/3/device/${encodeURIComponent(token)}`,
@@ -244,8 +289,8 @@ export async function sendApns(tokens: string[], payload: NativePayload, t?: Par
       let reason = '';
       try { reason = String(JSON.parse(res.body)?.reason || ''); } catch { /* not json */ }
       if (res.status === 410 || APNS_DEAD_REASONS.has(reason)) result.dead.push(token);
-    } catch { /* network error: try again next time */ }
-  }));
+    } catch { /* network error or deadline: try again next time */ }
+  });
   return result;
 }
 
@@ -309,7 +354,7 @@ export async function sendFcm(tokens: string[], payload: NativePayload, t?: Part
   const result: NativeResult = { sent: 0, dead: [] };
   const access = await fcmAccessToken(a, tr);
   if (!access) return result;
-  await Promise.all(tokens.map(async token => {
+  await inChunks(tokens, SEND_CONCURRENCY, async token => {
     try {
       const res = await tr.fetch(`https://fcm.googleapis.com/v1/projects/${encodeURIComponent(a.project_id)}/messages:send`, {
         method: 'POST', headers: { authorization: `Bearer ${access}`, 'content-type': 'application/json' },
@@ -318,7 +363,7 @@ export async function sendFcm(tokens: string[], payload: NativePayload, t?: Part
       if (res.ok) { result.sent++; return; }
       if (fcmDead(res.status, await res.text().catch(() => ''))) result.dead.push(token);
     } catch { /* network error: try again next time */ }
-  }));
+  });
   return result;
 }
 
@@ -326,12 +371,17 @@ export async function sendFcm(tokens: string[], payload: NativePayload, t?: Part
 
 export function nativePushConfigured() { return apnsConfigured() || fcmConfigured(); }
 
-/** Pushes "new activity" to every native device the owner registered, forgetting dead tokens. */
+/**
+ * Pushes "new activity" to the owner's native devices, forgetting dead tokens. Reads at most the
+ * MAX_TOKENS_PER_OWNER most recently seen rows (the migration keeps the table at that too), and the
+ * senders go SEND_CONCURRENCY requests at a time, so one owner can never fan out without bound (W1-3).
+ */
 export async function pushToNative(admin: SupabaseClient, owner: string, roomId: string, t?: Partial<NativeTransports>) {
   if (!nativePushConfigured()) return 0;
   const payload: NativePayload = { room: roomId };
-  const { data } = await admin.from('push_devices').select('platform, token').eq('owner', owner);
-  const devices = (data || []) as { platform: string; token: string }[];
+  const { data } = await admin.from('push_devices').select('platform, token').eq('owner', owner)
+    .order('last_seen', { ascending: false }).limit(MAX_TOKENS_PER_OWNER);
+  const devices = ((data || []) as { platform: string; token: string }[]).slice(0, MAX_TOKENS_PER_OWNER);
   const ios = devices.filter(d => d.platform === 'ios').map(d => d.token);
   const android = devices.filter(d => d.platform === 'android').map(d => d.token);
   const [a, f] = await Promise.all([sendApns(ios, payload, t), sendFcm(android, payload, t)]);

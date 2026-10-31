@@ -20,6 +20,9 @@ const BOB = '00000000-0000-4000-8000-00000000000b';
 const GUEST = '00000000-0000-4000-8000-00000000000c';
 const TOKEN_A = 'a'.repeat(64);
 const TOKEN_B = 'b'.repeat(64);
+const TOKEN_C = 'c'.repeat(64);
+// What an FCM registration token looks like: ':' after the instance id, then base64url-ish chars.
+const FCM_LIKE = `${'d'.repeat(22)}:APA91b${'E'.repeat(60)}-${'f'.repeat(40)}_${'G'.repeat(30)}`;
 
 let db: PGlite;
 
@@ -92,27 +95,89 @@ describe('migration 008: push_devices', () => {
     expect(new Date(rows[0].last_seen).getTime()).toBeGreaterThan(new Date(before).getTime());
   });
 
-  it('allows the same token under two owners (shared device, two accounts)', async () => {
+  it('a token belongs to one owner: re-registering it from another account takes it over (W1-2)', async () => {
     await register(ALICE, 'ios', TOKEN_A);
     await register(BOB, 'ios', TOKEN_A);
-    expect((await sys(`select count(*)::int n from public.push_devices`)).rows[0].n).toBe(2);
+    // One row, now Bob's. Alice no longer sees it and her unregister touches nothing.
+    expect((await sys(`select count(*)::int n from public.push_devices`)).rows[0].n).toBe(1);
+    expect((await sys(`select owner from public.push_devices`)).rows[0].owner).toBe(BOB);
+    expect(await mine(ALICE)).toEqual([]);
+    expect((await mine(BOB)).map(r => r.token)).toEqual([TOKEN_A]);
+    await as(ALICE, `select public.unregister_push_device($1)`, [TOKEN_A]);
+    expect((await sys(`select owner from public.push_devices`)).rows).toEqual([{ owner: BOB }]);
+    // The service role (lib/alerts.ts) sees exactly that one row.
+    await db.exec('set role service_role');
+    try {
+      const rows = (await db.query<any>(`select owner, token from public.push_devices`)).rows;
+      expect(rows).toEqual([{ owner: BOB, token: TOKEN_A }]);
+    } finally {
+      await db.exec('reset role');
+    }
+    // Bob's own unregister removes it.
+    await as(BOB, `select public.unregister_push_device($1)`, [TOKEN_A]);
+    expect((await sys(`select count(*)::int n from public.push_devices`)).rows[0].n).toBe(0);
+    // A direct insert of a held token is refused by the unique constraint too.
+    await register(ALICE, 'ios', TOKEN_A);
+    await expect(as(BOB, `insert into public.push_devices(owner, platform, token) values ($1, 'ios', $2)`, [BOB, TOKEN_A]))
+      .rejects.toThrow(/unique|duplicate key/);
   });
 
   it('unregister removes only the caller\'s token', async () => {
     await register(ALICE, 'ios', TOKEN_A);
     await register(ALICE, 'android', TOKEN_B);
-    await register(BOB, 'ios', TOKEN_A);
+    await register(BOB, 'ios', TOKEN_C);
     await as(ALICE, `select public.unregister_push_device($1)`, [TOKEN_A]);
+    await as(ALICE, `select public.unregister_push_device($1)`, [TOKEN_C]);
     expect((await mine(ALICE)).map(r => r.token)).toEqual([TOKEN_B]);
-    expect((await mine(BOB)).map(r => r.token)).toEqual([TOKEN_A]);
+    expect((await mine(BOB)).map(r => r.token)).toEqual([TOKEN_C]);
   });
 
-  it('validates platform and token length', async () => {
+  it('keeps at most 10 tokens per owner, dropping the least recently seen (W1-3)', async () => {
+    const tokens = Array.from({ length: 11 }, (_, i) => `${String(i).padStart(2, '0')}${'t'.repeat(62)}`);
+    for (const t of tokens.slice(0, 10)) await register(ALICE, 'ios', t);
+    // Make token 00 unambiguously the oldest, and make sure Bob's rows are not counted or touched.
+    await sys(`update public.push_devices set last_seen = now() - interval '1 day' where token = $1`, [tokens[0]]);
+    await register(BOB, 'ios', TOKEN_B);
+    await register(ALICE, 'android', tokens[10]);
+    const rows = await mine(ALICE);
+    expect(rows).toHaveLength(10);
+    expect(rows.map(r => r.token)).toEqual(tokens.slice(1));
+    expect((await mine(BOB)).map(r => r.token)).toEqual([TOKEN_B]);
+    // Re-registering an existing token refreshes it rather than counting as an 11th.
+    await register(ALICE, 'android', tokens[5]);
+    expect(await mine(ALICE)).toHaveLength(10);
+  });
+
+  it('validates platform and token shape: 32-512 chars of [A-Za-z0-9:_-], else bad_token (W1-3)', async () => {
     await expect(register(ALICE, 'web', TOKEN_A)).rejects.toThrow(/bad_platform/);
     await expect(register(ALICE, 'ios', '')).rejects.toThrow(/bad_token/);
-    await expect(register(ALICE, 'ios', 'x'.repeat(4097))).rejects.toThrow(/bad_token/);
-    await register(ALICE, 'ios', 'x'.repeat(4096));
-    expect(await mine(ALICE)).toHaveLength(1);
+    await expect(register(ALICE, 'ios', 'x'.repeat(31))).rejects.toThrow(/bad_token/);
+    await expect(register(ALICE, 'ios', 'x'.repeat(513))).rejects.toThrow(/bad_token/);
+    await expect(register(ALICE, 'ios', 'x'.repeat(4096))).rejects.toThrow(/bad_token/);
+    await expect(register(ALICE, 'ios', `${'x'.repeat(40)}$`)).rejects.toThrow(/bad_token/);
+    await expect(register(ALICE, 'ios', `${'x'.repeat(20)} ${'x'.repeat(20)}`)).rejects.toThrow(/bad_token/);
+    await expect(register(ALICE, 'ios', `${'x'.repeat(40)}\n`)).rejects.toThrow(/bad_token/);
+    await expect(register(ALICE, 'ios', `${'x'.repeat(40)}.`)).rejects.toThrow(/bad_token/);
+    expect(await mine(ALICE)).toEqual([]);
+    // Accepted: a 32-char minimum, a 512-char maximum, an APNs hex token and an FCM-shaped token.
+    await register(ALICE, 'ios', 'x'.repeat(32));
+    await register(ALICE, 'ios', 'y'.repeat(512));
+    await register(ALICE, 'ios', TOKEN_A);
+    await register(ALICE, 'android', FCM_LIKE);
+    expect(await mine(ALICE)).toHaveLength(4);
+    // The table constraint backs the RPC check for direct inserts as well.
+    await expect(as(ALICE, `insert into public.push_devices(owner, platform, token) values ($1, 'ios', 'short')`, [ALICE]))
+      .rejects.toThrow(/check constraint|violates/);
+  });
+
+  it('both RPCs run with an empty search_path and schema-qualified names', async () => {
+    const rows = (await sys(`select proname, proconfig from pg_proc where proname in ('register_push_device', 'unregister_push_device') order by 1`)).rows;
+    expect(rows).toHaveLength(2);
+    for (const r of rows) expect(r.proconfig).toEqual([expect.stringMatching(/^search_path=(""|'')?$/)]);
+    // And they still work with it, which is the point of qualifying every name.
+    await register(ALICE, 'ios', TOKEN_A);
+    await as(ALICE, `select public.unregister_push_device($1)`, [TOKEN_A]);
+    expect(await mine(ALICE)).toEqual([]);
   });
 
   it('denies anon the table and both RPCs', async () => {

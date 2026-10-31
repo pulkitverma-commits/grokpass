@@ -11,7 +11,7 @@ export default function SiteFooter() {
           <div className="op-footer-brand">
             <Link href="/" className="logo" aria-label="OnePeek home">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/onepeek-logo.png" alt="OnePeek" className="logo-img logo-img-sm" width={128} height={48} />
+              <img src="/onepeek-logo.svg" alt="OnePeek" className="logo-img logo-img-sm" width={114} height={30} />
             </Link>
             <p>Zero-knowledge secret sharing. Encrypted in your browser, deleted after it’s opened.</p>
             <Link href="/#send" className="gp-btn">Send a secret →</Link>

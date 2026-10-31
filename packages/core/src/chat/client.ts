@@ -71,7 +71,12 @@ export function keyChanged(m: { verified: string | null; signaturePub: Uint8Arra
   return !!m.verified && m.verified !== toBytea(m.signaturePub);
 }
 
-export type SyncResult = { joined: boolean; removed: boolean; newMessages: number };
+/**
+ * What one sync() applied. `newMessages` counts text and file messages from other devices;
+ * `newAlerts` counts screenshot notices, which are shown in the room but are not messages (so an
+ * unread badge built on newMessages stays honest).
+ */
+export type SyncResult = { joined: boolean; removed: boolean; newMessages: number; newAlerts: number };
 
 export type ChatClient<S extends SupabaseSession = SupabaseSession> = ReturnType<typeof createChatClient<S>>;
 
@@ -516,7 +521,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
       // Removed, burned or expired: the server is authoritative, so drop our keys and copies too.
       if (e instanceof ChatError && e.code === 'not_a_member') {
         await withRoomLock(roomId, () => forgetRoom(roomId));
-        return { joined: false, removed: true, newMessages: 0 };
+        return { joined: false, removed: true, newMessages: 0, newAlerts: 0 };
       }
       throw e;
     }
@@ -531,7 +536,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     let state = await loadState(roomId);
     let lastSeq = local.lastSeq;
     const nicknames = { ...local.nicknames };
-    const res: SyncResult = { joined: false, removed: false, newMessages: 0 };
+    const res: SyncResult = { joined: false, removed: false, newMessages: 0, newAlerts: 0 };
 
     for (const row of rows) {
       lastSeq = Math.max(lastSeq, Number(row.seq));
@@ -569,7 +574,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
             id: p.id, seq: Number(row.seq), mine: false, sender: row.sender_device, body: '', ttl: p.ttl,
             sentAt, expiresAt: sentAt + p.ttl * 1000, alert: 'screenshot',
           });
-          res.newMessages++;
+          res.newAlerts++;
           continue;
         }
         const expiresAt = row.expires_at ? new Date(row.expires_at).getTime() : null;

@@ -266,7 +266,7 @@ describeInterop.each(ROLES)('Web <-> mobile interop: %s', (_label, ownerKind, gu
     const mark = h.allSql.length;
     await owner.run(c => c.send(roomId, BODY, 30));
     expectClean(JSON.stringify(h.allSql.slice(mark)), [forbidden('message body', BODY)], 'the send RPCs');
-    expect((await guest.run(c => c.sync(roomId))).newMessages).toBe(1);
+    expect(await guest.run(c => c.sync(roomId))).toMatchObject({ newMessages: 1, newAlerts: 0 });
     const seen = await guest.run(c => c.messages(roomId));
     expect(bodies(seen)).toEqual([BODY]);
     expect(seen[0].mine).toBe(false);
@@ -425,8 +425,9 @@ describeInterop.each(ROLES)('Web <-> mobile interop: %s', (_label, ownerKind, gu
     const got = (await owner.run(c => c.messages(roomId))).find(m => m.id === sent.id)!;
     expect(got).toMatchObject({ alert: 'screenshot', mine: false, body: '' });
     expect(got.expiresAt).not.toBeNull();   // disappears on the room timer without being opened
-    // Today the client counts the notice in newMessages (test-plan §2.2 #24 documents this).
-    expect(r.newMessages).toBe(1);
+    // Q1 finding (b), fixed in Phase 1: a notice is counted in newAlerts, never in newMessages.
+    expect(r.newAlerts).toBe(1);
+    expect(r.newMessages).toBe(0);
     expect(guest.notify).not.toHaveBeenCalled();   // an alert is not a message: no push for it
     await sweep([owner, guest], [], [token]);
   }, TIMEOUT);

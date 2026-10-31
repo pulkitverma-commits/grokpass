@@ -69,7 +69,7 @@ export default function ConversationPage() {
     try {
       const r = await chat.sync(roomId);
       if (r.removed) { setEnded(e => e ?? 'This chat has ended, or you were removed.'); return; }
-      if (r.newMessages || r.joined) await showStored();
+      if (r.newMessages || r.newAlerts || r.joined) await showStored();
       if (r.joined) void refresh();
     } catch (e) {
       if (e instanceof chat.ChatError && e.code === 'not_signed_in') router.replace('/chat');

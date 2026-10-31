@@ -1,0 +1,13 @@
+// @onepeek/core public surface. The web app imports these files by relative path
+// (lib/crypto.ts, lib/chat/*.ts); apps/mobile imports the package by name.
+
+export * from './crypto';
+export * as mls from './chat/mls';
+export * from './chat/ports';
+export { pack, unpack, seal, unseal, isExpired, type Sealed } from './chat/keystore';
+export {
+  createChatClient, ChatError, toBytea, fromBytea, keyChanged, MAX_ATTACHMENT_BYTES,
+  type ChatClient, type RoomKind, type ExpiryMode, type LocalMessage, type RoomSummary, type SyncResult, type DeviceRecord,
+} from './chat/client';
+export { createWebKeyStore } from './adapters/web/keystore';
+export { createWebPlatform, webEnv, webLock, fileSource, toBlob } from './adapters/web/platform';

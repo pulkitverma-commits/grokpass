@@ -6,7 +6,8 @@ import { colors } from '../theme';
 
 export type IconName =
   | 'lock' | 'clock' | 'shield' | 'user' | 'key' | 'plus' | 'search' | 'settings' | 'qr' | 'copy' | 'share'
-  | 'chevronRight' | 'chevronLeft' | 'close' | 'eye' | 'flame' | 'check' | 'mail' | 'link' | 'ban' | 'apple' | 'google' | 'alert';
+  | 'chevronRight' | 'chevronLeft' | 'close' | 'eye' | 'flame' | 'check' | 'mail' | 'link' | 'ban' | 'apple' | 'google' | 'alert'
+  | 'face' | 'fingerprint' | 'send' | 'file' | 'image' | 'reply' | 'more' | 'bell' | 'phone';
 
 type Props = { name: IconName; size?: number; color?: string; label?: string };
 
@@ -36,6 +37,15 @@ export function Icon({ name, size = 20, color = colors.text, label }: Props) {
       {name === 'link' && (<><Path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" {...p} /><Path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" {...p} /></>)}
       {name === 'ban' && (<><Circle cx={12} cy={12} r={9} {...p} /><Path d="M5.6 5.6l12.8 12.8" {...p} /></>)}
       {name === 'alert' && (<><Path d="M12 3l9.5 17h-19z" {...p} /><Path d="M12 9v5M12 17v.5" {...p} /></>)}
+      {name === 'face' && (<><Path d="M3 8V5.5A2.5 2.5 0 0 1 5.5 3H8M16 3h2.5A2.5 2.5 0 0 1 21 5.5V8M21 16v2.5a2.5 2.5 0 0 1-2.5 2.5H16M8 21H5.5A2.5 2.5 0 0 1 3 18.5V16" {...p} /><Path d="M8.5 9v1.5M15.5 9v1.5M12 9v4h-1.5M8.5 15.5c1 1 2.2 1.5 3.5 1.5s2.5-.5 3.5-1.5" {...p} /></>)}
+      {name === 'fingerprint' && (<><Path d="M6 11a6 6 0 0 1 12 0v2M9 11a3 3 0 0 1 6 0v4M12 11v7M4.5 8a9 9 0 0 1 15 0M8 20a12 12 0 0 1-1.5-5" {...p} /></>)}
+      {name === 'send' && <Path d="M21 3L10.5 13.5M21 3l-7 18-3.5-7.5L3 10z" {...p} />}
+      {name === 'file' && (<><Path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" {...p} /><Path d="M14 3v5h5" {...p} /></>)}
+      {name === 'image' && (<><Rect x={3} y={5} width={18} height={14} rx={2.5} {...p} /><Circle cx={8.5} cy={10} r={1.5} {...p} /><Path d="M21 15l-5-5-7 7-3-3-3 3" {...p} /></>)}
+      {name === 'reply' && <Path d="M9 7L4 12l5 5M4 12h9a6 6 0 0 1 6 6v1" {...p} />}
+      {name === 'more' && (<><Circle cx={5} cy={12} r={1.4} fill={color} stroke="none" /><Circle cx={12} cy={12} r={1.4} fill={color} stroke="none" /><Circle cx={19} cy={12} r={1.4} fill={color} stroke="none" /></>)}
+      {name === 'bell' && (<><Path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" {...p} /><Path d="M10 21h4" {...p} /></>)}
+      {name === 'phone' && (<><Rect x={7} y={2.5} width={10} height={19} rx={2.5} {...p} /><Path d="M11 18h2" {...p} /></>)}
       {name === 'apple' && <Path d="M16.4 12.7c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9-.7 0-1.8-.8-3-.8-1.5 0-2.9.9-3.7 2.3-1.6 2.8-.4 6.9 1.2 9.1.8 1.1 1.7 2.3 2.9 2.3 1.2 0 1.6-.8 3-.8s1.8.8 3 .7c1.3 0 2.1-1.1 2.8-2.2.9-1.3 1.3-2.5 1.3-2.6-.1 0-2.6-1-2.6-3.6zM14.1 5.9c.6-.8 1.1-1.8 1-2.9-.9 0-2.1.6-2.7 1.4-.6.7-1.1 1.8-1 2.8 1 .1 2.1-.5 2.7-1.3z" fill={color} />}
       {name === 'google' && (<>
         <Path d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.4c-.2 1.2-.9 2.3-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.4z" fill="#4285F4" />

@@ -76,7 +76,8 @@ async function runSpike(push: (l: Line) => void) {
 
   // 3. Keystore on the real SecureStore + SQLite (separate file so it never touches chat data)
   t = now();
-  const ks = createRnKeyStore({ secureStore: SecureStore, sqlite: SQLite, dbName: 'onepeek-spike.db' });
+  // Own SecureStore entry and own database: the spike's wipe() must never touch the chat keystore (review N1).
+  const ks = createRnKeyStore({ secureStore: SecureStore, sqlite: SQLite, dbName: 'onepeek-spike.db', wrapKeyId: 'onepeek.wrap.spike' });
   await ks.put('spike:state', saved);
   const back = await ks.get<Uint8Array>('spike:state');
   const same = !!back && back.byteLength === saved.byteLength && back.every((b, i) => b === saved[i]);

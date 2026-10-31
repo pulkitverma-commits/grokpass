@@ -80,7 +80,7 @@ Fallback if the spike fails (unchanged from the plan): a native MLS module behin
   synchronously, flag this-device-only), 6 low. All fixed in commit `1b021e1` with a test per finding
   and a regression proof (the old sources fail 35 tests).
 - Verification of those fixes by the reviewer: `docs/mobile/security-review/mobile-core-crypto-review-fixes-2.md`
-  (pending at the time of writing; the lead updates this line when it lands).
+  verdict: **S0 closed, no open high or critical findings.** One medium (N1, the spike screen wiped the shared wrapping-key entry) fixed in the same commit; three lows (N2 stale wipe marker, N3 lock `reload()` on foreground, N4 docs) carried into Phase 1.
 
 ## 6. Setup delivered by the lead
 

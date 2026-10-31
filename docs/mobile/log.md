@@ -91,3 +91,8 @@ Newest first. One line per decision, blocker or agent report.
   (`wrapKeyId`). Full gate commands green on `024ffbd`. `security-reviewer` verifying the fixes (S0 close-out).
 - Lead: `docs/mobile/gates/phase-0.md` written. **Gate 0 status: complete except the device spike, which is
   blocked on the Expo account (and Apple Developer Program for iOS).** Stopping for human approval.
+- security-reviewer verified the S0b fixes: **S0 closed, no open high or critical.** N1 (medium, spike screen
+  used the shared `onepeek.wrap` entry) fixed: spike uses `wrapKeyId: 'onepeek.wrap.spike'`. Carried into
+  Phase 1: N2 clear the `wiping` marker in the no-rows branch (core-crypto), N3 lock `reload()` on AppState
+  active (native-security N4), N4 docs: `keystore_unavailable` recovery UI ("Reset chats on this phone"),
+  test-plan §1.3 siteUrl line, known-limitations note that expires_at is outside the AAD.

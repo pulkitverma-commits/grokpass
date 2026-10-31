@@ -8,4 +8,6 @@ export default [
   prettier,
   { ignores: ['ios/**', 'android/**', '.expo/**', 'node_modules/**'] },
   { rules: { 'no-console': 'error' } },
+  // CommonJS tooling files run under Node.
+  { files: ['*.config.js'], languageOptions: { globals: { __dirname: 'readonly', require: 'readonly', module: 'writable', process: 'readonly' } } },
 ];

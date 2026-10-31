@@ -1,0 +1,30 @@
+// Component and hook tests for the OnePeek app (jest-expo). Core logic is tested in packages/core
+// with vitest; this runner covers React Native screens, hooks and the security module.
+// Monorepo note: react-native is installed under apps/mobile/node_modules (React 19) while jest-expo
+// and the shared tooling are hoisted to the workspace root (React 18 for the web). Node's lookup from
+// the root cannot see react-native, so both trees are added to the resolution path explicitly.
+const path = require('node:path');
+const Module = require('node:module');
+process.env.NODE_PATH = [path.join(__dirname, 'node_modules'), path.join(__dirname, '..', '..', 'node_modules'), process.env.NODE_PATH]
+  .filter(Boolean)
+  .join(path.delimiter);
+Module._initPaths();
+
+/** @type {import('jest').Config} */
+module.exports = {
+  preset: 'jest-expo',
+  modulePaths: ['<rootDir>/node_modules', '<rootDir>/../../node_modules'],
+  // Pin the app's React 19 for everything, including the hoisted reconciler, so one copy renders.
+  moduleNameMapper: {
+    '^react$': '<rootDir>/node_modules/react',
+    '^react/(.*)$': '<rootDir>/node_modules/react/$1',
+    '^scheduler$': '<rootDir>/node_modules/scheduler',
+    '^scheduler/(.*)$': '<rootDir>/node_modules/scheduler/$1',
+  },
+  testMatch: ['<rootDir>/**/__tests__/**/*.test.[jt]s?(x)', '<rootDir>/**/*.test.[jt]s?(x)'],
+  testPathIgnorePatterns: ['/node_modules/', '/e2e/'],
+  transformIgnorePatterns: [
+    'node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|react-native-svg|react-native-qrcode-svg|@onepeek/.*)',
+  ],
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
+};

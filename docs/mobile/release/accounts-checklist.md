@@ -100,7 +100,7 @@ Bring back after the first Android build (needed in Phase 1, cheap to grab now):
 the keystore summary lists the fingerprints. (The Mac has no Java, so `keytool` is not an option
 locally; if the CLI does not show SHA-256, download `credentials.json` from the same menu and the lead
 will compute it in an EAS build step or you run `keytool` on another machine.) These go to
-**`ANDROID_SHA256_CERT`** (App Links) and to the Google OAuth Android client (B5).
+**`ANDROID_SHA256_CERT_FINGERPRINTS`** (App Links) and to the Google OAuth Android client (B5).
 
 ### A6. R1 addendum: EAS environment variables, spike commands, Vercel variables
 
@@ -189,7 +189,7 @@ The backend agent adds route handlers for `/.well-known/apple-app-site-associati
 | | |
 | --- | --- |
 | **Where to click** | **Vercel → onepeek project → Settings → Environment Variables → Add**. |
-| **Bring back / set** | **`APPLE_TEAM_ID`** = Team ID from A2 (the AASA `appID` is `<TEAMID>.io.onepeek.app`). **`ANDROID_SHA256_CERT`** = comma-separated list of SHA-256 fingerprints, colon-separated uppercase hex, of **every** certificate that signs an OnePeek APK: the EAS dev/preview keystore (A5) now, and the **Play App Signing key** (B4) once it exists. Both as *Plain* (they are public by design; the files are served to anyone). Environments: Production, Preview. |
+| **Bring back / set** | **`APPLE_TEAM_ID`** = Team ID from A2 (the AASA `appID` is `<TEAMID>.io.onepeek.app`). **`ANDROID_SHA256_CERT_FINGERPRINTS`** = comma-separated list of SHA-256 fingerprints, colon-separated uppercase hex, of **every** certificate that signs an OnePeek APK: the EAS dev/preview keystore (A5) now, and the **Play App Signing key** (B4) once it exists. Both as *Plain* (they are public by design; the files are served to anyone). Environments: Production, Preview. |
 | **Costs** | None. |
 | **Unblocks** | B3 route handlers, N6 (link handling on device), Q5 (routing with and without the app). Universal Links on iOS are verified by Apple's CDN against the live `onepeek.io`, so this must be on **production** Vercel before an iOS build can be tested against it. |
 
@@ -198,7 +198,7 @@ The backend agent adds route handlers for `/.well-known/apple-app-site-associati
 | | |
 | --- | --- |
 | **Where to click** | 1. https://play.google.com/console/signup → choose **Organization** (needs a D-U-N-S number, company website and e-mail on the company domain) or **Personal** (government ID + card in your legal name; **personal accounts must run a closed test with testers for a period Google sets** — widely reported as 12 testers for 14 days, not confirmed on Google's page — before production access). Identity verification can take days. 2. **All apps → Create app**: name `OnePeek`, default language English, **App**, **Free**, accept the declarations → Create app. 3. **Test and release → Testing → Internal testing → Create new release**; on the **Testers** tab create an e-mail list (up to **100 testers**, no Play review) and copy the opt-in link for the team. The lead gives you the `.aab` from EAS (`eas build -p android --profile preview`), you upload it; agents never upload. 4. Play App Signing is on by default for new apps: after the first upload go to **Test and release → Setup → App signing** (Google's help article routes it as **Protected with Play → Play Store protection → Manage Play app signing**; the label differs by console version) → **App signing key certificate** → copy **SHA-256** and **SHA-1**. The **upload key** stays the EAS keystore from A5. |
-| **Bring back** | App signing **SHA-256** → append to Vercel **`ANDROID_SHA256_CERT`** (B3). App signing **SHA-1** → Google OAuth Android client (B5). Package name is fixed (`io.onepeek.app`); once the first bundle is uploaded it cannot change. |
+| **Bring back** | App signing **SHA-256** → append to Vercel **`ANDROID_SHA256_CERT_FINGERPRINTS`** (B3). App signing **SHA-1** → Google OAuth Android client (B5). Package name is fixed (`io.onepeek.app`); once the first bundle is uploaded it cannot change. |
 | **Costs** | **$25 USD one-time** registration fee. |
 | **Unblocks** | App Links verification for store-signed builds, internal testing track (Phase 3 beta), Google native sign-in for release builds. Not needed for Phase 0 or for Gate 1 push tests on dev builds. |
 
@@ -266,13 +266,13 @@ Console service account) is likewise deferred.
 | APNs Key ID + `.p8` | **secret** | Vercel `APNS_KEY_ID`, `APNS_PRIVATE_KEY` (base64), `APNS_BUNDLE_ID`; EAS iOS Push Key if Expo push service is used |
 | Firebase `google-services.json` | identifiers only, but never tracked | EAS file env var `GOOGLE_SERVICES_JSON` (secret) → `android.googleServicesFile` |
 | Firebase service account JSON | **secret** | Vercel `FCM_SERVICE_ACCOUNT_JSON` (base64); EAS Android "Google Service Account Key for FCM V1" if Expo push service is used |
-| EAS keystore SHA-256 / SHA-1 | yes | Vercel `ANDROID_SHA256_CERT` (SHA-256); Google OAuth Android client (SHA-1) |
-| Play App Signing SHA-256 / SHA-1 | yes | appended to `ANDROID_SHA256_CERT`; second Google OAuth Android client |
+| EAS keystore SHA-256 / SHA-1 | yes | Vercel `ANDROID_SHA256_CERT_FINGERPRINTS` (SHA-256); Google OAuth Android client (SHA-1) |
+| Play App Signing SHA-256 / SHA-1 | yes | appended to `ANDROID_SHA256_CERT_FINGERPRINTS`; second Google OAuth Android client |
 | Google OAuth web + iOS client IDs | yes | Supabase Google provider; `app.config.ts` / sign-in code (lead) |
 | Google OAuth web client secret | **secret** | Supabase Google provider only |
 | App Store Connect app Apple ID (numeric) | yes | `eas.json` `submit.production.ios.ascAppId` |
 
-Env var names on Vercel other than `APPLE_TEAM_ID` and `ANDROID_SHA256_CERT` (which plan B3 fixes) are
+Env var names on Vercel other than `APPLE_TEAM_ID` and `ANDROID_SHA256_CERT_FINGERPRINTS` (which plan B3 fixes) are
 proposals; the backend agent confirms them in B2 before you set anything.
 
 ## Costs at a glance

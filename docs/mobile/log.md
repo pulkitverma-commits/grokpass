@@ -53,3 +53,10 @@ Newest first. One line per decision, blocker or agent report.
   (2) backend confirms the `APNS_*` / `FCM_SERVICE_ACCOUNT_JSON` names in B2. (4) `google-services.json`,
   `GoogleService-Info.plist` and `.env` added to `apps/mobile/.gitignore`; `googleServicesFile` wiring and
   `eas.json` profiles are R1 (Phase 1).
+- core-crypto (C1) reported: `packages/core` extracted on `mobile/core-crypto/extract-core` (2 commits), web
+  `lib/*` are thin shims, all 4 checks pass (root 58/58, core 19/19, lint 0 errors, next build OK), existing
+  tests byte-identical. Lead reviewed the whitespace-insensitive diff of client.ts: mechanical. Sent to
+  `security-reviewer` (S0a) before merge. Decisions on its questions: (1) Blob handling resolved in C3 (RN
+  adapters, launched from the C1 branch); (2) `env.notify(roomId, token)` shape accepted; (3) `.gitignore`
+  now ignores a bare `node_modules` symlink; (4) passkey calls stay required on the port; RN stubs them.
+  Deviations accepted: nullable `supabase` on the platform, generic session type, no `open()` on KeyStore.

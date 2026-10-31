@@ -8,7 +8,11 @@
 // - getLockStore(): the panic-lock flag store (SecureStore, this device only).
 // - auth: session helpers. Sign-in with Apple (identity token + nonce), Google through the system
 //   browser (startOAuth returns the URL, completeFromUrl finishes with the onepeek://auth callback),
-//   email link (also completed by completeFromUrl), guest (anonymous), sign out.
+//   email link (also completed by completeFromUrl; the link is bound to the address requested on this
+//   phone, review W1-1), guest (anonymous), sign out.
+// - push: this phone's push token. register() calls the core RPC and keeps the token sealed in the auth
+//   store; unregister() forgets it server-side first. signOut() and resetThisPhone() unregister before
+//   the session goes, so a token never outlives the account that registered it (review W1-2).
 // - resetThisPhone(): wipes the local keystore, lock and session. Used by the recovery screen shown
 //   when the core reports `keystore_unavailable` (wrapping key gone while sealed rows exist).
 //
@@ -36,10 +40,19 @@ export const AUTH_REDIRECT_URL = 'onepeek://auth';
 
 type Extra = { supabaseUrl?: string; supabaseAnonKey?: string; siteUrl?: string };
 
+/**
+ * The only shape a Supabase URL may take: the project host, https, no path, port or trailing slash
+ * (the same pattern the fetch-literal lint enforces). The sealed session's refresh token and every RPC
+ * go to this host, so a build whose env points anywhere else gets no client at all (`not_configured`)
+ * rather than a client that talks to that host (review W1-6).
+ */
+const SUPABASE_URL = /^https:\/\/[a-z0-9-]+\.supabase\.co$/;
+
 function extra(): Required<Extra> {
   const e = (Constants.expoConfig?.extra ?? {}) as Extra;
+  const url = (e.supabaseUrl ?? '').trim();
   return {
-    supabaseUrl: (e.supabaseUrl ?? '').trim(),
+    supabaseUrl: SUPABASE_URL.test(url) ? url : '',
     supabaseAnonKey: (e.supabaseAnonKey ?? '').trim(),
     // app.config.ts pins this to https://onepeek.io (review S0b M2); createRnEnv validates it again.
     siteUrl: (e.siteUrl ?? 'https://onepeek.io').trim(),
@@ -119,6 +132,18 @@ function toAuthSession(s: Session | null): AuthSession | null {
   return s ? { userId: s.user.id, email: s.user.email ?? null, isAnonymous: !!s.user.is_anonymous } : null;
 }
 
+// An email link's `token_hash` is a bearer: GoTrue derives it from the address and the OTP, so whoever
+// holds a magic link for any account can build a callback that signs this phone into that account
+// (login CSRF, review W1-1). The PKCE `code` is bound to the verifier in sealed storage; the hash is
+// not, so the app binds it itself: the address sendEmailLink() asked for on this phone, for the OTP
+// lifetime, and the resulting session must belong to that address. Module memory on purpose: a cold
+// start clears it and the user asks for a new link.
+const EMAIL_LINK_TTL_MS = 60 * 60 * 1000;   // GoTrue's default OTP lifetime
+const EMAIL_LINK_TYPES: ReadonlySet<string> = new Set<EmailOtpType>(['magiclink', 'email']);
+let pendingEmail: { email: string; at: number } | null = null;
+
+const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
 /**
  * Parses an `onepeek://auth` callback into its query and fragment parameters. Returns null for any
  * other URL: another scheme, another host, `onepeek://auth.evil` or `onepeek://auth@evil`. Written
@@ -182,7 +207,10 @@ export const auth = {
    * sent with the default template) or `token_hash` + `type` (email links sent with a TokenHash
    * template). Any other URL, a provider error, or a failed exchange returns false; implicit-flow
    * tokens in the fragment are deliberately not accepted (a crafted link could otherwise sign this
-   * phone into someone else's account). Returns whether a session now exists.
+   * phone into someone else's account). A `token_hash` is accepted only while sendEmailLink() has a
+   * pending address on this phone (younger than the OTP lifetime), only for `type` magiclink / email,
+   * and only if the session it yields belongs to that address; any other session is signed out again
+   * and the link refused. Returns whether a session now exists.
    */
   async completeFromUrl(url: string): Promise<boolean> {
     const p = parseAuthCallback(url);
@@ -192,8 +220,19 @@ export const auth = {
       const { error } = await a.exchangeCodeForSession(p.code);
       if (error) return false;
     } else if (p.token_hash && p.type) {
-      const { error } = await a.verifyOtp({ token_hash: p.token_hash, type: p.type as EmailOtpType });
+      const pending = pendingEmail;
+      const expired = !!pending && Date.now() - pending.at > EMAIL_LINK_TTL_MS;
+      if (expired) pendingEmail = null;
+      if (!pending || expired || !EMAIL_LINK_TYPES.has(p.type)) return false;
+      const { data, error } = await a.verifyOtp({ token_hash: p.token_hash, type: p.type as EmailOtpType });
       if (error) return false;
+      pendingEmail = null;   // one link per request, matching or not
+      const email = data.session?.user.email;
+      if (!email || normalizeEmail(email) !== pending.email) {
+        // Someone else's account: drop the session this phone just got, locally and server-side.
+        try { await a.signOut({ scope: 'local' }); } catch { /* the local session is removed regardless */ }
+        return false;
+      }
     } else {
       return false;
     }
@@ -201,9 +240,12 @@ export const auth = {
     return !!data.session;
   },
 
+  /** Sends a magic link and remembers the address: completeFromUrl() accepts a `token_hash` only for it. */
   async sendEmailLink(email: string): Promise<void> {
-    const { error } = await sb().auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: AUTH_REDIRECT_URL } });
+    const address = email.trim();
+    const { error } = await sb().auth.signInWithOtp({ email: address, options: { emailRedirectTo: AUTH_REDIRECT_URL } });
     if (error) throw new Error(error.message);
+    pendingEmail = { email: normalizeEmail(address), at: Date.now() };
   },
 
   async signInAsGuest(): Promise<void> {
@@ -214,11 +256,56 @@ export const auth = {
    * Signs this phone out. `scope: 'local'` revokes this device's refresh token and removes the
    * sealed session here; the user's browsers and other phones stay signed in (a global sign-out
    * from a phone would be surprising). auth-js removes the local session even when the revoke call
-   * fails, so the phone is signed out in every case; a network error is reported after that.
+   * fails, so the phone is signed out in every case; a network error is reported after that. The
+   * push token goes first (it needs the session), best effort: sign-out never waits on it.
    */
   async signOut(): Promise<void> {
+    pendingEmail = null;
+    try { await push.unregister(); } catch { /* offline or not registered: the row is moved by the next owner (008) */ }
     const { error } = await sb().auth.signOut({ scope: 'local' });
     if (error) throw new Error(error.message);
+  },
+};
+
+// ---------------------------------------------------------------------------- push token
+
+/** Sealed row in onepeek-auth.db (under the auth storage's prefix); never SecureStore, never logged. */
+const PUSH_TOKEN_KEY = 'onepeek.push.token';
+
+/**
+ * This phone's push token. The token is an opaque APNs / FCM device token: it reaches exactly two
+ * places, the core RPC and the sealed auth store (so unregister() can name it after a restart). It is
+ * never kept in plain SecureStore, never logged and never put in an error.
+ */
+export const push = {
+  /** Registers the token with the server (`register_push_device`) and keeps it sealed for unregister(). */
+  async register(platform: 'ios' | 'android', token: string): Promise<void> {
+    const t = token.trim();
+    await getChat().registerPushDevice(platform, t);
+    const store = get().authStorage;
+    const previous = await store.getItem(PUSH_TOKEN_KEY);
+    await store.setItem(PUSH_TOKEN_KEY, t);
+    if (previous && previous !== t) {
+      // The platform rotated the token: forget the old one so it does not linger in push_devices.
+      try { await getChat().unregisterPushDevice(previous); } catch { /* best effort */ }
+    }
+  },
+
+  /** Forgets the stored token server-side (`unregister_push_device`) and locally. No token: nothing to do. */
+  async unregister(): Promise<void> {
+    const store = get().authStorage;
+    const token = await store.getItem(PUSH_TOKEN_KEY);
+    if (!token) return;
+    try {
+      await getChat().unregisterPushDevice(token);
+    } finally {
+      await store.removeItem(PUSH_TOKEN_KEY);
+    }
+  },
+
+  /** Whether this phone holds a registered token. */
+  async current(): Promise<boolean> {
+    return !!(await get().authStorage.getItem(PUSH_TOKEN_KEY));
   },
 };
 
@@ -232,7 +319,12 @@ export const auth = {
  * record) is untouched; this device simply joins again as a new one.
  */
 export async function resetThisPhone(): Promise<void> {
+  pendingEmail = null;
   const b = built;
+  if (b?.supabase) {
+    // The push token first: the RPC needs the session that is revoked just below. Best effort.
+    try { await push.unregister(); } catch { /* offline or none: the wipe below removes the sealed token */ }
+  }
   built = null;
   if (b?.supabase) {
     // Best effort: revoke this device's refresh token and remove the sealed session row. The wipe

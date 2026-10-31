@@ -1,6 +1,8 @@
 // A supabase-js stand-in for lib/chat tests: records every auth call in `__calls`, hands out a fake
 // client whose session is persisted through the `auth.storage` it was created with (one JSON blob
-// under one key, as GoTrueClient does), and answers the few RPCs the glue tests reach.
+// under one key, as GoTrueClient does), and answers the few RPCs the glue tests reach. `__otp.email`
+// is the address verifyOtp signs in (an attacker's link yields another account's session); RPC names
+// in `__failRpc` answer with an error.
 
 export type Storage = { getItem(k: string): Promise<string | null>; setItem(k: string, v: string): Promise<void>; removeItem(k: string): Promise<void> };
 export type RecordedCall = { method: string; args: unknown[] };
@@ -8,6 +10,8 @@ export type RecordedCall = { method: string; args: unknown[] };
 export function createFakeSupabase(fn: typeof jest.fn) {
   const calls: { method: string; args: unknown[] }[] = [];
   const clients: Record<string, unknown>[] = [];
+  const otp = { email: 'owner@example.test' };
+  const failRpc = new Set<string>();
   const createClient = fn((url: string, key: string, opts: { auth: { storage: Storage } }) => {
     const storage = opts.auth.storage;
     const STORAGE_KEY = 'sb-xyzcompany-auth-token';
@@ -45,7 +49,7 @@ export function createFakeSupabase(fn: typeof jest.fn) {
           await persist();
           return { data: { session }, error: null };
         },
-        async verifyOtp(p: unknown) { rec('verifyOtp', p); session = newSession({ id: 'email-user', email: 'owner@example.test', is_anonymous: false }); await persist(); return { data: { session }, error: null }; },
+        async verifyOtp(p: unknown) { rec('verifyOtp', p); session = newSession({ id: `email-user:${otp.email}`, email: otp.email, is_anonymous: false }); await persist(); return { data: { session }, error: null }; },
         async setSession(p: unknown) { rec('setSession', p); return { data: { session: null }, error: { message: 'must not be called' } }; },
         async signInWithOtp(c: unknown) { rec('signInWithOtp', c); return { data: {}, error: null }; },
         async signInAnonymously() { rec('signInAnonymously'); session = newSession({ id: 'guest-user', is_anonymous: true }); await persist(); return { data: { session }, error: null }; },
@@ -56,6 +60,7 @@ export function createFakeSupabase(fn: typeof jest.fn) {
       },
       async rpc(fn: string, args: Record<string, unknown>) {
         rec('rpc', fn, args);
+        if (failRpc.has(fn)) return { data: null, error: { message: 'rpc_failed' } };
         if (fn === 'chat_register_device') return { data: 'device-1', error: null };
         return { data: null, error: null };
       },
@@ -67,5 +72,5 @@ export function createFakeSupabase(fn: typeof jest.fn) {
     clients.push(client);
     return client;
   });
-  return { __esModule: true, createClient, __calls: calls, __clients: clients };
+  return { __esModule: true, createClient, __calls: calls, __clients: clients, __otp: otp, __failRpc: failRpc };
 }

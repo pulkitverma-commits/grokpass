@@ -128,7 +128,7 @@ The lead stops and asks before going there.
 | # | Owner | Task | Depends on |
 | --- | --- | --- | --- |
 | U1 | mobile-ui | Theme tokens from `chat.css` + design PNGs; fonts (Questrial, Geist Mono); `Screen`, `Button`, `Field`, `Sheet`, `ListRow` primitives; 44 px targets; dynamic type | L3 |
-| U2 | mobile-ui | Welcome (01), Sign in (02): passkeys, Apple, Google, email link, "join as guest" | U1 |
+| U2 | mobile-ui | Welcome (01), Sign in (02): passkeys, Apple, Google, email link, "join as guest". Email link is bound to the address requested on this phone (W1-1: `completeFromUrl` accepts a `token_hash` only for the pending `sendEmailLink` address, within 1 h, and signs out on mismatch) | U1 |
 | U3 | mobile-ui | Locked (03) screen wired to `security` lock state | U1, N4 |
 | U4 | mobile-ui | Chats home (04): rooms list from `core.myRooms`, pending-join "Let in" row, search, New chat, One-time secret entry | U1, C3 |
 | U5 | mobile-ui | Conversation (05, 06): hold-to-read in Secret rooms, timers, replies, files, view-once viewer, screenshot notices, composer with timer picker | U4 |

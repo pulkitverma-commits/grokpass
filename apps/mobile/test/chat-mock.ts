@@ -78,12 +78,16 @@ export const auth = {
 
 export const resetThisPhone = jest.fn(async () => {});
 
+/** Stub of the lib's `push` export (core-crypto wave 2) until the merged lib carries the real one. */
+export const push = { register: jest.fn(async (_p: 'ios' | 'android', _t: string) => {}), unregister: jest.fn(async () => {}), current: jest.fn(async () => false) };
+
 export const chatMock = {
   AUTH_REDIRECT_URL: 'onepeek://auth',
   getChat: () => chat,
   getLockStore: () => ({ set() {}, get: () => false, clear() {} }),
   auth,
   resetThisPhone,
+  push,
 };
 
 /** A ChatError look-alike: the core's class derives `code` from the message's last `[a-z_]+` word. */
@@ -94,6 +98,7 @@ export function resetChatMock() {
   chat.keystore.get.mockClear().mockResolvedValue({});
   for (const fn of Object.values(auth)) fn.mockClear();
   resetThisPhone.mockClear();
+  push.register.mockClear(); push.unregister.mockClear(); push.current.mockClear().mockResolvedValue(false);
   chat.myRooms.mockResolvedValue([]);
   chat.members.mockResolvedValue([]);
   chat.messages.mockResolvedValue([]);

@@ -4,6 +4,18 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-10-31
 
+- native-security (N1–N5) merged: `withSecureWindow` plugin (FLAG_SECURE in MainActivity, app-wide) + `useSecureScreen`;
+  `withBackupRules` plugin (full-backup-content and data-extraction-rules excluding every domain; expo-secure-store's own
+  backup config disabled); local Expo module `modules/screen-state` (iOS `UIScreen.isCaptured` + change events,
+  `isExcludedFromBackup` for the SQLite directory; Android stubs); `SecurityProvider` (locked on cold start, 60 s
+  auto-lock, Panic Exit → lock store + `chat.lock()`, lock-store reload on foreground, cover while inactive/captured,
+  children unmounted while locked), `useScreenshotAlert` → core only, `Watermark` with the web wording, README and
+  MANUAL-CHECKS S1–S20. 33 jest tests. Lead wired the provider into `app/_layout.tsx` with a provisional
+  "Unlock OnePeek" cover until U3. Decisions on its questions: `reload()` stays optional-sync; `CHAT_DB_NAME` copy
+  with the equality test is fine; iOS best-effort `preventScreenCaptureAsync` stays on (no copy relies on it);
+  screenshot notice wording stays the web's for now (mobile-ui may propose phone wording in U5); app-wide FLAG_SECURE
+  plus explicit hooks on chat/secret screens is the intent. Only a device build can prove the native parts
+  (MANUAL-CHECKS). Wave 1 complete: web 96, core 162, mobile 102 tests; Android bundle 2461 modules.
 - qa (Q3, Q4) merged: leak-guard lint rules in both configs (telemetry calls and imports, ad-hoc loggers, stringify of
   secret-named identifiers into sinks, literal `fetch` hosts outside onepeek.io/supabase.co) with 53 ESLint-API probe
   tests + static `console.` sweep; `packages/core/src/log.ts` (`log` no-op, `redact`) now exported from the package

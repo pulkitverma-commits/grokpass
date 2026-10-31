@@ -4,6 +4,17 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-10-31
 
+- mobile-ui wave 2 (U3, U5, U7) merged: Locked screen as the provider cover (biometric wording, insecure-phone warning,
+  Panic state), Conversation (sync/subscribe/poll, owner auto-admit like the web, hold-to-read with text absent from the
+  tree until held, `markOpened` once, timers, replies, files via a viewer with cache temp files deleted on close,
+  view-once, watermark while held, screenshot notices, waiting/ended states), room menu (timer, invites with revoke,
+  safety number + QR + verify, members with let-in/remove, rename, Panic, leave, burn), Settings (lock state, Lock now,
+  single-tap Panic Exit, Notifications via `push.register/unregister`, devices, honest protection copy, sign out, reset).
+  `auth` screen copy explains device-bound links. 129 → mobile 172 tests in total; iOS bundle 2576 modules. Decisions:
+  single-tap Panic everywhere; watermark only while held; web screenshot-notice wording; SVG gradient. New testIDs from
+  its report go to qa for `TESTIDS.md`. Carried: AppState-driven Supabase `startAutoRefresh/stopAutoRefresh` helper
+  (core-crypto + layout); `expo-notifications` config plugin / `aps-environment` entitlement check (lead, before the
+  first push test). Still unverified on device: gestures, keyboard, pickers, sharing, push token, realtime.
 - Wave 1 review fixes merged: core-crypto (W1-1 email link bound to the address requested on this phone within 1 h,
   session email compared after `verifyOtp`, local sign-out on mismatch; W1-2 `push.register/unregister/current` with the
   token sealed and unregistered before sign-out/reset; W1-6 Supabase URL must be `https://<ref>.supabase.co`), backend

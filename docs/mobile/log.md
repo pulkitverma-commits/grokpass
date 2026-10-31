@@ -4,6 +4,26 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-10-31
 
+- Lead (Phase 1 started): pre-installed the shared app packages (fonts, SVG/QR, auth session, web browser,
+  haptics, blur, crypto, dev client, jest-expo stack) so no agent runs npm in the shared `node_modules`; set up
+  jest-expo + `@testing-library/react-native` for `apps/mobile` with the React 19 copy pinned (`jest.config.js`
+  adds both node_modules trees to the resolution path because react-native lives under `apps/mobile/node_modules`).
+- Lead: contracts fixed before launch. (a) `apps/mobile/lib/chat.ts` placeholder (`getChat()`, `getLockStore()`,
+  `auth.*`, `AUTH_REDIRECT_URL = onepeek://auth`, `resetThisPhone()`); core-crypto implements it, everyone else
+  imports it. (b) Security module API (`SecurityProvider`, `useSecurity`, `useSecureScreen`, `useScreenshotAlert`,
+  `Watermark`, `LockCover`) owned by native-security, consumed by mobile-ui in wave 2. (c) Migration 008 RPCs
+  `register_push_device(p_platform, p_token)` / `unregister_push_device(p_token)` written by backend, called by the
+  core's new `registerPushDevice`/`unregisterPushDevice`. (d) Native push payload: fixed strings + opaque room id
+  only. (e) testID list in `apps/mobile/e2e/TESTIDS.md` shared by mobile-ui and qa. Supabase session is stored
+  sealed through the RN keystore (no AsyncStorage). Passkeys are not in the v1 app sign-in (no native library
+  evaluated yet); Apple, Google (system browser, PKCE), email link and guest are. Human items queued for Gate 1:
+  add `onepeek://auth` to Supabase redirect URLs, enable Apple/Google providers.
+- Lead: wave 1 launched in six worktrees: core-crypto `mobile/core-crypto/phase1-core` (nick on create, newAlerts,
+  N2, sealed auth storage, push registration, app glue, doc notes), mobile-ui `mobile/mobile-ui/foundation`
+  (U1, U2, U4, U6, reset screen), native-security `mobile/native-security/protections` (N1–N5, lock reload),
+  backend `mobile/backend/push-and-links` (B1–B4), release `mobile/release/eas-and-assets` (R1), qa
+  `mobile/qa/phase1-tests` (Q4 leak guard, Q3 Maestro flows, test-plan Gate 1 mapping). Wave 2: U3, U5, U7,
+  security-reviewer S1 on every branch, qa review of new tests.
 - **Human approved Gate 0 with the device spike deferred** (2026-10-31). Phase 1 starts on `mobile/integration`.
   The spike (C2) runs as soon as the Expo account (and Apple Developer Program for iOS) exist; `app/spike.tsx`
   stays until then. Push of `mobile/integration` and the Phase 0 PR remain with the human (PAT lacks `workflow`).

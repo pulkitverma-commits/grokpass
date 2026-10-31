@@ -30,6 +30,12 @@ export interface KeyStore {
 
 export type SupabaseError = { message: string };
 
+/**
+ * A downloaded object body: anything with `arrayBuffer()`. A browser `Blob` satisfies it as is;
+ * the React Native adapter wraps the body it gets so the core never touches RN's `Blob`.
+ */
+export type BinaryBody = { arrayBuffer(): Promise<ArrayBuffer> };
+
 export type SupabaseSession = {
   access_token: string;
   user: { id: string; is_anonymous?: boolean };
@@ -56,8 +62,14 @@ export interface SupabaseLike<S extends SupabaseSession = SupabaseSession> {
   rpc(fn: string, args: Record<string, unknown>): PromiseLike<{ data: unknown; error: SupabaseError | null }>;
   storage: {
     from(bucket: string): {
-      upload(path: string, body: Blob, options: { contentType: string; upsert: boolean }): Promise<{ error: SupabaseError | null }>;
-      download(path: string): Promise<{ data: Blob | null; error: SupabaseError | null }>;
+      /**
+       * The core hands over the ciphertext as a `Uint8Array`. The web adapter turns it into the
+       * `Blob` the browser client has always uploaded; on React Native supabase-js takes the bytes
+       * directly (RN's `Blob` cannot be built from typed arrays). `Blob` stays in the union so the
+       * real `SupabaseClient` and the test fakes remain assignable.
+       */
+      upload(path: string, body: Uint8Array | Blob, options: { contentType: string; upsert: boolean }): Promise<{ error: SupabaseError | null }>;
+      download(path: string): Promise<{ data: BinaryBody | null; error: SupabaseError | null }>;
     };
   };
   channel(name: string, options: { config: { private: boolean } }): RealtimeChannelLike;

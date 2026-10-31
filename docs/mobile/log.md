@@ -60,3 +60,17 @@ Newest first. One line per decision, blocker or agent report.
   adapters, launched from the C1 branch); (2) `env.notify(roomId, token)` shape accepted; (3) `.gitignore`
   now ignores a bare `node_modules` symlink; (4) passkey calls stay required on the port; RN stubs them.
   Deviations accepted: nullable `supabase` on the platform, generic session type, no `open()` on KeyStore.
+- core-crypto (C3 + C1 review fixes, branch `mobile/core-crypto/rn-adapters`): RN adapters in
+  `packages/core/src/adapters/rn/` (SecureStore + SQLite keystore with the web's sealing format, quick-crypto
+  `installRnCrypto()`, `createRnPlatform` with env/lock/fileSource and a Supabase wrapper), exported from
+  `packages/core/src/rn.ts` only. Attachment bytes now cross the storage port as `Uint8Array`; the web adapter
+  wraps them in the same `Blob` as before (RN's Blob cannot be built from typed arrays). Review fixes M1 (shared
+  wrapping-key cache + re-read on decrypt failure, web and RN), M2 (keystore required), L1 (restricted globals
+  for `src/chat/**`, `src/crypto.ts`, `src/adapters/rn/**`), L4 (`ts-mls` declared), L2/L3 (origin/notify tests).
+  Root 58/58, core 50/50, web build green. Not run on a device: quick-crypto on Hermes and RN Blob/FileReader
+  behaviour remain C2's proof.
+- security-reviewer (S0b) on C3: no high/critical; 3 medium (M1 SecureStore `null` must not re-provision the
+  wrapping key while sealed rows exist; M2 siteUrl/apiBaseUrl must be validated https onepeek.io literals, not
+  env; M3 panic lock must fail closed and persist synchronously, flag THIS_DEVICE_ONLY) and 6 low. Merged
+  C3 + review into `mobile/integration`; fixes go on `mobile/core-crypto/review-fixes-2` before any screen
+  uses the adapters. Root 58/58, core 50/50 after merge.

@@ -9,5 +9,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "lint": "eslint ."
+  },
+  "dependencies": {
+    "ts-mls": "^1.6.4"
   }
 }

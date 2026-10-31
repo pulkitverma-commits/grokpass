@@ -85,6 +85,26 @@ describe('chat keystore', () => {
     expect(await ks.keys()).toEqual([]);
   });
 
+  it('two instances in one page share one wrapping key and survive a wipe on either', async () => {
+    const a = createWebKeyStore();
+    const b = createWebKeyStore();
+    await Promise.all([a.put('from:a', 1), b.put('from:b', 2)]);   // racing first use
+    expect(await b.get('from:a')).toBe(1);
+    expect(await a.get('from:b')).toBe(2);
+    const metaKeys: IDBValidKey[] = await new Promise((resolve) => {
+      const req = indexedDB.open('onepeek-chat', 1);
+      req.onsuccess = () => {
+        const g = req.result.transaction('meta', 'readonly').objectStore('meta').getAllKeys();
+        g.onsuccess = () => { resolve(g.result); req.result.close(); };
+      };
+    });
+    expect(metaKeys).toEqual(['wrap']);
+    await a.wipe();
+    await b.put('after', 3);        // b must not seal under the destroyed key
+    expect(await a.get('after')).toBe(3);
+    expect(await b.get('from:a')).toBeNull();
+  });
+
   it('deletes by prefix', async () => {
     await ks.put('room:1:state', 1);
     await ks.put('room:1:msg:a', 2);

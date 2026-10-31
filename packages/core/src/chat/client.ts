@@ -407,9 +407,9 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     const objectPath = await rpc<string>('chat_register_attachment', {
       p_room: roomId, p_device: dev.id, p_id: attachmentId, p_size: blob.byteLength, p_view_once: viewOnce, p_ttl_s: ttl,
     });
-    const up = await sb().storage.from(BUCKET).upload(objectPath, new Blob([blob as BlobPart], { type: 'application/octet-stream' }), {
-      contentType: 'application/octet-stream', upsert: false,
-    });
+    // Raw ciphertext bytes: the platform adapter decides how its storage client wants them
+    // (the web adapter wraps them in a Blob, exactly what this code used to build here).
+    const up = await sb().storage.from(BUCKET).upload(objectPath, blob, { contentType: 'application/octet-stream', upsert: false });
     if (up.error) throw new ChatError('upload_failed');
 
     const id = env.randomUUID();

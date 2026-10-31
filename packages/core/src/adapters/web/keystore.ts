@@ -42,24 +42,33 @@ async function tx<T>(store: (typeof STORES)[number], mode: IDBTransactionMode, f
   }
 }
 
+// One wrapping-key cache per database, shared by every store instance in the page: two instances
+// racing on first use would otherwise each generate a key and the loser's records would be
+// unreadable, and wipe() on one instance would leave the other holding a destroyed key.
+const wrapKeys = new Map<string, Promise<CryptoKey>>();
+
+function wrappingKey(db: string): Promise<CryptoKey> {
+  let p = wrapKeys.get(db);
+  if (p) return p;
+  p = (async () => {
+    const existing = await tx<CryptoKey>('meta', 'readonly', s => s.get('wrap'));
+    if (existing) return existing;
+    const k = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    await tx('meta', 'readwrite', s => s.put(k, 'wrap'));
+    return k;
+  })();
+  wrapKeys.set(db, p);
+  p.catch(() => { if (wrapKeys.get(db) === p) wrapKeys.delete(db); });
+  return p;
+}
+
 /**
- * Builds the browser KeyStore. Each instance caches its wrapping key; the web app creates one
- * (lib/chat/keystore.ts) and hands it to the chat client.
+ * Builds the browser KeyStore. Instances share the wrapping key (cached per database); the web
+ * app creates one (lib/chat/keystore.ts) and hands it to the chat client.
  */
 export function createWebKeyStore(): KeyStore {
-  let wrapKey: Promise<CryptoKey> | null = null;
-  function wrappingKey(): Promise<CryptoKey> {
-    return (wrapKey ??= (async () => {
-      const existing = await tx<CryptoKey>('meta', 'readonly', s => s.get('wrap'));
-      if (existing) return existing;
-      const k = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-      await tx('meta', 'readwrite', s => s.put(k, 'wrap'));
-      return k;
-    })());
-  }
-
   async function put(key: string, value: unknown, expiresAt?: number) {
-    const rec = await seal(await wrappingKey(), key, value, expiresAt);
+    const rec = await seal(await wrappingKey(DB), key, value, expiresAt);
     await tx('sealed', 'readwrite', s => s.put(rec satisfies Sealed, key));
   }
 
@@ -68,9 +77,13 @@ export function createWebKeyStore(): KeyStore {
     if (!rec) return null;
     if (isExpired(rec, Date.now())) { await del(key); return null; }
     try {
-      return await unseal<T>(await wrappingKey(), key, rec);
+      return await unseal<T>(await wrappingKey(DB), key, rec);
     } catch {
-      return null;  // wrong key (after a wipe) or tampered record
+      // Another instance may have wiped and re-created the key since we cached ours: re-read it
+      // from IndexedDB once. If it still fails the record was written under a destroyed key (wipe)
+      // or tampered with.
+      wrapKeys.delete(DB);
+      try { return await unseal<T>(await wrappingKey(DB), key, rec); } catch { return null; }
     }
   }
 
@@ -109,7 +122,7 @@ export function createWebKeyStore(): KeyStore {
 
   /** Destroys the wrapping key first (instantly making all data unreadable), then the records. */
   async function wipe() {
-    wrapKey = null;
+    wrapKeys.delete(DB);
     await tx('meta', 'readwrite', s => s.delete('wrap'));
     await tx('sealed', 'readwrite', s => s.clear());
   }

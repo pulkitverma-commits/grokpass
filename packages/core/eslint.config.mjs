@@ -21,4 +21,30 @@ export default tseslint.config(
       'no-empty': ['error', { allowEmptyCatch: true }],
     },
   },
+  {
+    // The platform-neutral core reaches the browser only through the ports in chat/ports.ts.
+    files: ['src/chat/**/*.ts', 'src/crypto.ts'],
+    rules: {
+      'no-restricted-globals': [
+        'error',
+        ...['window', 'navigator', 'localStorage', 'indexedDB', 'fetch', 'File', 'BroadcastChannel'].map(name => ({
+          name,
+          message: `${name} is platform-specific; the core must reach it through a port (chat/ports.ts).`,
+        })),
+      ],
+    },
+  },
+  {
+    // The React Native adapters run on Hermes: no DOM. Anything browser-only must stay in adapters/web.
+    files: ['src/adapters/rn/**/*.ts'],
+    rules: {
+      'no-restricted-globals': [
+        'error',
+        ...['window', 'navigator', 'indexedDB', 'localStorage', 'File', 'Blob'].map(name => ({
+          name,
+          message: `${name} does not exist on React Native; reach it through a port or the web adapter.`,
+        })),
+      ],
+    },
+  },
 );

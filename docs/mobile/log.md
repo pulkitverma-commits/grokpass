@@ -4,6 +4,17 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-10-31
 
+- core-crypto Phase 1 merged: `createRoom({ nickname })` announces the owner's nick (and re-announces after each
+  admit, since joiners cannot read rows before their Welcome); `SyncResult.newAlerts` (web room page refreshes on
+  alerts too, web integration test asserts the split); N2 stale `wiping` marker cleared; `createRnAuthStorage`
+  (session sealed in its own `onepeek-auth.db` / `onepeek.wrap.auth`, self-wipes when `keystore_unavailable`);
+  `registerPushDevice`/`unregisterPushDevice`; `apps/mobile/lib/chat.ts` implemented (PKCE/`token_hash` only,
+  implicit-flow fragments refused, `onepeek://auth` only, local sign-out, generic device label); known-limitations
+  item 9 (`expires_at` outside the AAD). Core 87 → 101, mobile jest 70. Jest now maps `@onepeek/core` by path and
+  transforms ts-mls/@hpke/@noble; lead added a 20 s test timeout after a one-off cold-cache timeout. Carried to
+  wave 2 (mobile-ui/native-security, root layout): AppState-driven `startAutoRefresh`/`stopAutoRefresh` for the
+  Supabase session. **Human (Gate 1):** add `onepeek://auth` to Supabase Auth redirect URLs; enable Apple and Google
+  providers.
 - mobile-ui wave 1 (U1, U2, U4, U6) merged: theme tokens + primitives, Welcome, Sign in (Apple with hashed nonce,
   Google via system browser + PKCE, email link, guest), `auth` callback (URL never rendered or logged), Chats home
   (rooms, search, pending "Let in", refresh on focus/foreground), New chat → invite sheet (QR, masked link, copy,

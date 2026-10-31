@@ -1,6 +1,8 @@
 # OnePeek mobile: test plan v1
 
-Owner: `qa`. Status: v1, written 2026-10-31 for task Q2 (`plan.md` §2), awaiting lead review.
+Owner: `qa`. Status: v1.1. v1 written 2026-10-31 for task Q2 (`plan.md` §2) and merged; v1.1 (same day,
+tasks Q3/Q4) records what was built: §1.6 the leak guard as landed, §3 the Maestro flows as written, §8 the
+Gate 1 criteria map, and the §1.3 siteUrl correction from the S0 close-out (N4).
 Covers tasks Q1 (interop), Q3 (Maestro), Q4 (unit tests, log lint), Q5 (cross-platform secrets) and the
 Phase 3 device matrix. The automated parts reuse the web harness in `lib/chat/client.integration.test.ts`
 and the SQL tests in `supabase/tests/secret-chat.test.ts`; nothing here invents a second way of testing.
@@ -155,8 +157,13 @@ Adapter tests (as landed in C3; file names are the adapter's, `<adapter>.test.ts
 - `platform.test.ts` (lock): `set()` flips the flag synchronously (kept in memory so the UI can cover
   the screen before SecureStore resolves) and persists it; a new `createRnLockStore(sameMock)` reads
   it back once `ready` resolves (simulated process restart); `clear()` deletes it.
-- `platform.test.ts` (env): `origin()` is the injected `siteUrl` (the app passes
-  `Constants.expoConfig.extra.siteUrl`), used verbatim in invite links and never sent to the server;
+- `platform.test.ts` (env): `origin()` is the `siteUrl` the app passes as a **string literal**
+  (`'https://onepeek.io'`; `apps/mobile/app.config.ts` pins the same literal, no env override) and the
+  core validates at construction (`checkOnePeekUrl`, S0b M2: absolute, `https:`, host `onepeek.io` or
+  `www.onepeek.io`, no port, credentials, path, query or fragment; `http://localhost` / `127.0.0.1` only
+  with `allowInsecureDev: true`). Neither `EXPO_PUBLIC_*` nor `expoConfig.extra` can redirect it; the
+  worst an OTA or `extra` change can do is flip apex ↔ www. Used verbatim in invite links and never sent
+  to the server;
   `deviceLabel()` is the injected model name truncated to 40 chars, never the user-typed device name;
   `randomUUID()` is v4; `notify()` as above.
 - `platform.test.ts` (files): `fileSource(picked)` reads from `read()` lazily (not at pick time); size
@@ -212,17 +219,81 @@ mocked to capture what would be sent:
   and sends nothing.
 - **Dead tokens.** APNs `410`/`BadDeviceToken` and FCM `UNREGISTERED` delete the `push_devices` row;
   the web `404/410` behaviour is unchanged (regression).
-- **Migration 008** (`supabase/tests/push-devices.test.ts`, PGlite): owner can insert and read only
-  their own `push_devices` rows; another user reads none; `anon` is denied; the service role reads all.
+- **Migration 008** (`supabase/tests/push-devices.test.ts`, PGlite, owner `backend`): owner can insert
+  and read only their own `push_devices` rows; another user reads none; `anon` is denied; the service
+  role reads all. The `register_push_device` RPC lives in the same file and must assert: (a) it runs as
+  the caller and writes `owner = auth.uid()` whatever `owner` the arguments carry (a forged owner is
+  ignored or rejected, never stored); (b) `anon` (no session) gets `permission denied`; (c) a guest
+  (anonymous auth user) **may** register, since guests receive messages; (d) re-registering the same
+  `(platform, token)` updates `last_seen` instead of inserting a second row; (e) registering a token
+  that another owner holds moves it to the caller (a phone changes account) and the old row is gone;
+  (f) the token column is written as given and the test dumps the table as `row::text` to prove nothing
+  else (no user agent, no device name, no room) is stored; (g) `platform` is constrained to
+  `ios | android | web` and anything else is rejected; (h) RLS: after registration the owner's `select`
+  returns the row, another user's returns zero rows, direct `insert`/`update` by a non-owner is denied.
+- **Native payload sweep** (`lib/alerts.native.test.ts`, owner `backend`, reviewed by `qa` in wave 2).
+  The APNs and FCM senders are called with mocked transports that capture the exact bytes that would
+  leave the server. The test must: (1) build a context of forbidden strings from the fixtures in §1.1
+  (`BODY`, `BODY2`, `FILE_NAME`, `FILE_BODY`, `ACCESS_CODE`, `NICK`, `ROOM_NAME`) plus the sender's user
+  id, every recipient's user id, every member nickname, the invite token and the attachment key, each in
+  text, hex, base64 and base64url (`forbidden()` from `packages/core/test/fixtures.ts`); (2) serialise
+  every captured request (URL, headers, body) and `expectClean` it; (3) assert the APNs body is exactly
+  `{ aps: { alert: { title: 'OnePeek', body: 'You have a new message in a private chat.' }, sound: 'default' }, room: <id> }`
+  (`room` only when `ROOM_IN_PAYLOAD`; it may also be mirrored as `aps.thread-id`) with no
+  `mutable-content`, no `subtitle`, no `category` that names a room, and the FCM v1 message has
+  `notification.title`/`body` equal to the same two strings, no `image`, and `data` keys limited to
+  `{ room }` when `ROOM_IN_PAYLOAD` (the lead set it to `true` on 2026-10-31, log.md); (4) assert the
+  only UUID in either payload is the room id (regex over the serialised payload, count == 1 when
+  `ROOM_IN_PAYLOAD`, 0 otherwise) so a sender or recipient id can never ride along; (5) the APNs
+  `apns-topic` header is `io.onepeek.app` and `apns-push-type` is `alert`; the FCM target is
+  `https://fcm.googleapis.com/v1/projects/<project>/messages:send` (no other host appears in any URL);
+  (6) a recipient with `notify_prefs.push_on = false` produces zero requests on every transport;
+  (7) APNs `410`/`BadDeviceToken` and FCM `UNREGISTERED` delete the `push_devices` row, and the web
+  `404/410` path is unchanged (regression); (8) the credentials (`APNS_*`, `FCM_SERVICE_ACCOUNT_JSON`)
+  never appear in a thrown error message or in the captured payload (add them to the forbidden list).
 
-### 1.6 Log hygiene (Q4)
+### 1.6 Leak guard (Q4, as built 2026-10-31)
 
-An ESLint rule in the root flat config, scoped to `apps/mobile/**` and `packages/core/**`, errors on
-`console.log|info|debug|warn|error` whose arguments reference an identifier matching
-`/body|plain|text|key|token|code|secret|password|nickname|state/i` or a template literal containing
-`${`. Allowed: `console.error(e.code)` where `e` is a `ChatError`. Plus a vitest test
-`packages/core/test/no-console.test.ts` that runs every core test with `console` wrapped and fails if
-anything was printed; the mobile app installs the same wrapper in `__DEV__` builds and throws.
+The rule set lives in `packages/core/eslint.config.mjs` and, as a kept-in-sync copy, in
+`apps/mobile/eslint.config.mjs` (the app's lint must not import the core's tooling). Everything is an
+**error**; `npm run lint` is at 0 errors with the existing code. What is caught, by `no-restricted-syntax`
+selectors (esquery; regexes use `\x2f` for `/`):
+
+| Pattern | Example that fails | Scope |
+| --- | --- | --- |
+| console | `console.log(x)`, `if (__DEV__) console.warn(x)` | all files (`no-console`, pre-existing) |
+| telemetry call | `Sentry.captureMessage(x)`, `Sentry.Native.captureException(e)`, `crashlytics().log(x)`, `analytics.track(...)`, `posthog.capture(...)`, also `Bugsnag`, `datadog`, `mixpanel`, `amplitude`, any method, case-insensitive | all files |
+| telemetry import | `import … from '@sentry/*'`, `@bugsnag/*`, `@datadog/*`, `mixpanel*`, `@amplitude/*`, `posthog*`, `@react-native-firebase/crashlytics|analytics`, `@segment/*`, `expo-analytics`; also `require(...)` of the same | all files |
+| ad-hoc logger | `logger.info(x)`, `log.warn(x)` and the other logging verbs (`log info warn error debug trace fatal verbose silly notice critical`) on an identifier named `log` or `logger`. `log.push(...)` on an array is not matched | all files |
+| stringify to a sink | `JSON.stringify(<ident>)` or `JSON.stringify(<obj>.<prop>)` where the identifier/property is one of `message body plaintext token accessCode code secret key nick fileName name`, passed to any sink above, to `log(...)`/`logger(...)` or to `console.*` | all files |
+| fetch host | `fetch('<literal>')`, `globalThis.fetch('<literal>')` or an expression-free template literal whose URL is not `https://onepeek.io/…`, `https://*.onepeek.io/…` or `https://<project>.supabase.co/…`: another host, a look-alike (`onepeek.io.evil.example`), plain `http:`, or a relative path | `apps/mobile/**`, `packages/core/src/adapters/rn/**` (the web adapter keeps its relative `/api/chat/notify`) |
+
+The approved path is `packages/core/src/log.ts`: `log(event, fields?)` is a **no-op** in every build
+(OnePeek ships no telemetry) and `redact(value)` is what a screen passes its fields through so that, if a
+sink is ever wired in there (lead + security-reviewer decision), nothing sensitive can reach it:
+sensitive keys (`SENSITIVE_KEY`: message, body, plain, text, token, access, code, secret, key, nick,
+file, name, password, email, link, url, session, jwt, state; case-insensitive, anywhere in the key) become
+`[redacted]`, strings are capped at 32 chars, byte buffers become `[bytes:n]`, errors keep only `name`
+and the trailing `[a-z_]+` code, depth stops at 4. Screens import it as `@onepeek/core/src/log` (same
+style as `_layout.tsx` imports `src/rn`; re-export from `index.ts` is `core-crypto`'s call).
+`packages/core/src/log.test.ts` (8 tests) covers each rule.
+
+`packages/core/test/leak-guard.test.ts` (53 tests, ~0.7 s) runs ESLint programmatically with both
+configs: 23 probe files (one per forbidden pattern) are written to the scratchpad, read back and linted
+under a virtual path inside the package (`src/chat/…`, `src/adapters/rn/…`, `app/…`), each must be
+reported with the matching message and nothing else at error level; a clean file (`log` + `redact`,
+`fetch` to onepeek.io/supabase.co/computed URL, `JSON.stringify({ roomId })`) must pass both; the fetch
+rule must stay scoped (web adapter's relative fetch passes); `log.push` must not be mistaken for a
+logger. The temp dir is removed in `afterAll`. The same file holds the **static sweep**: walks
+`apps/mobile/**/*.{ts,tsx}` (minus `node_modules`, `ios`, `android`, `.expo`, `e2e`, `__tests__`,
+`*.test.*`) and `packages/core/src/**/*.ts` (minus tests) and fails on any line matching `console\.` or
+`__DEV__\s*&&\s*console`, grep-style (comments included: a shipped file does not mention the console
+with a dot after it). Ran 3× on 2026-10-31, 61/61 each time, no flake.
+
+Not covered (by design, named so nobody assumes otherwise): string concatenation or template literals
+of a secret into a sink (`log('x ' + token)`) is not matched beyond `JSON.stringify`; a sink imported
+under another name (`import { captureMessage as cm }`) is caught by the import rule, not the call rule;
+`fetch` with a computed URL is the adapter's responsibility (`checkOnePeekUrl`).
 
 ## 2. Interop test design (Q1)
 
@@ -378,81 +449,70 @@ Status 2026-10-31 (branch `mobile/qa/interop-test`): `20 passed`, five consecuti
 root `58 passed` unchanged; `packages/core` `70 passed` (50 + 20). Needs Node 22.13+ for `node:sqlite`
 (the interop block is skipped, not failed, without it).
 
-## 3. Maestro E2E flows (Q3, Phase 1)
+## 3. Maestro E2E flows (Q3, as written 2026-10-31)
 
-### 3.1 Setup facts
+The flows exist in `apps/mobile/e2e/` and are documented there (`README.md`); this section keeps the
+design decisions and the list. **Written and statically checked, not run**: no Xcode, Android Studio,
+Java or Maestro on this Mac and no device build yet. The check (`node apps/mobile/e2e/scripts/check-flows.mjs`)
+parses every YAML, requires every `id:` to exist in `apps/mobile/e2e/TESTIDS.md`, forbids
+`takeScreenshot`/`startRecording`, and lists the steps that depend on proposed ids as **dry**.
 
-- Maestro drives one device per flow and cannot create a second participant. The second participant
-  is a **companion**: `apps/mobile/e2e/companion/server.ts`, a Node script that runs the web core
-  (web adapters, `fake-indexeddb`) signed in as a guest against the **same Supabase project the app
-  points at**, and exposes `http://127.0.0.1:4310` with `POST /join {link, code, nick}`,
-  `POST /send {room, body}`, `POST /sendFile {room, name, bytesB64, viewOnce}`,
-  `POST /screenshot {room}`, `GET /messages/:room`, `POST /sync/:room`. Maestro's `runScript` calls it
-  with `http.post`. The companion burns every room it owns on `SIGINT`.
-- The app under test is an EAS **development** build (`eas build --profile development`) installed on
-  the simulator, pointed at production via `EXPO_PUBLIC_*` in `eas.json`'s development profile. Rooms
-  are throwaway (`lifetime: 3600`). This Mac has no Xcode or Android Studio (`log.md` 2026-10-31), so
-  Phase 1 flows run on a machine that has them or in Maestro Cloud; CI runs them nightly, not per PR.
-- Sign-in in flows uses **guest** (`join as guest`) wherever the journey allows it. Passkey, Apple and
-  Google sign-in cannot be automated on simulators and are manual (§4, M1).
-- One flow file per journey, `apps/mobile/e2e/flows/<nn>-<journey>.yaml`, tagged `ios`, `android` or
-  both. Shared steps in `apps/mobile/e2e/flows/_common/`. Run: `maestro test apps/mobile/e2e/flows
-  --include-tags ios` (or `android`), `--format junit --output e2e/results/<platform>.xml`.
+### 3.1 Setup facts (changes from v1)
 
-### 3.2 testID conventions (binding for `mobile-ui`)
+- **testIDs**: the binding list moved from this file to `apps/mobile/e2e/TESTIDS.md` (single source of
+  truth, lead's contract of 2026-10-31: 31 wave-1 ids, 10 wave-2 ids, plus 13 **proposed** ids the flows
+  need and the lead has not accepted yet). The v1 table in this section is superseded; `mobile-ui` builds
+  against `TESTIDS.md` only.
+- **Second participant**: v1 planned a Node "companion" running the web core. Replaced, on the lead's
+  instruction, by **two flows per two-device journey** (`<nn>-<journey>.yaml` on device A,
+  `<nn>-<journey>.peer.yaml` or `04-let-in.yaml` on device B) sharing `MAESTRO_*` env and sequenced by
+  `scripts/run-two-device.sh`. The room link crosses from A to B through a local in-memory **relay**
+  (`e2e/relay/server.mjs`, `127.0.0.1:4311`, prints nothing): `copyTextFrom: id: invite.link` →
+  `runScript relay-put.js`; B `runScript relay-get.js` → `openLink`. The link carries the invite token,
+  so the run script never echoes it, the relay never writes it, and flow 08 burns the room.
+- **Simulator-only triggers** that Maestro cannot express go through the relay too: a system
+  screenshot (iOS Simulator "Save Screen" ⌘S, the one simulator action that fires
+  `UIApplicationUserDidTakeScreenshotNotification`; Android `input keyevent KEYCODE_SYSRQ`) and the
+  biometric match (`simctl … BiometricKit_Sim.fingerTouch.match`, `adb emu finger touch 1`). Both are
+  deleted/cleaned at once; see README "What is never kept".
+- **Links**: simulators do not verify Universal/App Links; `relay-get.js` rewrites
+  `https://onepeek.io/…` to `onepeek://…` unless `MAESTRO_UNIVERSAL_LINKS=1` (physical devices; M9).
+- **Where to run**: deferred to the lead; README writes up (A) GitHub Actions `macos-15` for iOS and
+  `ubuntu` + KVM for Android with two simulators each, and (B) Maestro Cloud, which can run only the
+  `single` set: one device per flow, no cross-flow ordering, and it keeps a screenshot of every step
+  on their servers, which 05/06 (a revealed message, a view-once image) make unacceptable.
+- **Dev build**: EAS `development` profile pointed at production, throwaway rooms (§0.2), as in v1.
 
-- Lower-case, dot-separated `screen.element[.qualifier]`; stable across copy changes; one per
-  interactive element and per state container; never contains dynamic data (room ids go in
-  `accessibilityLabel`, not `testID`).
-- Lists: the container `chats.list`, each row `chats.row` (Maestro picks by index or by visible
-  text), never `chats.row.<id>`.
-- Every `Screen` primitive sets `testID="<screen>.root"` so a flow can `assertVisible: id: room.root`.
+### 3.2 Flow rules
 
-| Screen (design) | testIDs |
-| --- | --- |
-| Welcome (01) | `welcome.root`, `welcome.signin`, `welcome.guest` |
-| Sign in (02) | `signin.root`, `signin.passkey`, `signin.apple`, `signin.google`, `signin.email`, `signin.email.send`, `signin.guest` |
-| Locked (03) | `locked.root`, `locked.unlock`, `locked.panicHint` |
-| Chats (04) | `chats.root`, `chats.list`, `chats.row`, `chats.pending`, `chats.pending.letIn`, `chats.search`, `chats.new`, `chats.secret`, `chats.settings` |
-| Conversation (05/06) | `room.root`, `room.title`, `room.menu`, `room.list`, `room.bubble`, `room.bubble.held`, `room.notice`, `room.file`, `room.viewOnce`, `composer.input`, `composer.send`, `composer.attach`, `composer.timer`, `composer.timer.<30s|5m|1h|1d>` |
-| View-once viewer | `viewer.root`, `viewer.close`, `viewer.gone` |
-| Send secret (07) | `secret.root`, `secret.inChat`, `secret.link`, `secret.send` |
-| New chat (08) | `new.root`, `new.kind.<quick|secret|business>`, `new.name`, `new.code`, `new.create` |
-| Invite sheet | `invite.root`, `invite.qr`, `invite.link`, `invite.copy`, `invite.share`, `invite.approval`, `invite.done` |
-| Join (09) | `join.root`, `join.code`, `join.nick`, `join.submit`, `join.error` |
-| Share sheet (10) | `share.root`, `share.room`, `share.send` |
-| Scan QR (11) | `scan.root`, `scan.close` |
-| Room menu | `menu.members`, `menu.verify`, `menu.safety`, `menu.burn`, `menu.burn.confirm`, `menu.leave`, `menu.leave.confirm`, `menu.rename` |
-| Settings (12) | `settings.root`, `settings.push`, `settings.autolock`, `settings.devices`, `settings.panic`, `settings.signout` |
-| Global | `app.cover` (the switcher/capture cover view), `toast` |
+- Never capture content: no `takeScreenshot`/`startRecording` (enforced); assertions on ids; message
+  text asserted only **absent** (before and after hold-to-read); the revealed state is never asserted on
+  text. Fixture strings only (§1.1). Rooms: 1-hour timer, `qa-launch`, burned by 08.
+- Tags: `ios`, `android` on every flow; `single` (one device: 01, 02, 03, 09); `two-device` +
+  `device-a`/`device-b` (03 to 08). `maestro test apps/mobile/e2e --include-tags single` for one device;
+  `MAESTRO_DEVICE_A=… MAESTRO_DEVICE_B=… apps/mobile/e2e/scripts/run-two-device.sh` for two.
+- `msg.<id>` is matched as the regex `msg\..+` with an `index`; `chats.room` is one id for every row,
+  picked by index. `invite.link` must render the full link (README "Rendering requirements").
 
 ### 3.3 Flows
 
-Each flow starts with `launchApp: clearState: true` (except 03, 04), ends with `menu.burn` where a
-room exists, and asserts via `assertVisible`/`assertNotVisible` on testIDs and on the fixture strings.
-
-| # | File | Journey | Key assertions |
+| # | Files | Journey | Runnable when |
 | --- | --- | --- | --- |
-| 01 | `01-signin-guest.yaml` | Welcome → guest | `chats.root` visible; `chats.list` empty-state text visible |
-| 02 | `02-signin-email.yaml` | Welcome → email link | `signin.email.send` → confirmation copy; **stops there** (the link lands in a mailbox; manual M1) |
-| 03 | `03-lock-unlock.yaml` | background 61 s → relaunch | `locked.root` visible; `room.bubble` not visible; simulator biometric accepted (`xcrun simctl spawn booted notifyutil -p com.apple.BiometricKit_Sim.fingerTouch.match` on iOS; `adb -e emu finger touch 1` on Android) → `chats.root` |
-| 04 | `04-panic-exit.yaml` | Settings → Panic Exit | `app.cover` visible within one frame, then `locked.root`; relaunch still locked; after unlock the room list is unchanged (count equals before) |
-| 05 | `05-create-invite.yaml` | New secret chat → invite | `new.kind.secret`, `new.code` filled with `ACCESS_CODE`, `new.create` → `room.root`; `room.menu` → invite sheet: `invite.link` text matches `^https://.*/chat/join#`, `invite.qr` visible; `copyTextFrom: id: invite.link` |
-| 06 | `06-join-admit.yaml` | 05 + companion joins | `runScript` posts the link + code to companion `/join`; app `chats.pending` shows 1; `chats.pending.letIn` → companion `/sync` reports `joined: true`; `room.title` shows member count 2 |
-| 07 | `07-message.yaml` | 06 + text both ways | type `BODY` in `composer.input`, `composer.send`; companion `GET /messages` body equals `BODY`; companion `/send BODY2`; `room.bubble` with `BODY2` visible (Secret room: only after `longPressOn: id: room.bubble`, and `assertNotVisible: BODY2` before the hold) |
-| 08 | `08-file.yaml` | 06 + file both ways | `composer.attach` → picker (simulator photo library has a seeded image `qa-photo.png`; on Android use the `e2e/fixtures` pushed with `adb push`); `room.file` visible; companion downloads and asserts size > 0; companion `/sendFile passport.txt`; app `room.file` shows `passport.txt` |
-| 09 | `09-view-once.yaml` | 06 + view-once from companion | `room.viewOnce` → `viewer.root` visible with content; `viewer.close`; tap again → `viewer.gone` copy; relaunch app → still `gone` |
-| 10 | `10-burn.yaml` | 06 + burn | `menu.burn`, `menu.burn.confirm` → `chats.root`, row gone; companion `/sync` reports `removed: true`; relaunch → row still gone |
-| 11 | `11-screenshot-notice.yaml` | 06 + companion `/screenshot` | `room.notice` visible with the web's wording; it is not a `room.bubble` |
-| 12 | `12-join-by-link.yaml` | companion creates a room, app joins | `openLink: onepeek://chat/join#<token>` (simulators do not verify Universal Links; the https form is manual M9) → `join.root`, `join.code` wrong → `join.error`; right code + `join.nick` → companion admits → `room.root` |
-| 13 | `13-settings.yaml` | Settings toggles | `settings.push` off → companion `/send` → no notification banner (iOS: `assertNotVisible` on the banner text within 10 s; Android: `adb shell dumpsys notification` via `runScript` is not available in Maestro, so banner check only); `settings.autolock` shows "1 minute"; `settings.devices` lists this device by label |
-| 14 | `14-timer.yaml` | 07 + timer | `composer.timer` → `composer.timer.30s`; send; companion opens (`/sync` + mark opened through `/messages?open=1`); after 31 s `assertNotVisible` of that bubble in the app |
-| 15 | `15-safety-number.yaml` | 06 + verify | `menu.verify` shows 60 digits grouped in 12; equals companion's `safetyNumberWith` from `/safety/:room/:device` |
+| 01 | `01-welcome-guest.yaml` | Welcome → Get started → Continue as guest → Chats home | wave-1 screens |
+| 02 | `02-signin-email.yaml` | Welcome → Sign in → email → "check your inbox"; stops there (link in a mailbox: manual M1); `MAESTRO_EMAIL` must be a team inbox, production sends a real mail | wave-1 screens |
+| 03 | `03-create-secret-room.yaml` | New chat → Secret → name, nick, code, timer → create → invite sheet → copy → done; publishes the link | wave-1; timer option tapped by label until `new.timer.1h` |
+| 04 | `04-join-with-code.yaml` (B) + `04-let-in.yaml` (A) | B: open link → code → nick → submit → waits; A: Chats home shows Let in → tap → open room | wave-1 |
+| 05 | `05-message-roundtrip.yaml` (A) + `.peer.yaml` (B) | A types and sends; B: bubble visible, body **not** visible, hold-to-read, release, body not visible again, reply | wave-2 (`room.composer`, `room.send`, `msg.<id>`) |
+| 06 | `06-file-view-once.yaml` (A) + `.peer.yaml` (B) | A attaches a photo as view-once; B opens once, second open refused, still refused after relaunch | **dry**: proposed `attach.*`, `viewer.*`; system picker labels need a device run |
+| 07 | `07-screenshot-notice.peer.yaml` (B, first) + `07-screenshot-notice.yaml` (A) | system screenshot on B → notice row on A. Android: black image with `FLAG_SECURE`; the app learns of it only on Android 14+ (older Android: manual M2) | **dry**: proposed `room.notice`; iOS ⌘S trigger to confirm on first run |
+| 08 | `08-burn.yaml` (A) + `.peer.yaml` (B) | menu → burn → confirm → room gone on both, still gone after relaunch; also the run's clean-up | wave-2 (`room.menu`, `room.burn`, `room.burn.confirm`) |
+| 09 | `09-panic-lock.yaml` | panic → `locked.screen` (Chats and room **not** visible) → relaunch still locked → unlock only with `MAESTRO_BIOMETRIC=sim` (CI default `skip` ends on the locked screen) | wave-2 (`panic`, `locked.*`) |
 
-Flows 05 to 15 share `_common/create-and-join.yaml` (`runFlow`) so a change in the create path is
-fixed once. Flow 02, 08 (Android picker) and 13 (Android notification) are tagged `ios`/`android`
-separately where the steps differ. Expected count at Gate 1: 15 flows × 2 platforms = 30 runs; 02 is
-allowed to end early on both.
+Sub-flows: `_common/guest-home.yaml`, `_common/back-to-chats.yaml` (Android `back` / iOS edge swipe;
+`room.back` proposed), `_common/open-room.yaml`. Count: 9 journeys, 14 top-level flow files, 3 sub-flows,
+17 YAML files; expected at Gate 1: 14 flows × 2 platforms = 28 runs, 02 allowed to end at the sent state,
+06 and 07 counted as dry until their ids land. v1's 03-lock-unlock (60 s auto-lock), 13-settings,
+14-timer and 15-safety-number are not v1 journeys in the lead's list and stay manual (M6, M13) or Phase 3.
 
 ## 4. Manual security checks
 
@@ -574,11 +634,13 @@ npm test -w packages/core                              # core only
 npm test -w apps/mobile                                # security + adapters-in-app tests
 npx vitest run packages/core/test/interop.integration.test.ts
 npx vitest run lib/chat/client.integration.test.ts     # web regression, must stay 8 passed
+npm test -w packages/core -- test/leak-guard.test.ts src/log.test.ts   # leak guard, run 3× before a report
+node apps/mobile/e2e/scripts/check-flows.mjs            # Maestro flows: YAML, ids vs TESTIDS.md, no screenshots
 
-# Maestro (a machine with simulators, or Maestro Cloud)
-node apps/mobile/e2e/companion/server.ts &             # second participant, burns its rooms on exit
-maestro test apps/mobile/e2e/flows --include-tags ios     --format junit --output apps/mobile/e2e/results/ios.xml
-maestro test apps/mobile/e2e/flows --include-tags android --format junit --output apps/mobile/e2e/results/android.xml
+# Maestro (a machine with simulators; see apps/mobile/e2e/README.md "Where to run")
+maestro test apps/mobile/e2e --include-tags single --include-tags ios     --format junit --output apps/mobile/e2e/results/ios.xml
+maestro test apps/mobile/e2e --include-tags single --include-tags android --format junit --output apps/mobile/e2e/results/android.xml
+MAESTRO_DEVICE_A=<udid> MAESTRO_DEVICE_B=<udid> apps/mobile/e2e/scripts/run-two-device.sh   # 14 flows, A/B alternating
 
 # Device perf
 adb shell am start -W -n io.onepeek.app/.MainActivity
@@ -611,7 +673,8 @@ verbatim and the fixture string it leaked, if any.
    (`app/api/chat/notify/route.ts`). B4 says the mobile payload has "no room". Decide
    `ROOM_IN_PAYLOAD` (§1.5): dropping it means the app opens on the Chats list after a tap, keeping it
    means the push service sees which room is active. Recommendation: drop it; the app is locked on tap
-   anyway (M8) and the list is one tap away.
+   anyway (M8) and the list is one tap away. **Answered 2026-10-31 (log.md): `ROOM_IN_PAYLOAD=true`**, the
+   room id travels as an opaque routing key; §1.5 is written against that.
 2. **`FLAG_SECURE` on the Chats list.** N1 says "chat and secret screens". The list shows room names
    and nick names (local data). Recommendation: cover the list too; it costs nothing and simplifies
    M3/M5.
@@ -620,10 +683,40 @@ verbatim and the fixture string it leaked, if any.
 4. **Owner nickname.** The web test only asserts the member's nickname reaches the owner. If the
    owner's nickname is not sent on create, mobile `members()` shows `null` for the owner (§2.2 H26).
    `core-crypto` to confirm; otherwise it is a Phase 1 fix.
-5. **Simulators.** No Xcode or Android Studio on this Mac. Maestro flows need either a second machine,
-   Maestro Cloud (paid), or a GitHub Actions `macos` runner with the iOS simulator (free minutes are
-   limited). Pick one before Q3 starts; until then flows are written and reviewed but not run.
+5. **Simulators.** Answered 2026-10-31: flows written regardless; where to run is still open. Both options
+   are written up in `apps/mobile/e2e/README.md`; qa's recommendation is GitHub Actions (`macos-15` for
+   iOS, `ubuntu` + KVM for Android) because Maestro Cloud cannot run the two-device journeys and keeps
+   per-step screenshots off-site.
 6. **`node:sqlite` for the SQLite mock.** Needs Node ≥ 22.13; CI's Node version must match. The
    alternative is `better-sqlite3` (native build, slower install). Recommendation: `node:sqlite`.
 7. **Older iPhone.** Confirm the minimum iOS after the first prebuild so the second iPhone in §5.1 is
    bought or borrowed early.
+8. **Proposed testIDs.** 13 ids the flows need are not in the contract (`TESTIDS.md` "Proposed"):
+   `signin.sent`, `join.waiting`, `join.error`, `new.timer.1h` (+ `.30s/.5m/.1d`), `room.back`,
+   `attach.photo/.file/.viewOnce/.send`, `viewer.screen/.close/.gone`, `room.notice`. Accept, rename or
+   reject; 06 and 07 stay dry until then.
+9. **`log` export.** `packages/core/src/log.ts` is not re-exported from `src/index.ts` (core-crypto's
+   file). Screens import `@onepeek/core/src/log`; say if you want it on the package root.
+10. **`MAESTRO_EMAIL`.** Flow 02 sends a real magic link from production; the default
+   `qa-maestro@onepeek.io` must be an inbox the team controls, or the lead names one.
+
+## 8. Phase 1: Gate 1 criteria map
+
+Gate 1 (`plan.md` §3): phone ↔ browser end to end on the live project, push with no content, black
+screenshots on Android, blanked recording on iOS, lock works, no open high findings. For each criterion:
+what proves it, who owns the proof, and where it stands on 2026-10-31. "pending device build" means the
+proof exists or is specified but needs the EAS development build (blocked on the Expo/Apple accounts).
+
+| Gate 1 criterion | Automated proof | Manual proof | Owner | Status 2026-10-31 |
+| --- | --- | --- | --- | --- |
+| Phone ↔ browser end to end on the live project | `packages/core/test/interop.integration.test.ts` (20 scenarios, roles swapped, every artefact swept; PGlite, not the live project, by rule §0.1) | one throwaway room on production: phone dev build + browser, create → join → text both ways → file → view-once → burn; evidence per §6.3 in `gates/phase-1.md` | qa (test), lead (live run) | test green (87/87 core); live run **pending device build** |
+| Push with no content | `lib/alerts.native.test.ts` forbidden-strings sweep (§1.5, spec written, backend writes it, qa reviews in wave 2); `supabase/tests/push-devices.test.ts` RLS + `register_push_device` (§1.5) | M8: banner shows only `OnePeek` / `You have a new message in a private chat.`, expanding shows nothing more, tap opens the app locked | backend (tests), qa (review, M8) | tests **pending backend B1/B2/B4**; M8 pending device build + APNs/FCM keys |
+| Black screenshots on Android | `apps/mobile/security` tests (§1.4 `secureFlag.test.ts`: `preventScreenCaptureAsync` on every `/room`, `/secret`, `/join` route, and the Chats list per the lead's answer); Maestro 07 asserts the notice side only, and only on Android 14+ | M2 Android: hardware screenshot in a room → OEM toast, no image in Photos; M5 switcher thumbnail black | native-security (N1, tests), qa (M2, M5) | **pending N1 + device build**; note: Maestro cannot verify that an image is black; M2 is the proof |
+| Blanked recording on iOS | `capture.test.ts` (§1.4: `UIScreen.isCaptured` true → cover shown; cover reasons independent) | M3 iOS: system recorder shows the cover for the whole capture; M4 mirroring | native-security (N2, tests), qa (M3, M4) | **pending N2 + device build** (simulators cannot record the screen the way a device does) |
+| Lock works | `autoLock.test.ts`, `biometric.test.ts` (§1.4); core `platform.test.ts` M3 fail-closed lock (landed, 87/87); Maestro 09 (panic → locked, relaunch still locked; unlock with `MAESTRO_BIOMETRIC=sim`) | M6 60 s auto-lock (and the 59 s non-lock), M7 Panic Exit | native-security (N4), qa (09, M6, M7) | core part landed; app tests **pending N4**; 09 written, **pending device build** |
+| No open high findings | — | security-reviewer's Phase 1 report in `docs/mobile/security-review/`; every PR reviewed before merge (S1) | security-reviewer | S0 closed with no open high/critical (log.md 2026-10-31); S1 ongoing |
+| Leak guard (not a gate line, but the rule-1 proof the gate relies on) | `packages/core/test/leak-guard.test.ts` 53/53 ×3, `npm run lint` 0 errors, static sweep clean (§1.6) | — | qa | **landed** 2026-10-31 |
+| Maestro journeys 01-09 | `check-flows.mjs` static check: 14 flows, 54 ids, 7 dry steps on proposed ids | run on two simulators per README; 02 ends at the sent state by design | qa (flows), lead (runner decision, §7.5) | **written, not run**; pending runner decision, wave-2 ids, proposed ids (§7.8) |
+
+Reporting at the gate follows §6.3: counts from the tools, dry steps listed by id, manual checks as
+`M<n> <device> PASS|FAIL <date> <evidence>`.

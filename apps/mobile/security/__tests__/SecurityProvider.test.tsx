@@ -1,10 +1,11 @@
 import { act, render } from '@testing-library/react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
+import * as ScreenCapture from 'expo-screen-capture';
 import { useEffect } from 'react';
 import { Text } from 'react-native';
 
 import { getChat, getLockStore } from '@/lib/chat';
-import { AUTO_LOCK_MS } from '@/security/constants';
+import { APP_SECURE_KEY, AUTO_LOCK_MS, SECURE_RETRY_MS } from '@/security/constants';
 import { LockCover } from '@/security/LockCover';
 import { SecurityProvider, useSecurity, type SecurityState } from '@/security/SecurityProvider';
 
@@ -72,6 +73,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   (LocalAuthentication.authenticateAsync as jest.Mock).mockResolvedValue({ success: true });
   (LocalAuthentication.getEnrolledLevelAsync as jest.Mock).mockResolvedValue(3);
+  (ScreenCapture.preventScreenCaptureAsync as jest.Mock).mockResolvedValue(undefined);
 });
 afterEach(() => { jest.useRealTimers(); jest.restoreAllMocks(); });
 
@@ -225,5 +227,119 @@ describe('SecurityProvider', () => {
     expect(await unlock()).toBe(true);
     expect(LocalAuthentication.authenticateAsync).not.toHaveBeenCalled();
     expect(t.getByText('SECRET CONTENT')).toBeTruthy();
+  });
+
+  // W1-4: the app-wide FLAG_SECURE key is asserted on mount and on every foreground, never released.
+  test('W1-4: the app key is asserted on mount and re-asserted on every active transition', async () => {
+    await unlockedTree();
+    const calls = () => (ScreenCapture.preventScreenCaptureAsync as jest.Mock).mock.calls.filter((c) => c[0] === APP_SECURE_KEY).length;
+    expect(calls()).toBe(1);
+    await appState('background');
+    await appState('active');
+    expect(calls()).toBe(2);
+    await appState('inactive');
+    await appState('active');
+    expect(calls()).toBe(3);
+    expect(ScreenCapture.allowScreenCaptureAsync).not.toHaveBeenCalled();
+  });
+
+  test('W1-4: an initial throw (MissingActivity) is retried once after a delay and again on active', async () => {
+    (ScreenCapture.preventScreenCaptureAsync as jest.Mock).mockRejectedValueOnce(new Error('MissingActivity'));
+    const appKeyCalls = () => (ScreenCapture.preventScreenCaptureAsync as jest.Mock).mock.calls.filter((c) => c[0] === APP_SECURE_KEY).length;
+    const { t } = await tree();
+    expect(appKeyCalls()).toBe(1);                              // the failed one
+    await act(async () => { jest.advanceTimersByTime(SECURE_RETRY_MS); });
+    await flush();
+    expect(appKeyCalls()).toBe(2);                              // the delayed retry
+    await appState('background');
+    await appState('active');
+    expect(appKeyCalls()).toBe(3);                              // re-asserted on foreground
+    expect(ScreenCapture.allowScreenCaptureAsync).not.toHaveBeenCalled();
+    expect(t.getByTestId('app.cover')).toBeTruthy();           // still locked: the throw changed nothing else
+  });
+
+  test('W1-4: a throw that persists through the retry does not loop; the next active tries again', async () => {
+    (ScreenCapture.preventScreenCaptureAsync as jest.Mock)
+      .mockRejectedValueOnce(new Error('MissingActivity'))
+      .mockRejectedValueOnce(new Error('MissingActivity'));
+    const appKeyCalls = () => (ScreenCapture.preventScreenCaptureAsync as jest.Mock).mock.calls.filter((c) => c[0] === APP_SECURE_KEY).length;
+    await tree();
+    await act(async () => { jest.advanceTimersByTime(SECURE_RETRY_MS * 10); });
+    await flush();
+    expect(appKeyCalls()).toBe(2);                              // mount + one retry, no more
+    await appState('background');
+    await appState('active');
+    expect(appKeyCalls()).toBe(3);
+  });
+
+  // W1-7: an unlock that was awaiting the prompt when a relock happened must not unlock afterwards.
+  test('W1-7: an unlock in flight across a 61 s background trip resolves true but the app stays locked; a fresh unlock works', async () => {
+    let resolvePrompt: ((v: { success: boolean }) => void) | null = null;
+    (LocalAuthentication.authenticateAsync as jest.Mock).mockImplementationOnce(
+      () => new Promise<{ success: boolean }>((res) => { resolvePrompt = res; }),
+    );
+    const { t, sec } = await tree();
+    let pending: Promise<boolean> | null = null;
+    await act(async () => { pending = sec().unlock(); await Promise.resolve(); });
+    expect(resolvePrompt).not.toBeNull();                       // the prompt is up
+    await appState('background');
+    jest.advanceTimersByTime(AUTO_LOCK_MS + 1_000);
+    await appState('active');                                   // relock: generation bumped
+    expect(sec().locked).toBe(true);
+    let stale: boolean | null = null;
+    await act(async () => { resolvePrompt!({ success: true }); stale = await pending!; });
+    await flush();
+    expect(stale).toBe(false);
+    expect(sec().locked).toBe(true);
+    expect(t.queryByText('SECRET CONTENT')).toBeNull();
+    expect(t.getByTestId('app.cover')).toBeTruthy();
+    expect(getChat().unlock).not.toHaveBeenCalled();            // the core was never touched by the stale unlock
+    // A fresh unlock (new prompt) succeeds.
+    let ok = false;
+    await act(async () => { ok = await sec().unlock(); });
+    await flush();
+    expect(ok).toBe(true);
+    expect(LocalAuthentication.authenticateAsync).toHaveBeenCalledTimes(2);
+    expect(sec().locked).toBe(false);
+    expect(t.getByText('SECRET CONTENT')).toBeTruthy();
+  });
+
+  test('W1-7: lockNow during an unlock in flight makes the result stale', async () => {
+    let resolvePrompt: ((v: { success: boolean }) => void) | null = null;
+    (LocalAuthentication.authenticateAsync as jest.Mock).mockImplementationOnce(
+      () => new Promise<{ success: boolean }>((res) => { resolvePrompt = res; }),
+    );
+    const { t, sec } = await tree();
+    let pending: Promise<boolean> | null = null;
+    await act(async () => { pending = sec().unlock(); await Promise.resolve(); });
+    await act(async () => { sec().lockNow(); });
+    await flush();
+    let stale: boolean | null = null;
+    await act(async () => { resolvePrompt!({ success: true }); stale = await pending!; });
+    await flush();
+    expect(stale).toBe(false);
+    expect(sec().locked).toBe(true);
+    expect(t.queryByText('SECRET CONTENT')).toBeNull();
+  });
+
+  test('W1-7: panic while the core unlock is in flight keeps the app locked and the flag set', async () => {
+    // Set the panic flag first so unlock() reaches chat.unlock(); make that call hang.
+    mockStore().__setFlag(true);
+    let resolveCore: (() => void) | null = null;
+    (getChat().unlock as jest.Mock).mockImplementationOnce(() => new Promise<void>((res) => { resolveCore = res; }));
+    const { t, sec } = await tree();
+    let pending: Promise<boolean> | null = null;
+    await act(async () => { pending = sec().unlock(); await Promise.resolve(); await Promise.resolve(); });
+    await flush();
+    expect(resolveCore).not.toBeNull();
+    await act(async () => { sec().panic(); });
+    await flush();
+    let stale: boolean | null = null;
+    await act(async () => { resolveCore!(); stale = await pending!; });
+    await flush();
+    expect(stale).toBe(false);
+    expect(sec().locked).toBe(true);
+    expect(t.queryByText('SECRET CONTENT')).toBeNull();
+    expect(getLockStore().get()).toBe(true);                    // panic's flag is still there
   });
 });

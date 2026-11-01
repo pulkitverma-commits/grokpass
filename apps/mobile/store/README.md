@@ -53,9 +53,9 @@ Store copy, listings and reviewer notes must match what the app really does, per
 ## Open items the store material depends on (owners outside `release`)
 
 1. **Account deletion path** (web owner / lead): Apple 5.1.1(v) and Play policy; "email us" is not enough.
-2. **`RECORD_AUDIO` / microphone usage string** (lead): two plugin options in `app.config.ts`.
-3. **Location notice in the app's secret viewer** (mobile-ui): the web viewer warns before opening a
-   "Show me where it's opened" link; the app does not, yet the server records the IP city either way.
+2. ~~`RECORD_AUDIO` / microphone usage string~~: done (lead, `app.config.ts` plugin options; verified absent in `expo config --type introspect`).
+3. ~~Location notice in the app's secret viewer~~: done (mobile-ui): the viewer shows a notice and a
+   "shares location" badge before Open when the sender asked to see where it is opened.
 4. **Review account model** (human): the app has no password login; the guest path is the review path,
    or an email-code sign-in is added.
 5. **Adviser sign-off** on export compliance and the two privacy-label judgement calls.

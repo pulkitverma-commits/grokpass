@@ -4,6 +4,16 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- security-reviewer full report `phase-3-full-report.md`: threat model, architecture walk, 22 claims with proof, parity
+  table. **Two high:** F-1 sign-out keeps the chat keystore (the web wipes it; the next account on the phone can reach
+  the previous account's rooms) → fix in the app now; F-2 safety numbers and "key changed" compare server-supplied
+  `signature_pub`, not the keys inside the MLS tree (inherited from the web's core; a server operator could substitute
+  key packages undetected) → **human decision**: fixing it in core changes the safety numbers the live website shows
+  (verified members would see a key change), so the lead stops and asks; meanwhile the app's wording drops "nobody is
+  intercepting". Medium F-3 (sender attribution is the server's word; ts-mls API limit), F-4 (QR shows the full
+  token/key next to a masked link), F-5 (no heap zeroisation on Hermes; informational). Lows F-6..F-12. Beta verdict:
+  internal beta acceptable now (testers reset before handing over a phone); external testers after F-1, F-2 wording
+  or fix, F-4, the fix branch, spike deletion, F-7, F-9, exact pins.
 - **Human approved Gate 2 with device verification deferred** (2026-11-01). Phase 3 starts with what needs neither a
   device nor an account nor much disk (this Mac has ~230 MB free; agents run jest with `--no-cache`, no exports):
   release (store listings, privacy labels / Data safety, export-compliance draft, reviewer notes, TestFlight / Play

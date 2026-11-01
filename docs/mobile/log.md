@@ -4,6 +4,12 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- P2 fixes merged: `auth.onSignedIn` (fires only from sign-ins this module completed and checked; `PushRefresher`
+  uses it, never Supabase's SIGNED_IN), `forgetLinkingURL()` called by the viewer and Join, `consumeShare()` on every
+  share-screen exit, "Open secret" gated on held, unlock token used as the string it is (viewer test against the real
+  secrets module), browser fallback via a Custom Tab on Android with an honest sentence, quota client id wiped on
+  sign-out/reset (known-limitations 13). Lead: the share bridge now parks a shared OnePeek link in the one-shot
+  hand-off and routes by id (P2-5 proper). Mobile 391 tests. Close-out review next.
 - security-reviewer (S1, Phase 2) `phase-2.md`: no high or critical; mediums P2-1 (PushRefresher re-registered on raw
   `auth.onChange`, inside the W1-1 window), P2-2 (`forgetLinkingURL` never called), P2-3 (`consumeShare` never called:
   shared plaintext stayed in cache), P2-4 (Android receiver accepted `file://` URIs, no caps); lows P2-5..P2-10.

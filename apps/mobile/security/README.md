@@ -65,7 +65,7 @@ softened or inflated: where a platform cannot do something, it says so.
 | `useScreenshotAlert(roomId, ttl)` / `onScreenshot(cb)` | On a screenshot, `getChat().sendScreenshotAlert(roomId, ttl)`; never the server directly. |
 | `Watermark({ viewerName, deviceCode })` | Translucent diagonal overlay, web wording `<name> · <code> · <stamp>`. `shortDeviceCode(id)` = the web's `shortId`. |
 | `LockCover` | Plain full-screen cover (`testID="app.cover"`, accessibility label "OnePeek is hidden"). |
-| `parseOnePeekLink(url)` | `{ kind: 'secret', id, key } \| { kind: 'invite', token } \| { kind: 'verify', digits } \| { kind: 'auth' } \| null`. Strict: hosts `onepeek.io` / `www.onepeek.io` / scheme `onepeek`, 10-char secret id, 43-char key, 32–128-char token, 60 digits. For the viewer, the join screen, the scanner and the share screen. `isSecretLink`, `isInviteLink` are shorthands; `isShareWakeUrl` is true for expo-share-intent's wake-up URL `onepeek://dataUrl=<key>…` (for `app/+native-intent.tsx`). |
+| `parseOnePeekLink(url)` | `{ kind: 'secret', id, key } \| { kind: 'invite', token, pin? } \| { kind: 'verify', digits } \| { kind: 'auth' } \| null`. Strict: hosts `onepeek.io` / `www.onepeek.io` / scheme `onepeek`, 10-char secret id, 43-char key, 32–128-char token optionally followed by `.1` + 64 base64url chars (the owner pin, F2-7; any other `.` suffix is null), 60 digits. Not called by the app today: the join screen, the scanner and the share screen use `lib/format` `inviteTokenFrom` and `lib/links` `classify`, which accept the same two invite forms; keep the three in step. `isSecretLink`, `isInviteLink` are shorthands; `isShareWakeUrl` is true for expo-share-intent's wake-up URL `onepeek://dataUrl=<key>…` (for `app/+native-intent.tsx`). |
 | `forgetLinkingURL()` | After a secret key / invite token has been consumed: clears expo-linking's cached initial URL and (Android) the activity Intent's data, so nothing in the process can read the fragment again. |
 | `useShareIntent()` | Root bridge (see Wiring). Sweeps `<cache>/share-intent/` on launch, reads the pending share (Android: `modules/share-intent`; iOS: expo-share-intent's hook, called inside with `packageHookOptions()` = `{ disabled: OS !== 'ios', resetOnBackground: false, debug: false }`), asserts FLAG_SECURE, `router.push('/share', { text?, uris? })` once per share. |
 | `consumeShare()` | Share screen, when done: clears the Android pending share; on iOS also `resetPackageShare()` (the package's UserDefaults copy) and `sweepGroupContainer()`; deletes `<cache>/share-intent/`. `sweepShareCache()` is the sweep alone. |
@@ -266,8 +266,9 @@ Link shapes and the single parser are in `security/links.ts` (header comment). A
   `useLocalSearchParams()`, `usePathname()`, the `Stack` screen params and anything that would persist
   navigation state (nothing does: `grep persistNavigationState|initialState|onStateChange apps/mobile/app
   components` is empty) **never contain the key or token**. `app/chat/join.tsx:9-11` and the secret viewer
-  read the full URL from `useLinkingURL()` and extract the fragment with `inviteTokenFrom` /
-  `parseOnePeekLink`; the token is handed to the core, never to a route param.
+  read the full URL from `useLinkingURL()` and extract the fragment with `inviteTokenFrom` (token and,
+  since F2-7, the owner pin); the fragment is handed to the core, which sends only the token to the
+  server and keeps the pin sealed. Never a route param.
 - **Where it remains.** (1) `ExpoLinkingRegistry.shared.initialURL` / `ExpoLinkingModule.initialURL`
   (native memory, process lifetime) until `Linking.clearInitialURL()`; (2) on Android, `activity.intent`
   (also what `Linking.getInitialURL()` returns, and part of the task record the system keeps for Recents,

@@ -320,10 +320,30 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     const out: RoomSummary[] = [];
     for (const r of rows) {
       const local = await roomLocal(r.id);
-      const pinned = r.role === 'owner' || !!(await ks.get<StoredPin>(roomKey(r.id, 'ownerPin')))?.pin;
+      const pinned = !!(await storedOwnerPin(r.id, r.role));
       out.push({ id: r.id, kind: r.kind, role: r.role, memberState: r.member_state, ttl: r.default_ttl_s, mode: r.expiry_mode, expiresAt: r.expires_at, name: local.name, ownerPinned: pinned });
     }
     return out;
+  }
+
+  /**
+   * The room's owner pin from this device's sealed storage (F2-7, F2-10). `ownerPinned` and the
+   * invite links depend on it alone, never on the server's word. A room this device created before
+   * pins existed gets its own pin written once, but only when this device really created the group:
+   * the server says it is the owner AND its own leaf is leaf 0 of its MLS state (createGroup puts
+   * the creator there; the owner is never removed, so nobody else can hold it).
+   */
+  async function storedOwnerPin(roomId: string, serverRole?: string): Promise<OwnerPin | null> {
+    const stored = await ks.get<StoredPin>(roomKey(roomId, 'ownerPin'));
+    if (stored?.pin) return stored.pin;
+    if (stored || serverRole !== 'owner') return null;   // a join from a link without a pin stays unpinned
+    const state = await loadState(roomId);
+    if (!state) return null;
+    const dev = await ensureDevice();
+    if (mls.memberLeaves(state).find(l => l.leafIndex === 0)?.deviceId !== dev.id) return null;
+    const pin = await ownerPin(dev.id, dev.signing.publicKey);
+    await ks.put(roomKey(roomId, 'ownerPin'), { pin } satisfies StoredPin);
+    return pin;
   }
 
   async function setRoomName(roomId: string, name: string) {
@@ -337,13 +357,15 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
    * is sent to the server.
    */
   async function createInvite(roomId: string, opts: { expiresIn: number; maxUses: number; approval: boolean }) {
-    const dev = await ensureDevice();
-    const pin = encodePin(await ownerPin(dev.id, dev.signing.publicKey));
+    // F2-10: the ROOM's owner pin, never this device's own (in a quick room any member may invite):
+    // the owner's own, or the one a member joined with. Without one the link is unpinned and says so
+    // (`ownerPinned: false`): a member who joined with an older link can't vouch for the owner.
+    const pin = await storedOwnerPin(roomId, (await myRooms()).find(r => r.id === roomId)?.role);
     const token = randomToken(32);
     const id = await rpc<string>('chat_create_invite', {
       p_room: roomId, p_token: token, p_expires_s: opts.expiresIn, p_max_uses: opts.maxUses, p_requires_approval: opts.approval,
     });
-    return { id, link: `${env.origin()}/chat/join#${token}.${pin}` };
+    return { id, link: `${env.origin()}/chat/join#${token}${pin ? `.${encodePin(pin)}` : ''}`, ownerPinned: !!pin };
   }
 
   async function listInvites(roomId: string) {
@@ -769,7 +791,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     const rows = fetched.filter(r => Number(r.seq) > local.lastSeq);
     if (!rows.length) {
       // F2-9: a refused Welcome was passed over; while no genuine one has applied, keep saying so.
-      if (await refusedWelcomePending(roomId, local)) throw new ChatError('member_key_mismatch');
+      if (await refusedWelcomePending(roomId, local)) throw await welcomeRefusal(roomId, local.mismatch);
       return res;
     }
     let state = await loadState(roomId);
@@ -916,9 +938,22 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     if (JSON.stringify(flags) !== JSON.stringify(prev)) await setRoomLocal(roomId, { mismatch: flags });
     // A refused owner commit stops this member (lastSeq stays before it, so every sync refuses it
     // again). A refused Welcome keeps sync() rejecting while this device has not joined.
-    if (stopped || (!state && refusedWelcomeIn(flags))) throw new ChatError('member_key_mismatch');
+    if (stopped) throw new ChatError('member_key_mismatch');
+    if (!state && refusedWelcomeIn(flags)) throw await welcomeRefusal(roomId, flags);
     if (fetchFailure) throw fetchFailure;
     return res;
+  }
+
+  /**
+   * The error for a room this device can't join because its Welcome was refused. In a pinned room a
+   * Welcome signed by someone other than the pinned owner says so plainly
+   * (`invite_owner_mismatch`: the person who invited you isn't the one letting you in); anything
+   * else is `member_key_mismatch`.
+   */
+  async function welcomeRefusal(roomId: string, flags: RoomLocal['mismatch']) {
+    const pinned = !!(await ks.get<StoredPin>(roomKey(roomId, 'ownerPin')))?.pin;
+    const signer = Object.values(flags ?? {}).some(f => f !== true && f.kind === 'welcome' && f.reason === 'signer');
+    return new ChatError(pinned && signer ? 'invite_owner_mismatch' : 'member_key_mismatch');
   }
 
   function refusedWelcomeIn(flags: RoomLocal['mismatch']) {

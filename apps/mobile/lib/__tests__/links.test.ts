@@ -10,13 +10,16 @@ const PIN = '1' + 'p'.repeat(64);   // F2-7 owner pin after the token
 
 beforeEach(() => clearHandoffs());
 
-test('F2-7: invite links with the owner pin keep it (token.pin); old links without it still parse; a malformed pin is left off', () => {
+test('F2-7: invite links with the owner pin keep it (token.pin); old links without it still parse; a damaged pin is no link at all', () => {
   const pinned = `https://onepeek.io/chat/join#${TOKEN}.${PIN}`;
   expect(inviteLinkFrom(`open ${pinned} please`)).toEqual({ url: pinned, token: `${TOKEN}.${PIN}` });
   expect(classify(`onepeek://chat/join#${TOKEN}.${PIN}`)).toEqual({ kind: 'invite', url: `onepeek://chat/join#${TOKEN}.${PIN}`, token: `${TOKEN}.${PIN}` });
   expect(inviteLinkFrom(`https://onepeek.io/chat/join#${TOKEN}`)?.token).toBe(TOKEN);
   expect(inviteLinkFrom(`https://onepeek.io/chat/join#${TOKEN}.`)?.token).toBe(TOKEN);           // sentence full stop
-  expect(inviteLinkFrom(`https://onepeek.io/chat/join#${TOKEN}.1short`)?.token).toBe(TOKEN);      // bad pin: unpinned join
+  expect(inviteLinkFrom(`https://onepeek.io/chat/join#${TOKEN}.1short`)).toBeNull();               // damaged: invite_invalid, not an unpinned join
+  expect(inviteLinkFrom(`https://onepeek.io/chat/join#${TOKEN}.${PIN.slice(0, 40)}`)).toBeNull();     // cut short by a messenger
+  expect(classify(`https://onepeek.io/chat/join#${TOKEN}.2${'p'.repeat(64)}`).kind).toBe('none');    // unknown version
+  expect(inviteTokenFrom(`https://onepeek.io/chat/join#${TOKEN}.1short`)).toBeNull();
   expect(inviteTokenFrom(`https://onepeek.io/chat/join#${TOKEN}.${PIN}`)).toBe(`${TOKEN}.${PIN}`);
   expect(inviteTokenFrom(`https://onepeek.io/chat/join#${TOKEN}`)).toBe(TOKEN);
 });

@@ -580,6 +580,15 @@ describe('accessibility (qa A1, A2, §12 key-changed row)', () => {
     expect(screen.getByText('This invite didn’t carry the owner’s key, so the app can’t confirm who runs this chat. Ask for a new invite.')).toBeTruthy();
   });
 
+  test('third pass (c): a Welcome refused because it was not from the pinned owner says so; F2-11: an owner the stored pin no longer recognises is surfaced', async () => {
+    chat.sync.mockRejectedValue(Object.assign(new Error('invite_owner_mismatch'), { code: 'invite_owner_mismatch' }));
+    chat.members.mockResolvedValue([{ ...MEMBERS[0]!, changedGroup: true }, MEMBERS[1]!] as never);
+    await open([]);
+    expect(await screen.findByText('The person who invited you isn’t the one letting you in. Ask them for a new invite.')).toBeTruthy();
+    expect(screen.getByTestId('room.ownerUnrecognised')).toBeTruthy();
+    expect(screen.getByText('Your copy of this chat no longer recognises its owner. Don’t trust it until you’ve checked with them.')).toBeTruthy();
+  });
+
   test('F2-1: a device the server does not list gets its own row', async () => {
     chat.members.mockResolvedValue([MEMBERS[0]!, { ...MEMBERS[1]!, unlisted: true, inGroup: true }] as never);
     await open([]);

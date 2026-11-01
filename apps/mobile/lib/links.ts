@@ -11,8 +11,11 @@ import { inviteTokenFrom } from './format';
 
 /** `https://onepeek.io/s/<id>#<key>` (www too) or `onepeek://s/<id>#<key>`, anywhere inside a text. */
 const SECRET_RE = /(?:https:\/\/(?:www\.)?onepeek\.io|onepeek:\/)\/s\/([A-Za-z0-9_-]{6,128})#([A-Za-z0-9_+/=-]{16,512})(?=[^A-Za-z0-9_+/=-]|$)/;
-/** `https://onepeek.io/chat/join#<token>[.1<owner pin>]` or `onepeek://chat/join#…` (the pin since F2-7; old links without it still match). */
-const INVITE_RE = /(?:https:\/\/(?:www\.)?onepeek\.io|onepeek:\/)\/chat\/join#[A-Za-z0-9_-]{32,128}(?:\.1[A-Za-z0-9_-]{64})?(?![A-Za-z0-9_-])/;
+/**
+ * `https://onepeek.io/chat/join#<token>[.1<owner pin>]` or `onepeek://chat/join#…` (the pin since F2-7;
+ * old links without it still match). A `.` followed by anything but a v1 pin is a damaged link: no match.
+ */
+const INVITE_RE = /(?:https:\/\/(?:www\.)?onepeek\.io|onepeek:\/)\/chat\/join#[A-Za-z0-9_-]{32,128}(?:\.1[A-Za-z0-9_-]{64})?(?![A-Za-z0-9_-]|\.[A-Za-z0-9_-])/;
 /** The QR shown under "Verify people": the 60-digit safety number behind a fixed prefix. */
 const VERIFY_RE = /^onepeek-verify:(\d{60})$/;
 

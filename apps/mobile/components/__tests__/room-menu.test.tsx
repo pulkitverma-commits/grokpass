@@ -105,6 +105,14 @@ test('timer: the owner saves a room default through setTimer', async () => {
   await waitFor(() => expect(chat.setTimer).toHaveBeenCalledWith(ROOM.id, 30, 'on_send'));
 });
 
+test('F2-10: an invite the core could not pin (this member joined with an older link) says so in the invite sheet', async () => {
+  chat.createInvite.mockResolvedValueOnce({ id: 'inv-2', link: 'https://onepeek.io/chat/join#' + 'T'.repeat(43), ownerPinned: false } as never);
+  await renderScreen(<Harness initial="invite" role="member" />);
+  await fireEvent.press(await screen.findByTestId('invite.create'));
+  expect(await screen.findByTestId('invite.unpinned')).toBeTruthy();
+  expect(screen.getByText('This invite can’t carry the owner’s key because you joined with an older link.')).toBeTruthy();
+});
+
 test('invite: creates with the chosen expiry and uses, lists and revokes existing invites', async () => {
   chat.listInvites.mockResolvedValue([{ id: 'inv-9', expires_at: new Date(Date.now() + 3600_000).toISOString(), max_uses: 5, uses: 1, requires_approval: false, revoked_at: null }]);
   await renderScreen(<Harness initial="invite" />);

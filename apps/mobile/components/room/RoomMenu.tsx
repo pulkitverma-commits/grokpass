@@ -33,7 +33,7 @@ export const blockedKey = (roomId: string) => `room:${roomId}:blocked`;
 export type Member = {
   deviceId: string; role: 'owner' | 'member'; state: 'pending' | 'active';
   signaturePub: Uint8Array; hasKeyPackage: boolean; nickname: string | null; verified: string | null;
-  keyMismatch?: boolean; keyHistory?: boolean; inGroup?: boolean; unlisted?: boolean;
+  keyMismatch?: boolean; keyHistory?: boolean; inGroup?: boolean; unlisted?: boolean; changedGroup?: boolean;
 };
 
 export type MenuRoom = { id: string; kind: 'quick' | 'secret' | 'business'; role: 'owner' | 'member'; ttl: number; mode: 'on_open' | 'on_send'; expiresAt: string; name: string | null; ownerPinned?: boolean };
@@ -249,6 +249,7 @@ function Invite({ room }: { room: MenuRoom }) {
   const [invites, setInvites] = useState<{ rows: InviteRow[]; at: number }>({ rows: [], at: 0 });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [pinned, setPinned] = useState(true);
   const load = useCallback(() => { chat().listInvites(room.id).then((rows) => setInvites({ rows, at: Date.now() })).catch(() => {}); }, [chat, room.id]);
   useEffect(() => { load(); }, [load]);
 
@@ -256,7 +257,7 @@ function Invite({ room }: { room: MenuRoom }) {
     setBusy(true); setErr('');
     try {
       const r = await guard(() => chat().createInvite(room.id, { expiresIn: expires, maxUses: uses, approval: room.kind === 'business' }));
-      setLink(r.link); load();
+      setLink(r.link); setPinned(r.ownerPinned !== false); load();
     } catch (e) { setErr(friendlyError(errorCode(e))); }
     finally { setBusy(false); }
   }
@@ -282,7 +283,7 @@ function Invite({ room }: { room: MenuRoom }) {
           </View>
         </>
       ) : null}
-      {link ? <InviteSheet open link={link} kind={room.kind} expiresLabel={LIFETIMES.find((l) => l.s === expires)?.label ?? '1 day'} usesLabel={uses === 1 ? 'once' : `${uses} times`} onDone={() => setLink('')} /> : null}
+      {link ? <InviteSheet open link={link} kind={room.kind} expiresLabel={LIFETIMES.find((l) => l.s === expires)?.label ?? '1 day'} usesLabel={uses === 1 ? 'once' : `${uses} times`} ownerPinned={pinned} onDone={() => setLink('')} /> : null}
     </View>
   );
 }

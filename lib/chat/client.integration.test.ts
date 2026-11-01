@@ -279,6 +279,23 @@ describe('Secret Chat end to end (two browsers)', () => {
     expect(lastSql.find(x => x.fn === 'chat_redeem_invite')!.args.p_token).toBe(tokenOf(pinned).split('.')[0]);
   });
 
+  it('F2-10: on the web, a quick-room member\'s invite pins the owner (not the member); the copy for unpinned invites and refused Welcomes', async () => {
+    const fmt = await import('../../app/chat/format');
+    const a = await browser('a6', '35000000-0000-4000-8000-000000000035');
+    const b = await browser('b6', '46000000-0000-4000-8000-000000000046');
+    const roomId = await on(a, c => c.createRoom({ kind: 'quick', ttl: 300, mode: 'on_open', lifetime: 3600 }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 5, approval: false }));
+    await on(b, c => c.redeemInvite(tokenOf(link), 'Bo'));
+    await on(a, c => c.admitPending(roomId));
+    await on(b, c => c.sync(roomId));
+    const made = await on(b, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    expect(made.ownerPinned).toBe(true);
+    expect(b.c.parseInviteFragment(tokenOf(made.link))!.pin!.deviceId).toBe((await on(a, c => c.ensureDevice())).id);
+    expect(fmt.INVITE_UNPINNED_NOTE).toBe('This invite can’t carry the owner’s key because you joined with an older link.');
+    expect(fmt.friendlyError('invite_owner_mismatch')).toBe('The person who invited you isn’t the one letting you in. Ask them for a new invite.');
+    expect(fmt.KEY_SYNC_CODES).toEqual(['member_key_mismatch', 'invite_owner_mismatch']);
+  });
+
   it('removed members are locked out; Burn Chat wipes server and local state', async () => {
     const owner = await browser('owner', '50000000-0000-4000-8000-000000000005');
     const m1 = await browser('m1', '60000000-0000-4000-8000-000000000006');

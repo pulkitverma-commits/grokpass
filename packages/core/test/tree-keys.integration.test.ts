@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { toBytea, fromBytea, keyChanged, ChatError } from '../src/chat/client';
 import * as mls from '../src/chat/mls';
+import { parseInviteFragment } from '../src/chat/invite';
 import { bootDb, type Harness } from './harness';
 import { makeDevice, pairUp, tokenOf, type Device } from './devices';
 
@@ -223,7 +224,7 @@ describe('F-2: member keys come from the MLS tree', () => {
       p_ciphertext: toBytea(added.welcome!), p_to_device: guestId,
     });
     expect(r.error).toBeNull();
-    expect(await codeOf(guest.run(c => c.sync(roomId)))).toBe('member_key_mismatch');
+    expect(await codeOf(guest.run(c => c.sync(roomId)))).toBe('invite_owner_mismatch');
     expect(await stateOf(guest, roomId)).toBeNull();
     expect(Object.keys((await localOf(guest, roomId))!.mismatch!)).toEqual([mls.leafSignatureKeys(added.state).keys().next().value]);
   }, TIMEOUT);
@@ -284,7 +285,7 @@ describe('F-2: member keys come from the MLS tree', () => {
     });
     expect(r.error).toBeNull();
     expect(link.split('#')[1]).toMatch(/\.1[A-Za-z0-9_-]{64}$/);
-    expect(await codeOf(bob.run(c => c.sync(roomId)))).toBe('member_key_mismatch');
+    expect(await codeOf(bob.run(c => c.sync(roomId)))).toBe('invite_owner_mismatch');
     expect(await stateOf(bob, roomId)).toBeNull();
     expect((await localOf(bob, roomId))!.mismatch![xDev.id]).toMatchObject({ kind: 'welcome', reason: 'signer' });
     expect((await bob.run(c => c.myRooms())).find(x2 => x2.id === roomId)!.ownerPinned).toBe(true);
@@ -325,7 +326,7 @@ describe('F-2: member keys come from the MLS tree', () => {
     await h.db.query(`delete from public.chat_rate_limits where bucket = 'send'`);
     expect(await owner.run(c => c.admitPending(roomId))).toBe(1);
     // First sync: the refused Welcome and a full page; it rejects while not joined. A later one joins.
-    expect(await codeOf(guest.run(c => c.sync(roomId)))).toBe('member_key_mismatch');
+    expect(await codeOf(guest.run(c => c.sync(roomId)))).toBe('invite_owner_mismatch');
     let joined = false;
     for (let i = 0; i < 3 && !joined; i++) joined = await guest.run(c => c.sync(roomId)).then(r => r.joined, () => false);
     expect(joined).toBe(true);
@@ -399,5 +400,96 @@ describe('F-2: member keys come from the MLS tree', () => {
     // And the owner's own client would not have added it: its stored state checks ids strictly.
     const strict = mls.loadState((await owner.run(c => c.keystore.get<Uint8Array>(`room:${roomId}:state`)))!, { strictIds: true });
     await expect(mls.addMembers(strict, [odd.publicBytes])).rejects.toThrow();
+  }, TIMEOUT);
+
+  // ---------------------------------------------------------------------------- third pass (F2-10, F2-11, f)
+
+  /** A quick room (any member may invite): owner + member Bob admitted with a pinned link. */
+  async function quickRoom() {
+    const owner = await makeDevice(h, 'web', 'owner');
+    const bob = await makeDevice(h, 'web', 'bob', true);
+    const roomId = await owner.run(c => c.createRoom({ kind: 'quick', ttl: 300, mode: 'on_open', lifetime: 3600 }));
+    const { link } = await owner.run(c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 5, approval: false }));
+    await bob.run(c => c.redeemInvite(tokenOf(link), 'Bob'));
+    expect(await owner.run(c => c.admitPending(roomId))).toBe(1);
+    expect((await bob.run(c => c.sync(roomId))).joined).toBe(true);
+    return { owner, bob, roomId, o: await devId(owner), b: await devId(bob) };
+  }
+
+  it('F2-10: an invite made by a member carries the OWNER\'s pin, and the joiner is admitted by the owner\'s genuine Welcome', async () => {
+    const { owner, bob, roomId, o, b } = await quickRoom();
+    const made = await bob.run(c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 2, approval: false }));
+    expect(made.ownerPinned).toBe(true);
+    const pin = parseInviteFragment(tokenOf(made.link))!.pin!;
+    expect(pin.deviceId).toBe(o);
+    expect(pin.deviceId).not.toBe(b);
+    const dana = await makeDevice(h, 'web', 'dana', true);
+    await dana.run(c => c.redeemInvite(tokenOf(made.link), 'Dana'));
+    expect(await owner.run(c => c.admitPending(roomId))).toBe(1);
+    expect((await dana.run(c => c.sync(roomId))).joined).toBe(true);
+    expect((await dana.run(c => c.myRooms())).find(r => r.id === roomId)!.ownerPinned).toBe(true);
+    // Re-redeeming that link as an existing member changes nothing: the owner's next commit still applies.
+    await bob.run(c => c.redeemInvite(tokenOf(made.link), 'Bob'));
+    const danaId = await devId(dana);
+    await owner.run(c => c.removeMember(roomId, danaId));
+    await bob.run(c => c.sync(roomId));
+    expect(mls.leafSignatureKeys((await stateOf(bob, roomId))!).has(await devId(dana))).toBe(false);
+  }, TIMEOUT);
+
+  it('F2-10: a member who joined with an older (unpinned) link makes an unpinned invite and is told so', async () => {
+    const owner = await makeDevice(h, 'web', 'owner');
+    const old = await makeDevice(h, 'web', 'old', true);
+    const roomId = await owner.run(c => c.createRoom({ kind: 'quick', ttl: 300, mode: 'on_open', lifetime: 3600 }));
+    const { link } = await owner.run(c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 5, approval: false }));
+    await old.run(c => c.redeemInvite(tokenOf(link).split('.')[0], 'Old'));
+    await owner.run(c => c.admitPending(roomId));
+    await old.run(c => c.sync(roomId));
+    const made = await old.run(c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    expect(made.ownerPinned).toBe(false);
+    expect(tokenOf(made.link)).toMatch(/^[A-Za-z0-9_-]{32,128}$/);   // the token alone
+  }, TIMEOUT);
+
+  it('F2-10: a malicious member\'s own Welcome to a newcomer holding an owner-pinned link is refused (invite_owner_mismatch)', async () => {
+    const { bob: m, roomId, b } = await quickRoom();
+    const made = await m.run(c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    const dana = await makeDevice(h, 'web', 'dana', true);
+    await dana.run(c => c.redeemInvite(tokenOf(made.link), 'Dana'));
+    const d = await devId(dana);
+    const rows = (await m.fake.rpc('chat_room_members', { p_room: roomId })).data as { device_id: string; key_package: string }[];
+    const danaPackage = fromBytea(rows.find(r => r.device_id === d)!.key_package);
+    const mState = (await stateOf(m, roomId))!;
+    const added = await mls.addMembers(mState, [danaPackage]);       // M commits the add itself and signs the Welcome
+    await h.db.query(`update public.chat_members set state = 'active', key_package = null where device_id = $1`, [d]);
+    const r = await m.fake.rpc('chat_send', {
+      p_room: roomId, p_device: b, p_id: crypto.randomUUID(), p_kind: 'welcome', p_epoch: Number(mls.epoch(added.state)),
+      p_ciphertext: toBytea(added.welcome!), p_to_device: d,
+    });
+    expect(r.error).toBeNull();
+    expect(await codeOf(dana.run(c => c.sync(roomId)))).toBe('invite_owner_mismatch');
+    expect(await stateOf(dana, roomId)).toBeNull();
+    expect(await codeOf(dana.run(c => c.sync(roomId)))).toBe('invite_owner_mismatch');
+  }, TIMEOUT);
+
+  it('F2-11: when the stored pin no longer matches the owner, the owner\'s commits are skipped but the owner row says so (changedGroup on the owner)', async () => {
+    const { owner, bob, roomId, o } = await quickRoom();
+    await bob.run(c => c.keystore.put(`room:${roomId}:ownerPin`, { pin: { deviceId: crypto.randomUUID(), keyHash: '0'.repeat(64) } }));
+    const dana = await makeDevice(h, 'web', 'dana', true);
+    const { link } = await owner.run(c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    await dana.run(c => c.redeemInvite(tokenOf(link), 'Dana'));
+    expect(await owner.run(c => c.admitPending(roomId))).toBe(1);
+    await bob.run(c => c.sync(roomId));
+    const ownerRow = (await bob.run(c => c.members(roomId))).find(m => m.deviceId === o)!;
+    expect(ownerRow).toMatchObject({ role: 'owner', changedGroup: true });
+  }, TIMEOUT);
+
+  it('(f) ownerPinned comes from the stored pin: an owner of an older room writes its own pin once; a member the server calls "owner" does not', async () => {
+    const { owner, bob, roomId, b } = await quickRoom();
+    await owner.run(c => c.keystore.del(`room:${roomId}:ownerPin`));     // a room created before pins existed
+    expect((await owner.run(c => c.myRooms())).find(r => r.id === roomId)!.ownerPinned).toBe(true);
+    expect(await owner.run(c => c.keystore.get(`room:${roomId}:ownerPin`))).toBeTruthy();
+    await bob.run(c => c.keystore.del(`room:${roomId}:ownerPin`));
+    await h.db.query(`update public.chat_members set role = 'owner' where device_id = $1`, [b]);   // the server lies
+    expect((await bob.run(c => c.myRooms())).find(r => r.id === roomId)!.ownerPinned).toBe(false);
+    expect(await bob.run(c => c.keystore.get(`room:${roomId}:ownerPin`))).toBeFalsy();
   }, TIMEOUT);
 });

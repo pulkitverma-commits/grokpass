@@ -16,16 +16,17 @@ import { HiddenQR } from './HiddenQR';
 import { Notice, Toast } from './Notice';
 import { Sheet } from './Sheet';
 import { Text } from './Text';
-import { maskLink } from '@/lib/format';
+import { INVITE_UNPINNED_NOTE, maskLink } from '@/lib/format';
 
-type Props = { open: boolean; link: string; kind: 'quick' | 'secret' | 'business'; onDone: () => void; expiresLabel?: string; usesLabel?: string };
+/** `ownerPinned: false`: the core made the link without the owner pin (third pass F2-10). */
+type Props = { open: boolean; link: string; kind: 'quick' | 'secret' | 'business'; onDone: () => void; expiresLabel?: string; usesLabel?: string; ownerPinned?: boolean };
 
 /** Fail closed: only the literal `true` the `e2e` profile's config writes unmasks the link. */
 function isE2EBuild(): boolean {
   return (Constants.expoConfig?.extra as { e2e?: unknown } | undefined)?.e2e === true;
 }
 
-export function InviteSheet({ open, link, kind, onDone, expiresLabel = '1 day', usesLabel = 'once' }: Props) {
+export function InviteSheet({ open, link, kind, onDone, expiresLabel = '1 day', usesLabel = 'once', ownerPinned = true }: Props) {
   const E2E = isE2EBuild();
   const [toast, setToast] = useState('');
   const [err, setErr] = useState('');
@@ -49,6 +50,7 @@ export function InviteSheet({ open, link, kind, onDone, expiresLabel = '1 day', 
       <Text variant="meta" tone="muted" style={styles.hint}>
         Only this chat. {kind === 'secret' ? 'They’ll also need the access code — share it another way.' : kind === 'business' ? 'You’ll approve each person before they can read anything.' : 'Anyone with the link can join until it’s used up or expires.'} The link works for {expiresLabel} and can be used {usesLabel}.
       </Text>
+      {!ownerPinned ? <View style={styles.err}><Notice tone="error" text={INVITE_UNPINNED_NOTE} testID="invite.unpinned" /></View> : null}
       {err ? <View style={styles.err}><Notice tone="error" text={err} /></View> : null}
       <View style={styles.actions}>
         <Button title="Share link" icon="share" variant="ghost" onPress={share} testID="invite.share" />

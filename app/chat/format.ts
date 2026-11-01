@@ -32,6 +32,12 @@ export function readersLine(n: number) { return `${n} ${n === 1 ? 'device can' :
 export function verifyLine(name: string) {
   return `Compare these numbers in person or on a call. If they match on both screens, your messages reach ${name}’s real device. Everyone who can read this chat is in the member list: check that both screens show the same devices, and verify each one you don’t recognise.`;
 }
+/** Third pass F2-10: an invite made by a member who joined with an older (unpinned) link. */
+export const INVITE_UNPINNED_NOTE = 'This invite can’t carry the owner’s key because you joined with an older link.';
+/** Third pass F2-11: the stored owner pin no longer matches the device that changes the group. */
+export const OWNER_UNRECOGNISED_NOTICE = 'Your copy of this chat no longer recognises its owner. Don’t trust it until you’ve checked with them.';
+/** Sync codes the room page shows as a notice. */
+export const KEY_SYNC_CODES = ['member_key_mismatch', 'invite_owner_mismatch'];
 /** Shown in a room joined from a link without the owner pin (made before F2-7). */
 export const UNPINNED_NOTICE = 'This invite didn’t carry the owner’s key, so the app can’t confirm who runs this chat. Ask for a new invite.';
 
@@ -51,6 +57,7 @@ export function friendlyError(code: string) {
     case 'view_once_sent': return 'You sent this as view once, so it can’t be opened on your side.';
     case 'gone': return 'That file has already been opened or has expired.';
     case 'no_local_state': return 'You haven’t been let into this chat yet. Wait for the owner, then try again.';
+    case 'invite_owner_mismatch': return 'The person who invited you isn’t the one letting you in. Ask them for a new invite.';
     case 'member_key_mismatch': return 'This member’s key doesn’t match the chat. Don’t trust this chat until you’ve checked with them.';
     default: return 'Something went wrong. Try again.';
   }

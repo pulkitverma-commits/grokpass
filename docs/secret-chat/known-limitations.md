@@ -78,7 +78,13 @@ Plain statements of what Secret Chat does not do. The public page (/secret-chat)
      the owner is from the server's listing, so a malicious server could run a second group posing as
      the owner. Such a room says "This invite didn’t carry the owner’s key, so the app can’t confirm
      who runs this chat. Ask for a new invite." Comparing the member lists on both screens (and
-     verifying each device you don't recognise) is then the only check; a new invite fixes it.
+     verifying each device you don't recognise) is then the only check. A new invite from the owner,
+     or from a member whose own room shows no such notice, fixes it: every invite carries the room
+     owner's pin (never the pin of the member who made it), and a member who joined with an older
+     link makes unpinned invites and is told so ("This invite can’t carry the owner’s key because you
+     joined with an older link."). A link whose pin is damaged is refused as invalid, not joined
+     unpinned. **Sunset:** links with the token alone are accepted until 2027-02-01 (proposed; three
+     months after pinned links shipped), after which the apps will refuse them as invalid.
    - **Before admission.** A person who has used an invite but isn't let in yet has no key in the group,
      so there is no safety number to compare until the owner admits them; until then their key is only
      the one the server lists.

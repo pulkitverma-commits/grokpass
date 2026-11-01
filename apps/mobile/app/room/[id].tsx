@@ -35,7 +35,7 @@ import { Sheet } from '../../components/Sheet';
 import { Segmented } from '../../components/Segmented';
 import { colors, radii, spacing, touchTarget } from '../../theme';
 import { MAX_ATTACHMENT_BYTES, deletePicked, pickDocument, pickPhoto, fileSource, type Picked } from '@/lib/files';
-import { KEY_STOP_NOTICE, KIND_SHORT, TIMERS, UNLISTED_NOTE, UNPINNED_NOTICE, errorCode, friendlyError, keyChanged, memberName, roomTitle, ttlLabel } from '@/lib/format';
+import { KEY_STOP_NOTICE, KEY_SYNC_CODES, KIND_SHORT, OWNER_UNRECOGNISED_NOTICE, TIMERS, UNLISTED_NOTE, UNPINNED_NOTICE, errorCode, friendlyError, keyChanged, memberName, roomTitle, ttlLabel } from '@/lib/format';
 import { secretLinkFrom, stashHandoff } from '@/lib/links';
 import type { LocalMessage } from '@onepeek/core';
 
@@ -86,7 +86,9 @@ export default function RoomScreen() {
   const [joined, setJoined] = useState(false);
   const [synced, setSynced] = useState(false);
   const [ended, setEnded] = useState<string | null>(null);
-  const [keyStop, setKeyStop] = useState(false);   // sync refused a Welcome/commit: member_key_mismatch
+  // Sync refused a Welcome/commit: the code (member_key_mismatch, or invite_owner_mismatch for a
+  // Welcome not from the owner the invite pinned), or null.
+  const [keyStop, setKeyStop] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [ttl, setTtl] = useState(60);
   const [replyTo, setReplyTo] = useState<Msg | null>(null);
@@ -130,8 +132,8 @@ export default function RoomScreen() {
       // A sync refused for a key mismatch (F-2) still loads the room and its members, so the notice
       // and the row naming the member can be shown.
       let r: Awaited<ReturnType<ReturnType<typeof chat>['sync']>> | null = null;
-      try { r = await guard(() => chat().sync(roomId)); setKeyStop(false); }
-      catch (e) { if (errorCode(e) !== 'member_key_mismatch') throw e; setKeyStop(true); }
+      try { r = await guard(() => chat().sync(roomId)); setKeyStop(null); }
+      catch (e) { if (!KEY_SYNC_CODES.includes(errorCode(e))) throw e; setKeyStop(errorCode(e)); }
       if (r?.removed) { setEnded((e) => e ?? 'This chat has ended, or you were removed.'); return; }
       const rooms = await chat().myRooms();
       const current = rooms.find((x) => x.id === roomId) ?? null;
@@ -161,13 +163,13 @@ export default function RoomScreen() {
   const pullOnce = useCallback(async () => {
     try {
       const r = await guard(() => chat().sync(roomId));
-      setKeyStop(false);
+      setKeyStop(null);
       if (r.removed) { setEnded((e) => e ?? 'This chat has ended, or you were removed.'); return; }
       if (r.newMessages || r.newAlerts || r.joined) await showStored();
       if (r.joined) void refresh();
     } catch (e) {
       if (errorCode(e) === 'not_signed_in') router.replace('/welcome');
-      if (errorCode(e) === 'member_key_mismatch') setKeyStop(true);
+      if (KEY_SYNC_CODES.includes(errorCode(e))) setKeyStop(errorCode(e));
     }
   }, [chat, guard, roomId, router, showStored, refresh]);
   const pull = useCoalesced(pullOnce);
@@ -397,7 +399,8 @@ export default function RoomScreen() {
             <View style={styles.intro}>
               <Text variant="meta" tone="muted" center style={styles.introBox}>{secret ? INTRO_SECRET : INTRO_QUICK}</Text>
               {room?.ownerPinned === false ? <Text variant="meta" tone="danger" center style={styles.introBox} testID="room.unpinned">{UNPINNED_NOTICE}</Text> : null}
-              {keyStop ? <Text variant="meta" tone="danger" center style={styles.introBox} accessibilityLiveRegion="polite" testID="room.keyStop">{KEY_STOP_NOTICE}</Text> : null}
+              {keyStop ? <Text variant="meta" tone="danger" center style={styles.introBox} accessibilityLiveRegion="polite" testID="room.keyStop">{keyStop === 'invite_owner_mismatch' ? friendlyError(keyStop) : KEY_STOP_NOTICE}</Text> : null}
+              {members.some((m) => m.role === 'owner' && m.changedGroup) ? <Text variant="meta" tone="danger" center style={styles.introBox} testID="room.ownerUnrecognised">{OWNER_UNRECOGNISED_NOTICE}</Text> : null}
               {members.filter((m) => (m.state === 'active' || m.keyMismatch) && keyChanged(m)).map((m) => (
                 <Pressable key={m.deviceId} onPress={() => setMenu('verify')} accessibilityRole="button"
                   accessibilityLabel={m.keyMismatch ? KEY_MISMATCH_LABEL : m.unlisted ? UNLISTED_LABEL : KEY_CHANGED_LABEL} style={styles.introBox}

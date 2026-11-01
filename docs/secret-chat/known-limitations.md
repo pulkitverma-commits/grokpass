@@ -56,3 +56,7 @@ Plain statements of what Secret Chat does not do. The public page (/secret-chat)
    and, on iOS, across deleting and reinstalling the app as long as the keychain keeps the entry. OnePeek
    can therefore tell that secrets created between two of those wipes came from the same phone; it never
    learns their content or keys.
+14. **A failed send still uses up a ratchet step.** The MLS state is advanced and saved before a message is
+   sent (forward secrecy: a key is never reused, even after a crash or retry), so a send that then fails, for
+   example offline, consumes a ratchet generation that no one ever receives, and recipients simply skip it
+   when they decrypt the next message; this is by design, not a bug to fix.

@@ -564,7 +564,8 @@ describe('accessibility (qa A1, A2, §12 key-changed row)', () => {
   });
 
   test('the key-changed row has a fixed label without the nickname', async () => {
-    chat.members.mockResolvedValue([MEMBERS[0]!, { ...MEMBERS[1]!, verified: '\\x99' }]);
+    const changed = [MEMBERS[0]!, { ...MEMBERS[1]!, verified: '\\x99' }];   // verified a key that is no longer theirs
+    chat.members.mockResolvedValue(changed);
     await open([]);
     const row = await screen.findByTestId('room.keyChanged');
     expect(row.props.accessibilityLabel).toBe('A member’s security key changed. Verify again.');

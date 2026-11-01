@@ -139,12 +139,14 @@ export function useShareIntent(): void {
       const link = parseOnePeekLink(params.text.trim());
       if (link?.kind === 'secret') {
         stashHandoff('secret', params.text.trim());
+        clearPendingShare(); // the Intent must not keep the link (P3-7)
         secureScreenMount(SHARE_SECURE_KEY);
         router.push({ pathname: '/s/[id]', params: { id: link.id } });
         return;
       }
       if (link?.kind === 'invite') {
         stashHandoff('invite', params.text.trim());
+        clearPendingShare();
         router.push('/chat/join');
         return;
       }

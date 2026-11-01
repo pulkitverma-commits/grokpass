@@ -33,7 +33,14 @@ import { classify, stashHandoff } from '@/lib/links';
 type Chat = ReturnType<ReturnType<typeof useChat>['chat']>;
 type Room = Awaited<ReturnType<Chat['myRooms']>>[number];
 
-const SECRET_INPUT = { autoCorrect: false, spellCheck: false, autoCapitalize: 'none', autoComplete: 'off', importantForAutofill: 'no', textContentType: 'none' } as const;
+const SECRET_INPUT = {
+  autoCorrect: false,
+  spellCheck: false,
+  autoCapitalize: 'none',
+  autoComplete: 'off',
+  importantForAutofill: 'no',
+  textContentType: 'none',
+} as const;
 
 const kindIcon = (k: Room['kind']) => (k === 'secret' ? 'lock' : k === 'business' ? 'shield' : 'clock');
 
@@ -52,7 +59,10 @@ export default function ShareScreen() {
 
   const sharedText = typeof params.text === 'string' ? params.text : '';
   const uri = useMemo(() => firstUri(params.uris), [params.uris]);
-  const extra = useMemo(() => (Array.isArray(params.uris) ? params.uris.length : (params.uris ?? '').split(',').filter(Boolean).length) - 1, [params.uris]);
+  const extra = useMemo(
+    () => (Array.isArray(params.uris) ? params.uris.length : (params.uris ?? '').split(',').filter(Boolean).length) - 1,
+    [params.uris],
+  );
   const [file] = useState<Picked | null>(() => (uri ? pickedFromUri(uri) : null));
   const [text, setText] = useState(sharedText);
   const [rooms, setRooms] = useState<Room[] | null>(null);
@@ -68,16 +78,27 @@ export default function ShareScreen() {
   const consume = useCallback(() => {
     if (consumed.current) return;
     consumed.current = true;
-    void consumeShare().catch(() => { /* best effort: the next launch sweeps */ });
+    void consumeShare().catch(() => {
+      /* best effort: the next launch sweeps */
+    });
   }, []);
 
   // A shared OnePeek link is not something to forward: it is opened. The text is consumed here and
   // the route replaced, so the link does not stay reachable as a `/share` param (P2-5).
   const routed = useMemo(() => (!file ? classify(sharedText) : { kind: 'none' as const }), [file, sharedText]);
   useEffect(() => {
-    if (routed.kind === 'secret') { stashHandoff('secret', routed.url); consume(); router.replace(`/s/${routed.id}`); }
-    else if (routed.kind === 'invite') { stashHandoff('invite', routed.url); consume(); router.replace('/chat/join'); }
+    if (routed.kind === 'secret') {
+      stashHandoff('secret', routed.url);
+      consume();
+      router.replace(`/s/${routed.id}`);
+    } else if (routed.kind === 'invite') {
+      stashHandoff('invite', routed.url);
+      consume();
+      router.replace('/chat/join');
+    }
   }, [routed, router, consume]);
+  // Any other way out (iOS swipe-dismiss, Android back, a redirect) must not leave the copy behind (P3-1).
+  useEffect(() => () => consume(), [consume]);
 
   const load = useCallback(async () => {
     if (routed.kind !== 'none') return;
@@ -86,20 +107,34 @@ export default function ShareScreen() {
       setRooms(list);
       setRoomId((cur) => cur ?? list[0]?.id ?? null);
     } catch (e) {
-      if (errorCode(e) === 'not_signed_in') router.replace('/welcome');
-      else { setRooms([]); setErr('Chats couldn’t load. You can still make a link.'); }
+      if (errorCode(e) === 'not_signed_in') {
+        consume();
+        router.replace('/welcome');
+      } else {
+        setRooms([]);
+        setErr('Chats couldn’t load. You can still make a link.');
+      }
     }
-  }, [chat, guard, router, routed.kind]);
-  useFocusEffect(useCallback(() => { void load(); }, [load]));
+  }, [chat, guard, router, routed.kind, consume]);
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
 
   const tooBig = !!file && file.size > MAX_ATTACHMENT_BYTES;
   const canSend = !!roomId && !busy && !tooBig && (file ? true : text.trim().length > 0);
   const room = rooms?.find((r) => r.id === roomId) ?? null;
-  const cancel = () => { consume(); if (router.canGoBack()) router.back(); else router.replace('/'); };
+  const cancel = () => {
+    consume();
+    if (router.canGoBack()) router.back();
+    else router.replace('/');
+  };
 
   async function send() {
     if (!roomId || !canSend) return;
-    setBusy(true); setErr('');
+    setBusy(true);
+    setErr('');
     try {
       const ttl = room?.ttl ?? 60;
       if (file) await guard(() => chat().sendFile(roomId, fileSource(file), ttl, viewOnce));
@@ -120,8 +155,19 @@ export default function ShareScreen() {
 
   if (mode === 'link') {
     return (
-      <Screen scroll header={<Header close title="One-time link" onBack={() => setMode('chat')} testID="share.backToChat" />} testID="share.screen">
-        <SecretComposer target={null} fixed initialText={file ? '' : text} initialFile={file} onLinkMade={consume} onDone={cancel} />
+      <Screen
+        scroll
+        header={<Header close title="One-time link" onBack={() => setMode('chat')} testID="share.backToChat" />}
+        testID="share.screen"
+      >
+        <SecretComposer
+          target={null}
+          fixed
+          initialText={file ? '' : text}
+          initialFile={file}
+          onLinkMade={consume}
+          onDone={cancel}
+        />
       </Screen>
     );
   }
@@ -131,75 +177,201 @@ export default function ShareScreen() {
       scroll
       header={<Header close title="Send with OnePeek" onBack={cancel} testID="share.cancel" />}
       testID="share.screen"
-      footer={<Button title={busy ? 'Encrypting…' : 'Encrypt and send'} busy={busy} disabled={!canSend} onPress={send} testID="share.send" />}
+      footer={
+        <Button
+          title={busy ? 'Encrypting…' : 'Encrypt and send'}
+          busy={busy}
+          disabled={!canSend}
+          onPress={send}
+          testID="share.send"
+        />
+      }
     >
       {file ? (
-        <View style={styles.card} accessible accessibilityLabel={`Shared file, ${fileSize(file.size)}`} testID="share.file">
-          <View style={styles.fileIcon}><Icon name={(file.mime ?? '').startsWith('image/') ? 'image' : 'file'} size={24} color={colors.accent} /></View>
+        <View
+          style={styles.card}
+          accessible
+          accessibilityLabel={`Shared file, ${fileSize(file.size)}`}
+          testID="share.file"
+        >
+          <View style={styles.fileIcon}>
+            <Icon name={(file.mime ?? '').startsWith('image/') ? 'image' : 'file'} size={24} color={colors.accent} />
+          </View>
           <View style={styles.fileMain}>
-            <Text variant="title" numberOfLines={1}>{file.name}</Text>
-            <Text variant="meta" tone="muted">{fileSize(file.size)} · encrypted on this phone before upload</Text>
+            <Text variant="title" numberOfLines={1}>
+              {file.name}
+            </Text>
+            <Text variant="meta" tone="muted">
+              {fileSize(file.size)} · encrypted on this phone before upload
+            </Text>
           </View>
         </View>
       ) : (
-        <Field label="Shared text" value={text} onChangeText={setText} multiline numberOfLines={4} maxLength={4000} style={styles.textArea} {...SECRET_INPUT} testID="share.text" />
+        <Field
+          label="Shared text"
+          value={text}
+          onChangeText={setText}
+          multiline
+          numberOfLines={4}
+          maxLength={4000}
+          style={styles.textArea}
+          {...SECRET_INPUT}
+          testID="share.text"
+        />
       )}
-      {extra > 0 ? <Text variant="meta" tone="muted" style={styles.hint}>Only the first file is sent. Share the others one at a time.</Text> : null}
+      {extra > 0 ? (
+        <Text variant="meta" tone="muted" style={styles.hint}>
+          Only the first file is sent. Share the others one at a time.
+        </Text>
+      ) : null}
       {tooBig ? <Notice tone="error" text="Files can be up to 50 MB." /> : null}
 
       {file ? (
         <View style={styles.toggleRow}>
           <View style={styles.toggleText}>
             <Text variant="title">View once</Text>
-            <Text variant="meta" tone="muted">Opens one time, then it’s gone for everyone.</Text>
+            <Text variant="meta" tone="muted">
+              Opens one time, then it’s gone for everyone.
+            </Text>
           </View>
-          <Switch value={viewOnce} onValueChange={setViewOnce} trackColor={{ true: colors.accent, false: colors.segOn }} thumbColor={colors.white} accessibilityLabel="View once" testID="share.viewOnce" />
+          <Switch
+            value={viewOnce}
+            onValueChange={setViewOnce}
+            trackColor={{ true: colors.accent, false: colors.segOn }}
+            thumbColor={colors.white}
+            accessibilityLabel="View once"
+            testID="share.viewOnce"
+          />
         </View>
       ) : null}
 
       <SectionLabel>Send to a chat</SectionLabel>
       <View style={styles.list} accessibilityRole="radiogroup" accessibilityLabel="Send to a chat">
         {rooms === null ? (
-          <Text variant="sub" tone="muted" center style={styles.empty}>Loading…</Text>
+          <Text variant="sub" tone="muted" center style={styles.empty}>
+            Loading…
+          </Text>
         ) : rooms.length === 0 ? (
-          <Text variant="sub" tone="muted" center style={styles.empty} testID="share.noRooms">No active chats on this phone. Make a one-time link instead.</Text>
-        ) : rooms.map((r) => {
-          const on = r.id === roomId;
-          return (
-            <Pressable key={r.id} onPress={() => setRoomId(r.id)} accessibilityRole="radio" accessibilityState={{ checked: on, selected: on }} accessibilityLabel={roomTitle(r)} accessibilityHint={`${KIND_NAME[r.kind]}, messages disappear ${ttlLabel(r.ttl)} after reading`} style={({ pressed }) => [styles.row, pressed && styles.pressed]} testID="share.room">
-              <Avatar icon={kindIcon(r.kind)} accent={r.kind === 'secret'} />
-              <Text variant="title" numberOfLines={1} style={styles.rowTitle}>{roomTitle(r)}</Text>
-              <View style={[styles.radio, on && styles.radioOn]}>{on ? <View style={styles.radioDot} /> : null}</View>
-            </Pressable>
-          );
-        })}
+          <Text variant="sub" tone="muted" center style={styles.empty} testID="share.noRooms">
+            No active chats on this phone. Make a one-time link instead.
+          </Text>
+        ) : (
+          rooms.map((r) => {
+            const on = r.id === roomId;
+            return (
+              <Pressable
+                key={r.id}
+                onPress={() => setRoomId(r.id)}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: on, selected: on }}
+                accessibilityLabel={roomTitle(r)}
+                accessibilityHint={`${KIND_NAME[r.kind]}, messages disappear ${ttlLabel(r.ttl)} after reading`}
+                style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+                testID="share.room"
+              >
+                <Avatar icon={kindIcon(r.kind)} accent={r.kind === 'secret'} />
+                <Text variant="title" numberOfLines={1} style={styles.rowTitle}>
+                  {roomTitle(r)}
+                </Text>
+                <View style={[styles.radio, on && styles.radioOn]}>{on ? <View style={styles.radioDot} /> : null}</View>
+              </Pressable>
+            );
+          })
+        )}
       </View>
 
-      <Pressable onPress={() => setMode('link')} accessibilityRole="button" accessibilityLabel="Make a one-time link instead" style={({ pressed }) => [styles.linkBtn, pressed && styles.pressed]} testID="share.link">
+      <Pressable
+        onPress={() => setMode('link')}
+        accessibilityRole="button"
+        accessibilityLabel="Make a one-time link instead"
+        style={({ pressed }) => [styles.linkBtn, pressed && styles.pressed]}
+        testID="share.link"
+      >
         <Icon name="link" size={18} color={colors.text} />
         <Text variant="title">Make a one-time link instead</Text>
       </Pressable>
-      {err ? <View style={styles.err}><Notice tone="error" text={err} testID="share.error" /></View> : null}
+      {err ? (
+        <View style={styles.err}>
+          <Notice tone="error" text={err} testID="share.error" />
+        </View>
+      ) : null}
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  card: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md, borderRadius: radii.lg, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line },
-  fileIcon: { width: 56, height: 56, borderRadius: radii.md, backgroundColor: colors.accentSoft, alignItems: 'center', justifyContent: 'center' },
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    padding: spacing.md,
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  fileIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: radii.md,
+    backgroundColor: colors.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   fileMain: { flex: 1, gap: 2 },
   textArea: { minHeight: 110, textAlignVertical: 'top' },
   hint: { marginTop: spacing.sm, marginHorizontal: spacing.xs },
-  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.lg, minHeight: touchTarget },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginTop: spacing.lg,
+    minHeight: touchTarget,
+  },
   toggleText: { flex: 1, gap: 2 },
-  list: { borderRadius: radii.lg, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, overflow: 'hidden' },
+  list: {
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface,
+    overflow: 'hidden',
+  },
   empty: { padding: spacing.lg },
-  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: touchTarget + 12, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    minHeight: touchTarget + 12,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+  },
   rowTitle: { flex: 1 },
   pressed: { opacity: 0.85 },
-  radio: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: colors.ghostBorder, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center' },
+  radio: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: colors.ghostBorder,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   radioOn: { borderColor: colors.accent, backgroundColor: colors.accent },
   radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.accentText },
-  linkBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, marginTop: spacing.lg, minHeight: touchTarget + 8, borderRadius: radii.lg, borderWidth: 1, borderStyle: 'dashed', borderColor: colors.ghostBorder },
+  linkBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+    minHeight: touchTarget + 8,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.ghostBorder,
+  },
   err: { marginTop: spacing.md },
 });

@@ -145,6 +145,9 @@ test('no active chats: the list says so and only the link path is left; a failed
   expect(await screen.findByTestId('share.noRooms')).toBeTruthy();
   expect(screen.getByTestId('share.send').props.accessibilityState.disabled).toBe(true);
   await screen.unmount();
+  // P3-1: leaving the screen any other way (swipe-dismiss, back) consumes the copy exactly once.
+  expect(mockSecurity.consumeShare).toHaveBeenCalledTimes(1);
+  mockSecurity.consumeShare.mockClear();
   chat.myRooms.mockResolvedValue(ROOMS);
   chat.send.mockRejectedValueOnce(Object.assign(new Error('failed: room_closed'), { code: 'room_closed' }));
   await renderScreen(<ShareScreen />);

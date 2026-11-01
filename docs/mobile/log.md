@@ -4,6 +4,18 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- security-reviewer (S1, Phase 2) `phase-2.md`: no high or critical; mediums P2-1 (PushRefresher re-registered on raw
+  `auth.onChange`, inside the W1-1 window), P2-2 (`forgetLinkingURL` never called), P2-3 (`consumeShare` never called:
+  shared plaintext stayed in cache), P2-4 (Android receiver accepted `file://` URIs, no caps); lows P2-5..P2-10.
+  Dispatched: UI/core fix branch (P2-1 verified `auth.onSignedIn`, P2-2, P2-3, P2-5 in the share screen, P2-6, P2-7,
+  P2-8, P2-9) and native-security (P2-4, P2-10) folded into the iOS share work.
+- native-security merged: iOS share receive via `expo-share-intent` (activation rules text / 1 URL / 10 images, movies,
+  files; App Group `group.io.onepeek.app`; `disableAndroid`; files moved out of the group container into
+  `<cache>/share-intent/` with random names, container root swept, `resetShareIntent()` on consume), hand-rolled
+  extension and App Group reader deleted, `withAppGroup` plugin (entitlement only, deduped), Android receiver hardened
+  (`content://` only, own authorities refused, 10 items, 50 MB each, streamed copy with abort). Lead added
+  `app/+native-intent.tsx` (wake URL → `/`) and excluded the package's Android half from autolinking. Mobile 380.
+  Device-only: S27 (first EAS compile with the extension target; App Group capability on both identifiers), S22/P2-4.
 - qa (Q5 + W3-3) merged: `packages/core/test/secrets.interop.test.ts` (17 scenarios on PGlite with migrations 002–009:
   web path, app → web and web → app text/Wi-Fi/file, multi-view, expiry, wrong key, `/api/open` modelled from
   `route.ts` with a source-contract test; sweep of key/body/file name/password in four encodings), sink lint extended

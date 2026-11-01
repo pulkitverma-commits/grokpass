@@ -1,6 +1,10 @@
 # OnePeek mobile: test plan v1
 
-Owner: `qa`. Status: v1.3 (2026-11-01, Phase 2, task Q5 + carry-over W3-3): §1.6 the W3-3 sink rules and the
+Owner: `qa`. Status: v1.4 (2026-11-01, Phase 3): §10 the device matrix as it will be run (five named phones, the SDK 58
+minimums, per-device pass criteria for S1–S27, P1–P10 and flows 01–16, order, results template), §11 performance (targets,
+what to instrument, `perf.sync.test.ts`), §12 accessibility (per-screen VoiceOver/TalkBack/dynamic-type checklist, contrast
+computed, `check-a11y.mjs` findings), §13 the Gate 3 criteria map, §5.3 proven at the client boundary by
+`offline.integration.test.ts`; findings P3-Q1–P3-Q5 for core-crypto and mobile-ui. v1.3 (2026-11-01, Phase 2, task Q5 + carry-over W3-3): §1.6 the W3-3 sink rules and the
 "name-based, not taint" statement, §2.4 the cross-platform secrets interop test as built, §3.3 flows 12–16, §4 M18
 and §4.2 the Phase 2 device checks (share receive, Universal Links; native-security's S21+ referenced), §6.2 the new
 commands, §9 the Gate 2 criteria map. v1.2. v1 written 2026-10-31 for task Q2 (`plan.md` §2) and merged; v1.1 (same day,
@@ -1032,3 +1036,293 @@ Counts on 2026-11-01 (this branch, `mobile/qa/phase2-tests` after merging `mobil
 142/142, core 322/322 (275 after C4 + 30 W3-3 probes + 17 Q5), mobile jest 230/230; `npm run typecheck` clean; `npm run lint` 0 errors;
 `check-flows.mjs` 23 flows, 226 ids (59 proposed), 35 dry steps, `flows OK`. Reporting at the gate follows §6.3; a
 dry step is never counted as passed; P-checks as `P<n> <device> PASS|FAIL <date> <evidence>`.
+
+## 10. Phase 3: device matrix as run
+
+§5.1 named device classes; this is the list to buy, borrow and run, with what "pass" means on each. Nothing in this
+section can be executed before an EAS `preview` build exists for both platforms (accounts: `release/accounts-checklist.md`).
+
+### 10.1 Platform minimums (read from the SDK, not assumed)
+
+- **Expo SDK 58.0.21** (`apps/mobile/node_modules/expo/package.json`), React Native 0.88.1.
+- **iOS**: deployment target **16.4** (`expo-modules-core/ExpoModulesCore.podspec` and `expo/Expo.podspec`, `s.platforms.ios = '16.4'`;
+  React Native's own floor is 15.1 in `react-native/scripts/cocoapods/helpers.rb`, Expo's is the binding one). Xcode ≥ 16.1.
+- **Android**: `minSdkVersion` **24** (Android 7.0), `compileSdkVersion` 36, `targetSdkVersion` 36
+  (`expo-modules-core/android/ExpoModulesCorePlugin.gradle` `useDefaultAndroidSdkVersions`; React Native's `libs.versions.toml`
+  says minSdk 24 too). The plan's floor of Android 10 is a QA decision (OEM background killers and scoped storage changed at 10),
+  not the build's: a 7–9 device would install, nobody tests it, and the Play listing should say 10+ (release: Data safety / device
+  catalogue exclusion for API < 29).
+- iPhone 11 cannot run iOS 16.4 unless it was never updated (it ships iOS 13 and updates to iOS 26); the realistic "oldest iOS"
+  for the second iPhone is **the lowest iOS the device still has**, and an iPhone 8 / iPhone X on iOS 16.4–16.7 is the only way to
+  test the actual floor. The matrix takes an iPhone 11 held at iOS 17 as the older phone and notes the floor as untested
+  unless an iOS 16 device turns up (lead decision, §7.7).
+
+### 10.2 The five devices
+
+| Slot | Device (concrete) | OS to run | Build | Why this one |
+| --- | --- | --- | --- | --- |
+| iOS-new | iPhone 16 (A18, Face ID, 6.1") | iOS 26.x current | `preview` (ad hoc) + `development` for S13/S22-class debug steps | reference iPhone; Face ID path; screen recording cover (S6) |
+| iOS-old | iPhone 11 (A13, Face ID, 6.1"); fallback iPhone SE 2nd gen (Touch ID) if an 11 is not available | iOS 17.x, **not updated** (lowest the phone has) | `preview` | A13 for perf floors; a non-Dynamic-Island layout; SE adds the Touch ID prompt wording (S9) |
+| And-budget | Redmi 13C (Helio G85, 4 GB, MIUI/HyperOS, ~₹9–10k) | Android 13 as shipped (HyperOS 1) **or** Android 10/11 if a used Redmi 9A / Realme C11 is at hand (preferred: it is the §5.1 floor) | `preview` APK | MIUI battery killer (O6, push), slow eMMC (perf), MIUI's own `FLAG_SECURE` toast wording (S1), 3–4 GB RAM for the 50 MB file (§11) |
+| And-mid | Samsung Galaxy A35 (One UI 6/7, 8 GB) | Android 14 → 15 | `preview` APK | the retail default; One UI "Secure Folder"-style capture behaviour, Samsung share sheet (S21/S22), Samsung Pass biometric sheet (S9) |
+| And-flagship | Pixel 8 or 9 (stock) | Android 15/16 current | `preview` APK + `development` APK | stock reference, `adb` debugging (S17, S22, S24 `pm get-app-links`), Play Protect, predictive back off (`predictiveBackGestureEnabled: false`) |
+
+Owners: qa drives every device; native-security sits in on S1–S27 for its own items (it owns S13, S14, S17, S21–S27 by the §4
+tables); release owns the build and the install path (TestFlight internal / Play internal track once accounts exist, ad hoc /
+APK sideload before). mobile-ui gets the a11y results (§12) and any layout failure. If only three phones can be had at once:
+iOS-new, And-budget, And-mid (they cover both floors and both biometric sheets).
+
+### 10.3 Pass criteria per device
+
+The §4.1 (S1–S27) and §4.2 (P1–P10) rows already give the expected result per platform; a device **passes a row** when the
+observed result matches that row's platform column on that device, with evidence as §4 requires (a photo from another
+phone or a terminal log, never a screenshot of the device under test). A row **fails the device** on any deviation, including
+"works but the OEM wording differs" only if the wording is ours (the notice copy) — OEM toast wording is recorded, not
+judged. Device-specific additions:
+
+| Row | iOS-new | iOS-old | And-budget | And-mid | And-flagship |
+| --- | --- | --- | --- | --- | --- |
+| S1/S2 (`FLAG_SECURE`) | n/a | n/a | MIUI toast + nothing in Gallery; W1-4 regression check after leaving a room | One UI "Couldn't capture screenshot" + nothing in Gallery; also Samsung Smart Capture / scroll capture | stock toast; also `adb exec-out screencap -p` returns a black PNG |
+| S3 | n/a | n/a | MIUI screen recorder black | Samsung recorder black; Smart View cast black | stock recorder black; Chromecast black |
+| S4 | cover in switcher | cover | blank thumbnail | blank thumbnail (also in "Recents" grid) | blank |
+| S5/S6/S7 | alert within 5 s; recording cover; CC cover | same (A13: cover ≤ 1 frame late is a note, ≥ 1 s a fail) | n/a | n/a | n/a |
+| S8–S14 lock | Face ID | Face ID (SE: Touch ID) | fingerprint (side) + PIN fallback | Samsung Pass fingerprint sheet | Pixel fingerprint/face |
+| S15/S16 backup & transfer | Finder backup query; Quick Start to iOS-old | restore target | n/a | n/a | n/a |
+| S17/S18 | n/a | n/a | `bmgr`/`dumpsys backup` (Android 12+ path) and Mi Mover | Smart Switch "Copy data" (S18) | `adb backup` on `development` APK |
+| S19 watermark | readable in a photo | readable (smaller screen: still 3+ repeats) | readable; does not block hold | same | same |
+| S20 a11y + security | VoiceOver | VoiceOver | TalkBack (Google) | TalkBack (Samsung build) | TalkBack |
+| S21–S23 share | n/a | n/a | MIUI share sheet, Gallery and Files apps | Samsung Gallery and My Files; `SEND_MULTIPLE` of 3 | Photos and Files; the `am start` `file://` injection (P2-4) |
+| S24/S25 links | Messages + Safari | same | Gmail + Chrome; `pm get-app-links` verified | Samsung Messages + Samsung Internet (a second browser: the App Link must still win) | Messages + Chrome |
+| S26 | recording cover | same | black | black | black |
+| S27 (share extension) | first EAS compile; App Group | install only | n/a | n/a | n/a |
+| P1–P10 | all | all except P8 (camera is fine; P8 needs a second device showing codes: use And-mid) | all; P9 (5 MB image) timed per §11 | all | all |
+| Flows 01–16 | Maestro on a simulator where tagged; on the device by hand once | by hand once | by hand once (14, 15, 16 are device-only anyway) | Maestro over `adb` (physical device works) | Maestro over `adb` |
+| §11 perf | all budgets, "flagship" column | "older iPhone" column | **the budget column decides Gate 3** | mid-range column (cold start ≤ 2 s target is measured here) | flagship column |
+| §12 a11y | VoiceOver + AX5 text | VoiceOver + AX5 | TalkBack + font 2.0 + display largest | TalkBack + font 2.0 | TalkBack + font 2.0 |
+
+### 10.4 Order to run (once a build exists)
+
+1. **Install and smoke on all five** (§8 live run: create → join → text → file → view-once → burn, one throwaway 1-hour room
+   per pair, phone ↔ browser). Nothing else starts until every device has done this once.
+2. **And-flagship first, full S1–S27 + P1–P10**: stock Android with `adb` tells us whether a failure is ours or an OEM's before
+   the OEM phones are touched.
+3. **iOS-new, full S + P + S27** (the first EAS compile with `expo-share-intent` is its own risk; do it early).
+4. **And-budget, full S + P + §11 perf** (budget column: this is the Gate 3 decider for performance) + §12.
+5. **And-mid, S + P + §11 cold start (mid-range target) + §12**; Smart Switch for S18.
+6. **iOS-old, S + P (minus S27 compile) + §11 older-iPhone column + §12**.
+7. **Flows by hand** where Maestro has no device, Maestro where it does (§6.2 commands), then **§5.3 O1–O9** on And-budget
+   and iOS-new (airplane mode on Android; iOS by hand).
+8. **§12 a11y pass** on iOS-new and And-mid in full, spot-check on the rest.
+9. Re-run every failed row after the fix on the device it failed on, and S1/S2 on all Android devices after any native change.
+
+### 10.5 Results template (one file per device under `docs/mobile/gates/devices/<slot>.md`)
+
+```
+# <slot>: <device>, <OS build>, app <version> (<EAS build id>, profile <preview|development>), <date>, tester <name>
+| Row | Result | Evidence | Note |
+| --- | --- | --- | --- |
+| S1 | PASS | photo/<slot>-S1.jpg | MIUI toast: "Can't take screenshots due to app restrictions" |
+| S2 | FAIL | photo/<slot>-S2.jpg | screenshot succeeded on Chats after leaving a room (W1-4); launched from notification |
+| ... | | | |
+| P9 | PASS | log/<slot>-P9.txt | 5 MB image: encrypt 1.8 s, open 2.4 s |
+| 05 (flow, by hand) | PASS | — | |
+| O1 | PASS | log/<slot>-O1.txt | one chat_send after reconnect, same id |
+| perf cold.start | 1 840 ms median, 2 310 worst | log/<slot>-perf.txt | 5 runs, rebooted |
+| A3 | FAIL | photo/<slot>-A3.jpg | `composer.send` clipped at font scale 2.0 |
+Totals: S <n>/27 pass, P <n>/10, flows <n>/16, O <n>/9, perf <n>/<n> budgets, A <n>/7. Fails listed above with owner.
+```
+
+Reporting rule (§6.3): a row is `PASS`, `FAIL` or `N/A (<why>)`; "mostly" is `FAIL`. A failed budget on And-budget is a Gate 3
+finding, not a note (§5.2).
+
+## 11. Phase 3: performance
+
+### 11.1 Targets (Phase 3 wording; §5.2 keeps the full table)
+
+| Target | Device that decides | Budget |
+| --- | --- | --- |
+| Cold start to Chats (`chats.root` laid out; or `locked.root` when the lock is on) | **And-mid** (Galaxy A35) | ≤ 2.0 s (And-budget ≤ 3.0 s, iOS-new ≤ 1.5 s per §5.2) |
+| `sync` of 200 text messages already on the server | And-budget | ≤ 3.0 s for the `applyRows` batch (`perf sync.200`), fresh room screen |
+| 50 MB file send (pick → encrypt → upload) and open (download → decrypt → viewer) | And-budget (4 GB) and iOS-old | within memory: peak RSS ≤ baseline + 150 MB, no OOM, no "app keeps stopping"; times per §5.2 (encrypt ≤ 6 s, total ≤ 60 s, open ≤ 45 s on the budget phone) |
+
+### 11.2 How to measure on the device
+
+- **Build**: `eas build --profile preview --platform android|ios` (release-mode JS, Hermes bytecode, no dev client), installed
+  from the artefact. The perf marks below are compiled in and print only when `EXPO_PUBLIC_PERF=1` is in the `preview`
+  profile's `env` for the measurement build (release's `eas.json`; the flag changes logging only, never crypto, and the
+  leak-guard rule §1.6 applies to every line it prints: names and numbers). A `development` build is not a perf build (dev
+  menu, slower bridge); its numbers are notes.
+- **Marks** (mobile-ui/lead to add in `apps/mobile/lib/perf.ts`, which does not exist yet — §5.2 assumed it): a `mark(name)` /
+  `measure(name, from)` pair over `performance.now()` (available on Hermes) that prints `perf <name> <ms>`:
+  - `perf startup`: from the JS entry (`_layout.tsx` module evaluation) to the first `onLayout` of `chats.root` / `locked.root`.
+    Android native-side total: `adb shell am start -W -n io.onepeek.app/.MainActivity` → `TotalTime` (process start to first
+    frame; add the JS mark for "to Chats"). iOS: `perf startup` only, plus Xcode Organizer "Launch time" after a TestFlight build.
+  - `perf sync.200`: `performance.now()` around `chat().sync(roomId)` in the room screen's `pullOnce` / `refreshOnce`
+    (`app/room/[id].tsx`), printed with the `newMessages` count: the budget applies to the call that reports 200.
+    Set-up: the companion browser sends 200 messages to a room the phone is already a member of **before the phone opens the
+    room** (two senders or two minutes: `chat_send` allows 120 per device per minute, migration 006). Note the
+    pagination point in §11.4: a fresh member's first sync pulls one page of 200 rows, welcome included.
+  - `perf file.encrypt`, `perf file.upload` around the two halves of `sendFile` (`lib/files` → `chat().sendFile`), `perf file.open`
+    around `chat().openFile` in `app/room/[id].tsx` `openFile()`; sizes printed in bytes. The 50 MB fixture is a 49.9 MiB random
+    file (`MAX_ATTACHMENT_BYTES`) generated on the sending device by the e2e relay seed, never a real document.
+  - Memory: Android `adb shell dumpsys meminfo io.onepeek.app | grep TOTAL` before, during (poll every 1 s) and after the file
+    steps; iOS Xcode Debug navigator memory gauge (needs the `development` build) or `log stream --predicate 'process ==
+    "OnePeek"' | grep -i memory` for jetsam events on the `preview` build.
+- **Procedure**: device rebooted, Wi-Fi, no other apps, 5 runs each, report `median` and `worst` per §6.3; cold start means the
+  process was killed (`adb shell am force-stop io.onepeek.app` / swipe away in the switcher) and the app launched from the icon.
+
+### 11.3 Core test: `packages/core/test/perf.sync.test.ts` (as built, 4 tests)
+
+- 200 texts sent by the browser to a room the phone already joined; the phone's single `sync` returns `newMessages: 200`, one
+  `chat_fetch` (one page), 200 stored messages in `seq` order, 200 distinct ids, within a 60 s budget on the laptop (measured
+  **84–88 ms** on this Mac: PGlite + node:sqlite in memory, so this is a baseline for the device number, not the device number).
+  A second sync is `{0, 0}` and changes nothing.
+- A **fresh** member whose first page carries the welcome, the owner's nick announcements and 200 texts gets fewer than 200 texts
+  from the first `sync` and the rest from the second, nothing duplicated (P3-Q2 below).
+- Keystore writes during the batch: `room:<id>:local` (lastSeq) **once**; `room:<id>:state` **200 times for 200 rows**
+  (recorded by the passing test and printed).
+- `it.fails` **TARGET P3-Q1**: `saveState` once per `applyRows` batch. Red today by design (`applyRows` saves after every row:
+  `client.ts` `await saveState(roomId, state)` inside the loop). When core-crypto batches the save this test "unexpectedly
+  passes" and qa removes `.fails`.
+- Helper `test/devices.ts` (new): the interop test's `device()` construction with a transport switch and a controllable realtime
+  channel; `sendMany()` moves the `send` rate-limit window on the server every 100 messages (server state, no sleep, §6.1).
+- Run: `cd packages/core && npx vitest run test/perf.sync.test.ts` → `Tests 4 passed (4)`, 3 runs, no flake.
+
+### 11.4 Findings for core-crypto from §11 and §5.3 (P3-Q)
+
+| # | Finding | Where | Why it matters | Proposed |
+| --- | --- | --- | --- | --- |
+| P3-Q1 | `applyRows` saves the MLS state once per row (200 sealed SQLite writes for 200 messages) while `lastSeq` is saved once at the end | `client.ts` `applyRows` | perf on the budget phone (each write is AES-GCM + SQLite); and a crash mid-batch leaves the state advanced past rows whose `lastSeq` was never saved, so those rows are re-fetched and now fail to decrypt (already-consumed generations) — the per-row save protects forward secrecy but not delivery | save state + lastSeq together at the end of the batch inside the lock (one write each), or save lastSeq with every state write; either way atomic per batch |
+| P3-Q2 | `sync()` fetches one page (`p_limit: 200`) and stops; a backlog larger than a page (texts + welcome + nick + commit rows) takes as many polls as pages (4 s each in the room screen) | `client.ts` `sync` | "200-message sync" is two round trips for a fresh member; a 1 000-message room after a week offline is 20 s of polling | loop `chat_fetch` while `rows.length === 200`, applying each page under the lock, and return the summed result |
+| P3-Q3 | `subscribe()` handles only `SUBSCRIBED`; `CHANNEL_ERROR`, `TIMED_OUT` and `CLOSED` are ignored and nothing re-subscribes; the screen never learns the channel is down | `client.ts` `subscribe` | O6 relies entirely on realtime-js's own rejoin timer plus the screen's 4 s poll and foreground pull; a channel that ends in `CHANNEL_ERROR` after a token expiry (private channel, `setAuth` once at subscribe) stays dead until the screen remounts | surface the status to the callback (`on('status', {status})`), and on `CHANNEL_ERROR`/`TIMED_OUT` re-run `setAuth` with the current session and re-subscribe with backoff; the screen then pulls once on `subscribed` |
+| P3-Q4 | A network failure has no named code: `ChatError.code` is the last `[a-z_]+` run of supabase-js's message (`TypeError: Network request failed` → `failed`; a browser's `Failed to fetch` → `fetch`), and a transport that *rejects* bypasses `ChatError` entirely (`rpc()` only wraps the returned `error`) | `client.ts` `rpc`, `ChatError` | the app's `friendlyError(code)` cannot say "You're offline" and treats it as an unknown error; O1's "waiting" state needs a code to key on | in `rpc()`: catch a rejection and map it, and map `error.message` matching `/network|fetch|failed/i` with an empty PostgREST `code`, to `ChatError('network')` |
+| P3-Q5 (observation, not a bug) | A failed `send` still consumes a ratchet generation (state saved before the RPC, by design for forward secrecy). The offline test proves the browser decrypts the next successful message after two skipped generations | `client.ts` `sendTextLocked` | none today; worth a sentence in `known-limitations.md` so the next reader does not "fix" it | document |
+
+## 12. Phase 3: accessibility
+
+### 12.1 Static check: `apps/mobile/e2e/scripts/check-a11y.mjs` (as built)
+
+`node apps/mobile/e2e/scripts/check-a11y.mjs` (`--strict` exits 1 on findings) scans every `.tsx` under `apps/mobile/app` and
+`apps/mobile/components` (tests excluded) for `<Pressable>`, `<TouchableOpacity>`, `<TouchableHighlight>`,
+`<TouchableWithoutFeedback>` and `<Button>` opening tags and reports the ones without `accessibilityLabel`/`aria-label` or
+`accessibilityRole`/`role`; the project's `components/Button.tsx` sets both from `title`, so a `<Button>` is flagged only when it
+has neither `title` nor a label. Tags with a props spread are listed separately as "cannot tell". Result on 2026-11-01:
+
+```
+43 files, 116 pressable elements scanned under app/ and components/
+missing label and/or role (3):
+  app/room/[id].tsx:381 <Pressable>: missing accessibilityLabel
+  app/spike.tsx:125 <Pressable>: missing accessibilityLabel
+  app/spike.tsx:142 <Pressable>: missing accessibilityLabel
+```
+
+For mobile-ui: `room/[id].tsx:381` is the "<name>'s security key changed. Verify again." row (role `button`, no label: the
+screen reader reads the child text, which contains the nickname, so a label such as "Security key changed, verify again" keeps
+the nick out of the announcement and matches §1.6's spirit). `spike.tsx` is the Phase 0 spike screen the lead deletes before
+release (W1-8); no fix, delete the file. Everything else carries both props; `accessibilityHint` is used in 8 files,
+`accessibilityState` in 7 (Button, bubbles, switches). The script cannot see labels that are computed in a parent and passed
+down, nor `Text onPress` links; §12.2 covers those by hand.
+
+### 12.2 Per-screen checklist (VoiceOver on iOS-new/iOS-old, TalkBack on the three Androids)
+
+For every screen: (1) every `testID` control from `TESTIDS.md` is reachable by swipe and announces a label that says what it does,
+not "button"; (2) focus order follows the visual order; (3) a modal/sheet traps focus and its close control is first or last;
+(4) at the largest text size nothing is clipped or overlaps and every control is still reachable; (5) targets ≥ 44 × 44 pt
+(Xcode Accessibility Inspector audit / Android Accessibility Scanner once per screen); (6) nothing in any announcement is
+message text, a file name, a nickname (in Secret rooms), an access code or a key.
+
+| Screen (`TESTIDS.md` prefix, count) | Specific checks | Pass |
+| --- | --- | --- |
+| Welcome (`welcome.*` 4), Sign in (`signin.*` 11, `auth.*` 3) | email field labelled; "check your inbox" state announced on arrival (`accessibilityLiveRegion` / `announceForAccessibility`); error notice read once | |
+| Chats home (`chats.*` 13, `row`, `header`) | each room row announces name, kind and unread count, never the last message body; pull-to-refresh has a spoken alternative (the refresh is also on foreground); FAB/new-chat first or last in order | |
+| New chat (`new.*` 16, `timer.*` 7) | timer radio group announces selected state (`accessibilityState.checked`), one swipe per option; access-code field is `secureTextEntry` **and** its value is not echoed by the reader | |
+| Join (`join.*` 10) | wrong-code error announced; code field as above; nickname field labelled | |
+| Invite sheet (`invite.*` 14) | the masked link is announced as "invite link, masked" not as the characters; Copy/Share labelled; QR wrapper has a label and `accessibilityElementsHidden` on the SVG children | |
+| Conversation (`room.*` 29, `msg`, `reply`, `link`, `file`, `attach.*` 8, `members.*` 9, `rename.*`, `block.*`, `report.*`, `panic`) | **A1**: a Secret bubble announces "<nick>, <time>, hold to read" (today: label "Hold to read this message", hint "Press and hold…": the time/sender are not in the label, record and send to mobile-ui); a Quick bubble reads the body; the screenshot notice reads as a notice; `composer.send` reachable with the keyboard up; attach sheet traps focus | |
+| Hold-to-read with a screen reader (**A2**) | VoiceOver: double-tap-and-hold on the bubble (the "long press" gesture) fires `onPressIn`; the revealed body must then be read — today the label switches to "Message shown while held", which does **not** read the text: record as a finding for mobile-ui (announce the body via `AccessibilityInfo.announceForAccessibility` while held, nothing on release). TalkBack: double-tap-and-hold likewise; verify release on `onPressOut` hides it. **Hold must never be reachable through the Actions rotor as a plain "activate"** (that would reveal without holding): check `onLongPress={() => {}}` keeps the long-press from being announced as an action | |
+| Locked (`locked.*` 5, `security`) | **S8** the room list is not in the tree behind the cover; Unlock labelled; insecure-device warning read | |
+| Settings (`settings.*` 17, `reset.*` 4, `confirm`) | switches announce state; Panic Exit announces its consequence in the hint; destructive confirms have the cancel first | |
+| Secret composer/result (`secret.*` 21), Viewer (`viewer.*` 12) | mode/views/expiry radios with checked state; the result link masked as above; viewer: peek state, Open, the revealed text readable **only while on screen**, the timer announced at 10 s and 0 | |
+| Share target (`share.*` 9) | item row announces kind and size only (contract: never the file name); view-once switch state | |
+| Scanner (`scan.*` 7) | camera permission fallback button labelled; a found code announces its kind ("invite found") not its content | |
+| Verify (`verify.*` 5) | the 60-digit safety number is one element labelled "Safety number …" read in groups of 5; "They match" / "Someone else" labelled | |
+| Cover / watermark (**S20**) | cover announces "OnePeek is hidden"; the watermark (`<nick> · <code> · <date>`) is `accessibilityElementsHidden` / `importantForAccessibility="no-hide-descendants"` and never read | |
+
+### 12.3 Dynamic type (A3) — what `maxFontSizeMultiplier` 1.6 does
+
+`components/Text.tsx` and `Field.tsx` set `allowFontScaling` with `maxFontSizeMultiplier={1.6}` (`theme/index.ts`). iOS AX5 is
+roughly ×3.1 of the default body size and Android font scale 2.0 is ×2.0: both are **capped at ×1.6**, so a 17 pt body renders at
+27 pt, not 53. Checks: (a) at AX5 / scale 2.0 every §3.2 screen fits with the cap: no clipped text, the composer still shows
+`composer.send`, bubbles wrap, the safety number wraps in groups; (b) the cap is applied to *every* `Text` on screen — any raw
+`react-native` `Text` (the spike screen, third-party sheets) scales to the full ×3.1 and will overflow its row: list them;
+(c) `Button` uses `numberOfLines={1}`: at ×1.6 a long title ("Make a one-time link instead") must not be truncated with "…" on
+the 6.1" phones — record the longest title that truncates; (d) a user who needs more than ×1.6 is served by the screen
+reader, not by text size: say so in the a11y statement (release), it is a deliberate trade-off for the dark one-column layout.
+
+### 12.4 Colour contrast (A5), computed from `theme/index.ts` (WCAG 2.x relative luminance)
+
+| Pair | Ratio | 4.5:1 body | 3:1 large/UI |
+| --- | --- | --- | --- |
+| accent `#C8F135` on bg `#0A0C0F` | **15.00** | pass | pass |
+| accentText `#0A0C0F` on accent `#C8F135` (primary button) | 15.00 | pass | pass |
+| text `#E6E8EB` on bg | 15.95 | pass | pass |
+| muted `#A3ABB6` on bg | 8.45 | pass | pass |
+| danger `#ff6b6b` on bg (error text) | 7.06 | pass | pass |
+| mineText `#0A0C0F` on the own-bubble gradient stops `#45BDEB` / `#89DB96` / `#D5FD3A` | 9.07 / 11.78 / 16.73 | pass | pass |
+| **white `#FFFFFF` on danger `#ff6b6b` (destructive Button text)** | **2.78** | **fail** | fail (needs 3:1 for UI text) |
+| ghostBorder `#343B46` on bg (ghost button outline) | 1.73 | — | fail as a UI boundary (3:1); the label carries the affordance |
+
+Finding for mobile-ui (**P3-A1**): destructive buttons (Burn, Remove, Reset, Panic confirm) draw white on `#ff6b6b` at 2.78:1;
+use `#0A0C0F` text on the red (≈ 7.1:1) or darken the red to about `#D7262F` for white text. Ghost outline is advisory. The
+accent itself is fine everywhere it is used as text or as a background for dark text.
+
+### 12.5 Reduce motion (A4), screen reader and security (A7)
+
+Unchanged from §5.4: the hold reveal and the cover must not animate under Reduce Motion; with VoiceOver on, S5 still sends the
+alert and S1/S2 still hold (`FLAG_SECURE` is a window flag, unaffected). Results go into the §10.5 device file as `A1`–`A7`.
+
+## 13. Phase 3: Gate 3 criteria map
+
+`plan.md` §5 says "Gate 3 as in the prompt" and, as with Gates 1 and 2 (§7.14), the prompt text is not in the repo; the map takes
+§5's own list: device matrix, performance, offline/reconnect, accessibility, store material, the full security report, plus the
+standing rules. Status on 2026-11-01, the day Phase 3 opened; nothing that needs a build has run.
+
+| Gate 3 criterion | Proof | Owner | Status 2026-11-01 |
+| --- | --- | --- | --- |
+| Device matrix: 2 iPhones (one older) + 3 Android across price ranges, Android 10+, every S/P row and flow run per device | §10.2 list, §10.3 criteria, §10.5 one results file per device under `gates/devices/`; platform floors read from the SDK (§10.1: iOS 16.4, Android 7 build / 10 policy) | qa (runs), native-security (its rows), release (builds, install path) | **specified; 0/5 devices run** (no EAS build: accounts) |
+| Performance: cold start ≤ 2 s on the mid-range Android, 200-message sync ≤ 3 s, 50 MB file within memory | §11.1 targets, §11.2 marks and procedure; core baseline `perf.sync.test.ts` 4/4 (84–88 ms laptop); device numbers per §6.3 (`median`/`worst`) | qa (measure), mobile-ui/lead (`lib/perf.ts` marks, `EXPO_PUBLIC_PERF`), core-crypto (P3-Q1, P3-Q2) | **core test landed; device numbers pending build**; P3-Q1 red-by-design `it.fails`, P3-Q2 open |
+| Offline / reconnect: send fails cleanly, sync catches up once, realtime drop recovers, nothing duplicated | `offline.integration.test.ts` 8/8 ×3 (O1 error and reject shapes, O1-reconnect across skipped generations, O2 catch-up, O2 lock under 3 syncs + send, O6 late ping, P3-Q3 documented, early teardown); §5.3 O1–O9 on And-budget and iOS-new | qa (tests, device O-rows), core-crypto (P3-Q3 resubscribe, P3-Q4 network code) | **tests landed**; device rows pending; P3-Q3/Q4 open findings |
+| Accessibility: VoiceOver / TalkBack / dynamic type | `check-a11y.mjs` (3 findings, 2 of them in the spike screen to be deleted); §12.2 per-screen pass on 2 devices + spot checks; §12.3 dynamic type with the ×1.6 cap; §12.4 contrast computed (P3-A1 destructive buttons 2.78:1) | qa (checklist, script), mobile-ui (fixes: `room/[id].tsx:381` label, A1 bubble label, A2 announce-while-held, P3-A1) | **script + checklist landed; device pass pending**; 1 app finding + 3 design findings open |
+| Store material: listings, privacy labels / Data safety, export compliance (`ITSAppUsesNonExemptEncryption = true` + questionnaire draft for a human adviser), reviewer notes, TestFlight and Play internal tracks | `docs/mobile/release/` (today: `accounts-checklist.md`, `fcm-client-config.md`, `versioning.md`; listings, labels, questionnaire, reviewer notes to be added); qa reads the privacy labels against §1.6's sink list (what the app actually sends: ciphertext, device ids, push tokens, report ids) and the reviewer notes against the §4 behaviour (screenshots black, lock) | release (write), qa (consistency read), lead (sign-off) | **not started**; blocked on Apple Developer / Play Console accounts for the tracks |
+| Security report: full Phase 3 report, every open low from Phases 1–2 dispositioned (phase-2-close-out "Every open low" table: W1-8 spike, W1-1 residual, W2-2, W2-4 EXIF, P2-4, P2-8, P2-10, web parity, P3-1…P3-7), device-only claims settled on the matrix (S22, S24b, S27, P3-1 modal, P3-3 container order, P3-4 URL passing) | `docs/mobile/security-review/phase-3*.md`; the device rows above are its evidence | security-reviewer (report), owners per finding, qa (device evidence) | **not started**; evidence pending build |
+| Standing rules: no content off the device except ciphertext; no open high/critical; leak guard current | §1.6 leak guard 123/123; interop 20 + secrets 17 + offline 8 + perf 4 sweeps/assertions; `npm run lint` 0 errors | qa, security-reviewer | **green on this branch** (counts §13.1) |
+| Reporting | §6.3 blocks per suite, `M/S/P/O/A <n> <device> PASS|FAIL <date> <evidence>`, perf as `<name> median <ms> worst <ms> (<device>, <build>)` | every agent | standing |
+
+### 13.1 Counts on 2026-11-01 (branch `mobile/qa/phase3-tests`)
+
+```
+$ cd packages/core && npx vitest run test/perf.sync.test.ts test/offline.integration.test.ts   (×3)
+ Test Files  2 passed (2)
+      Tests  12 passed (12)          # perf 4 (1 it.fails red-by-design counted as passed), offline 8
+quarantined: 0
+
+$ npm run typecheck      # root, core, mobile: clean
+$ npm run lint           # 0 errors (58 grandfathered warnings at the root, 2 in core)
+$ node apps/mobile/e2e/scripts/check-flows.mjs   # 23 flows, 226 ids in TESTIDS.md (59 proposed), 35 dry steps, flows OK
+$ node apps/mobile/e2e/scripts/check-a11y.mjs    # 43 files, 116 pressable elements, 3 missing labels (listed in §12.1)
+```
+
+Only the files this task adds were run under vitest (disk: §6.2 note); the full `npm test` is the integration branch's job.
+
+### 13.2 Open questions for the lead (Phase 3)
+
+17. **Older iPhone (§7.7 again, now with the number).** The floor is iOS 16.4. An iPhone 11 cannot be on it; approve "iPhone 11
+    held at iOS 17" as the older device and the floor as untested, or source an iPhone 8/X on iOS 16.
+18. **Android 10 as policy.** The build installs on Android 7+. Approve excluding API < 29 in the Play device catalogue so the
+    tested floor and the installable floor agree, and say so in the listing.
+19. **`lib/perf.ts` and `EXPO_PUBLIC_PERF`.** §5.2 assumed a perf logger that does not exist; mobile-ui or lead adds it (names
+    and numbers only) and release adds the env to a measurement build profile. Without it only `am start -W` is measurable.
+20. **P3-Q1–P3-Q4 to core-crypto** before the device perf runs: P3-Q2 (page loop) changes what `perf sync.200` measures, and
+    P3-Q4 (network code) is what O1's "waiting" state keys on.
+21. **Destructive-button contrast (P3-A1)** is a one-token change in `theme/index.ts`; mobile-ui to take it with the A1/A2 label
+    changes so the §12 device pass is run once.

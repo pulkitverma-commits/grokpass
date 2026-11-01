@@ -4,6 +4,15 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- core-crypto sync hardening merged: `applyRows` writes state then `lastSeq` once per page (undecryptable rows skipped,
+  the ratchet never saved ahead of a failed page; a stale-state overwrite after a failed nickname announce fixed on the
+  way), `sync()` drains up to 20 pages of 200, `subscribe()` reopens the channel with backoff after
+  CHANNEL_ERROR/TIMED_OUT/CLOSED (opt-in status events), transport failures map to `ChatError('network')`,
+  known-limitations 14. Web-visible changes each have a web test (backlog drained in one pull, `network` code with the
+  page text unchanged, channel reopened); web 145, core 354. `next build` not re-run (disk below 600 MB); typecheck
+  green. Decisions: `KeyStore.putMany` (one transaction for state + lastSeq) is a Phase 3 follow-up for core-crypto;
+  `friendlyError` gets a `network` case ("You're offline") on both web and app in the next UI pass; the app adopts
+  `{ status: true }` for a reconnecting hint later; end-of-page retry of undecryptable rows is kept.
 - qa (Phase 3) merged: device matrix (§10: iPhone 16, iPhone 11 on iOS 17, Redmi 13C, Galaxy A35, Pixel 8/9; build
   floors read from the SDK: iOS 16.4, Android minSdk 24), performance and offline core tests (12, one `it.fails`
   target for P3-Q1), accessibility checklist and `check-a11y.mjs`, Gate 3 map (§13). Findings routed: P3-Q1..Q4 to

@@ -62,6 +62,23 @@ export class ChatError extends Error {
   }
 }
 
+/**
+ * What a fetch that never reached the server says, per runtime: React Native `Network request
+ * failed`, Chrome `Failed to fetch`, Safari `Load failed`, Firefox `NetworkError when attempting to
+ * fetch resource.`, Node/undici `fetch failed`. postgrest-js puts it in `error.message` (prefixed
+ * with the error's name) and leaves `error.code` empty.
+ */
+const TRANSPORT_FAILURE = /network request failed|failed to fetch|load failed|networkerror|fetch failed|^fetcherror\b/i;
+/** A PostgREST error code that only the server produces (SQLSTATE such as P0001, or PGRST…). */
+const SERVER_CODE = /^(?:[0-9A-Z]{5}|PGRST\w+)$/;
+
+/** `ChatError('network')` for a transport failure; the server's own errors keep their codes. */
+export function toChatError(error: { message: string; code?: string }): ChatError {
+  const fromServer = typeof error.code === 'string' && SERVER_CODE.test(error.code);
+  if (!fromServer && TRANSPORT_FAILURE.test(error.message)) return new ChatError('network');
+  return new ChatError(error.message);
+}
+
 /** Files are capped by the storage bucket (50 MB, including 28 bytes of encryption overhead). */
 export const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024 - 1024;
 const BUCKET = 'chat-attachments';
@@ -77,6 +94,14 @@ export function keyChanged(m: { verified: string | null; signaturePub: Uint8Arra
  * unread badge built on newMessages stays honest).
  */
 export type SyncResult = { joined: boolean; removed: boolean; newMessages: number; newAlerts: number };
+
+/** Delays before re-opening a room channel after CHANNEL_ERROR / TIMED_OUT / CLOSED; the last one repeats. */
+export const RESUBSCRIBE_DELAYS_MS: readonly number[] = [1_000, 2_000, 5_000, 10_000, 30_000];
+
+/** Rows asked for per `chat_fetch` call (the server caps it at 500). */
+export const SYNC_PAGE_SIZE = 200;
+/** Pages one sync() pulls at most before returning (4 000 rows); the next sync carries on. */
+export const SYNC_MAX_PAGES = 20;
 
 export type ChatClient<S extends SupabaseSession = SupabaseSession> = ReturnType<typeof createChatClient<S>>;
 
@@ -96,9 +121,18 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async function rpc<T = any>(fn: string, args: Record<string, unknown>): Promise<T> {
-    const { data, error } = await sb().rpc(fn, args);
-    if (error) throw new ChatError(error.message);
-    return data as T;
+    const client = sb();
+    let out: { data: unknown; error: { message: string; code?: string } | null };
+    try {
+      out = await client.rpc(fn, args);
+    } catch {
+      // The transport threw instead of returning `{ error }` (a fetch TypeError, an aborted
+      // request, a rejected promise): nothing came back from the server, so it is a network error.
+      // The original error is not kept: its message can carry the request URL.
+      throw new ChatError('network');
+    }
+    if (out.error) throw toChatError(out.error);
+    return out.data as T;
   }
 
   // ---------------------------------------------------------------------------- session & device
@@ -528,91 +562,157 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
   }
 
   /**
-   * Pulls everything after the last processed sequence number and applies it in order.
-   * The download happens outside the room lock so a send never waits on the network for it;
-   * only the local decrypt-and-save step is serialized.
+   * Pulls everything after the last processed sequence number and applies it in order, one
+   * `chat_fetch` page (SYNC_PAGE_SIZE rows) at a time, until a page comes back short (at most
+   * SYNC_MAX_PAGES pages per call; the next call carries on). The counts are summed over the pages.
+   * Each download happens outside the room lock so a send never waits on the network for it; only
+   * the local decrypt-and-save step of each page is serialized.
+   *
+   * If a later page fails to download (the network dropped mid-catch-up), the pages already
+   * applied are kept and their counts returned; the next sync continues from there. A failure on
+   * the first page is thrown as before.
    */
   async function sync(roomId: string): Promise<SyncResult> {
     const dev = await ensureDevice();
-    const { lastSeq: after } = await roomLocal(roomId);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let rows: any[];
-    try {
+    const total: SyncResult = { joined: false, removed: false, newMessages: 0, newAlerts: 0 };
+    for (let page = 0; page < SYNC_MAX_PAGES; page++) {
+      const { lastSeq: after } = await roomLocal(roomId);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      rows = await rpc<any[]>('chat_fetch', { p_room: roomId, p_device: dev.id, p_after: after, p_limit: 200 });
-    } catch (e) {
-      // Removed, burned or expired: the server is authoritative, so drop our keys and copies too.
-      if (e instanceof ChatError && e.code === 'not_a_member') {
-        await withRoomLock(roomId, () => forgetRoom(roomId));
-        return { joined: false, removed: true, newMessages: 0, newAlerts: 0 };
+      let rows: any[];
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        rows = await rpc<any[]>('chat_fetch', { p_room: roomId, p_device: dev.id, p_after: after, p_limit: SYNC_PAGE_SIZE });
+      } catch (e) {
+        // Removed, burned or expired: the server is authoritative, so drop our keys and copies too.
+        if (e instanceof ChatError && e.code === 'not_a_member') {
+          await withRoomLock(roomId, () => forgetRoom(roomId));
+          return { ...total, removed: true };
+        }
+        if (page > 0) return total;
+        throw e;
       }
-      throw e;
+      const r = await withRoomLock(roomId, () => applyRows(roomId, dev, rows));
+      total.joined ||= r.joined;
+      total.removed ||= r.removed;
+      total.newMessages += r.newMessages;
+      total.newAlerts += r.newAlerts;
+      if (r.removed || rows.length < SYNC_PAGE_SIZE) break;
+      // A full page that moved nothing forward (every row undecryptable, or another sync applied
+      // them meanwhile and there is nothing newer) would come back identical: stop here.
+      if ((await roomLocal(roomId)).lastSeq <= after) break;
     }
-    return withRoomLock(roomId, () => applyRows(roomId, dev, rows));
+    return total;
   }
 
+  /**
+   * Applies one fetched page under the room lock. The MLS state and `lastSeq` are written once
+   * per page, together, at the end (P3-Q1): one sealed state write instead of one per row. Each
+   * row's message is stored before that write, so a crash mid-page loses nothing: the persisted
+   * state and lastSeq are still the previous page's, and the whole page is fetched and decrypted
+   * again (stored messages are keyed by id, so nothing is duplicated).
+   *
+   * `lastSeq` only moves over rows that were applied (or deliberately ignored: traffic from before
+   * this device joined, a welcome that is not for it). A row that fails to decrypt (older epoch,
+   * tampered, replayed) is skipped and leaves the state as it was after the last applied row; a
+   * later applied row moves lastSeq past it for good, while undecryptable rows at the very end of
+   * the page are tried once more on the next sync instead of being written off at once.
+   *
+   * A failure that is not decryption (the keystore refusing a write) rejects the sync without
+   * writing this page's state or lastSeq, so the persisted pair stays consistent and the page is
+   * applied again next time.
+   *
+   * Order of the two writes: state first, then lastSeq. The keystore has no multi-key transaction,
+   * so a crash between them leaves the state one page ahead of lastSeq; that page is then fetched
+   * again and its rows fail to decrypt, which costs nothing because their messages were stored
+   * before either write (only a nickname announced in that page is lost). The other order would
+   * risk keeping lastSeq past a commit the saved state never applied, which strands the device in
+   * an old epoch, and would leave already-used message keys on disk.
+   */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async function applyRows(roomId: string, dev: DeviceRecord, fetched: any[]): Promise<SyncResult> {
     const local = await roomLocal(roomId);
+    const res: SyncResult = { joined: false, removed: false, newMessages: 0, newAlerts: 0 };
     // Another sync may have applied some of these while we were downloading.
     const rows = fetched.filter(r => Number(r.seq) > local.lastSeq);
+    if (!rows.length) return res;
     let state = await loadState(roomId);
-    let lastSeq = local.lastSeq;
+    let lastSeq = local.lastSeq;          // seq of the last row applied or deliberately ignored
+    let savedSeq = local.lastSeq;         // what the keystore holds
+    let stateDirty = false;               // `state` has steps the keystore does not have yet
+    let nickDirty = false;
     const nicknames = { ...local.nicknames };
-    const res: SyncResult = { joined: false, removed: false, newMessages: 0, newAlerts: 0 };
 
     for (const row of rows) {
-      lastSeq = Math.max(lastSeq, Number(row.seq));
+      const seq = Number(row.seq);
       const bytes = fromBytea(row.ciphertext);
-      try {
-        if (row.kind === 'welcome') {
-          const pending = await ks.get<PendingJoin>(roomKey(roomId, 'pending'));
-          if (state || !pending) continue;
-          state = await mls.joinRoom(bytes, mls.restoreKeyPackage(pending.publicBytes, pending.privatePackage));
-          await saveState(roomId, state);
-          await ks.del(roomKey(roomId, 'pending'));
-          res.joined = true;
-          if (pending.nickname) {
-            nicknames[dev.id] = pending.nickname;
-            await setRoomLocal(roomId, { lastSeq, nicknames });
-            await sendControl(roomId, { t: 'nick', name: pending.nickname });
-            state = await loadState(roomId);
-          }
-          continue;
+      if (row.kind === 'welcome') {
+        const pending = await ks.get<PendingJoin>(roomKey(roomId, 'pending'));
+        if (state || !pending) { lastSeq = seq; continue; }
+        let joined: Awaited<ReturnType<typeof mls.joinRoom>>;
+        try {
+          joined = await mls.joinRoom(bytes, mls.restoreKeyPackage(pending.publicBytes, pending.privatePackage));
+        } catch {
+          continue;  // not a welcome we can open: skipped like any undecryptable row
         }
-        if (!state) continue;  // traffic from before we joined: not ours to read
-        const got = await mls.receive(state, bytes, dev.id);
-        state = got.state;
-        if (got.kind === 'commit') {
-          await saveState(roomId, state);
-          if (got.removedSelf) { res.removed = true; break; }
-          continue;
-        }
+        // A welcome is written at once, with its lastSeq: the nickname announcement below loads
+        // and saves the state itself, and the pending key package must not outlive the join.
+        state = joined;
+        lastSeq = seq;
         await saveState(roomId, state);
-        const p = got.payload;
-        if (p.t === 'nick') { nicknames[row.sender_device] = p.name.slice(0, 40); continue; }
-        if (p.t === 'alert') {
-          const sentAt = new Date(row.created_at).getTime();
-          await storeMessage(roomId, {
-            id: p.id, seq: Number(row.seq), mine: false, sender: row.sender_device, body: '', ttl: p.ttl,
-            sentAt, expiresAt: sentAt + p.ttl * 1000, alert: 'screenshot',
-          });
-          res.newAlerts++;
-          continue;
+        if (pending.nickname) { nicknames[dev.id] = pending.nickname; nickDirty = true; }
+        await setRoomLocal(roomId, { lastSeq, nicknames });
+        savedSeq = lastSeq; stateDirty = false; nickDirty = false;
+        await ks.del(roomKey(roomId, 'pending'));
+        res.joined = true;
+        if (pending.nickname) {
+          try {
+            await sendControl(roomId, { t: 'nick', name: pending.nickname });
+          } catch {
+            // Not announced (offline, rate limited): as before, the join itself stands.
+          }
+          // sendControl may have advanced and saved the state (even when its send then failed):
+          // carry on from what it saved, never from the copy in hand, or a generation is reused.
+          state = await loadState(roomId);
         }
+        continue;
+      }
+      if (!state) { lastSeq = seq; continue; }  // traffic from before we joined: not ours to read
+      let got: Awaited<ReturnType<typeof mls.receive>>;
+      try {
+        got = await mls.receive(state, bytes, dev.id);
+      } catch {
+        continue;  // undecryptable (older epoch, tampered, replayed): skipped, see above
+      }
+      if (got.kind === 'commit') {
+        state = got.state; lastSeq = seq; stateDirty = true;
+        if (got.removedSelf) { res.removed = true; break; }
+        continue;
+      }
+      const p = got.payload;
+      if (p.t === 'nick') {
+        nicknames[row.sender_device] = p.name.slice(0, 40);
+        nickDirty = true;
+      } else if (p.t === 'alert') {
+        const sentAt = new Date(row.created_at).getTime();
+        await storeMessage(roomId, {
+          id: p.id, seq, mine: false, sender: row.sender_device, body: '', ttl: p.ttl,
+          sentAt, expiresAt: sentAt + p.ttl * 1000, alert: 'screenshot',
+        });
+        res.newAlerts++;
+      } else {
         const expiresAt = row.expires_at ? new Date(row.expires_at).getTime() : null;
         await storeMessage(roomId, {
-          id: p.id, seq: Number(row.seq), mine: false, sender: row.sender_device,
+          id: p.id, seq, mine: false, sender: row.sender_device,
           body: p.t === 'text' ? p.body : '', ttl: p.ttl, sentAt: new Date(row.created_at).getTime(), expiresAt,
           replyTo: p.t === 'text' ? p.replyTo : undefined, file: p.t === 'file' ? p : undefined,
         });
         res.newMessages++;
-      } catch {
-        // Undecryptable (older epoch, tampered, replayed): skip it. The server can't tell us otherwise.
       }
+      state = got.state; lastSeq = seq; stateDirty = true;
     }
     if (res.removed) { await forgetRoom(roomId); return res; }
-    await setRoomLocal(roomId, { lastSeq, nicknames });
+    if (stateDirty && state) await saveState(roomId, state);
+    if (lastSeq !== savedSeq || nickDirty) await setRoomLocal(roomId, { lastSeq, nicknames });
     return res;
   }
 
@@ -684,20 +784,74 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
 
   // ---------------------------------------------------------------------------- realtime
 
-  /** Subscribes to a room's private channel. Pings carry ids only; content is always fetched and decrypted. */
+  /**
+   * Subscribes to a room's private channel. Pings carry ids only; content is always fetched and
+   * decrypted. `on` receives the broadcasts (`msg`, `burned`, …) as `(event, payload)` and
+   * `('subscribed', {})` each time the channel is (re)joined, which is the moment to pull once.
+   *
+   * When the channel reports CHANNEL_ERROR, TIMED_OUT or CLOSED (an expired token on the private
+   * channel, a socket that went away), it is removed and a new one is opened after a bounded
+   * backoff (RESUBSCRIBE_DELAYS_MS, the last delay repeating), with `setAuth` re-run on the current
+   * session first. Pass `{ status: true }` to also receive `('status', { status, attempt })` for
+   * every status, so a screen can show "reconnecting"; without it the callback sees nothing it did
+   * not see before. The returned function closes the channel and cancels a pending retry.
+   */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function subscribe(roomId: string, on: (event: string, payload: any) => void): () => void {
+  function subscribe(roomId: string, on: (event: string, payload: any) => void, opts: { status?: boolean } = {}): () => void {
     let ch: RealtimeChannelLike | null = null;
     let closed = false;
-    (async () => {
-      const { data } = await sb().auth.getSession();
-      if (data.session) await sb().realtime.setAuth(data.session.access_token);
-      if (closed) return;
-      ch = sb().channel(`room:${roomId}`, { config: { private: true } })
-        .on('broadcast', { event: '*' }, (msg) => on(msg.event, msg.payload))
-        .subscribe((status) => { if (status === 'SUBSCRIBED') on('subscribed', {}); });
-    })();
-    return () => { closed = true; if (ch) sb().removeChannel(ch); };
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;  // failed (re)subscriptions since the last SUBSCRIBED
+
+    const drop = (c: RealtimeChannelLike) => {
+      try {
+        const r = sb().removeChannel(c) as PromiseLike<unknown> | undefined;
+        if (r && typeof r.then === 'function') r.then(undefined, () => {});
+      } catch { /* already gone */ }
+    };
+
+    const retry = () => {
+      if (closed || timer) return;
+      const delay = RESUBSCRIBE_DELAYS_MS[Math.min(attempt, RESUBSCRIBE_DELAYS_MS.length - 1)];
+      attempt++;
+      timer = setTimeout(() => { timer = null; void open(); }, delay);
+    };
+
+    const onStatus = (c: RealtimeChannelLike, status: string) => {
+      if (closed || ch !== c) return;  // a channel we already let go of (its own CLOSED, late errors)
+      if (opts.status) on('status', { status, attempt });
+      if (status === 'SUBSCRIBED') { attempt = 0; on('subscribed', {}); return; }
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        ch = null;
+        drop(c);
+        retry();
+      }
+    };
+
+    async function open() {
+      try {
+        const { data } = await sb().auth.getSession();
+        if (closed) return;
+        if (data.session) await sb().realtime.setAuth(data.session.access_token);
+        if (closed) return;
+        const c = sb().channel(`room:${roomId}`, { config: { private: true } })
+          .on('broadcast', { event: '*' }, (msg) => { if (!closed && ch === c) on(msg.event, msg.payload); });
+        ch = c;
+        c.subscribe((status) => onStatus(c, status));
+      } catch {
+        // No session lookup, or the client refused the channel (realtime-js hands back a channel
+        // with the same topic until the old one has finished leaving): try again later.
+        if (ch) { drop(ch); ch = null; }
+        retry();
+      }
+    }
+
+    void open();
+    return () => {
+      closed = true;
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (ch) { drop(ch); ch = null; }
+    };
   }
 
   return {

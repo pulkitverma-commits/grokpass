@@ -1,15 +1,13 @@
 // Performance of a 200-message sync through the core (docs/mobile/test-plan.md §11): a phone that was
-// admitted while the browser kept talking pulls one full `chat_fetch` page (p_limit 200) and decrypts
-// it. Real MLS, real SQL on PGlite, the real RN keystore on node:sqlite in memory. The budget here is
+// admitted while the browser kept talking pulls the backlog in `chat_fetch` pages (p_limit 200) within
+// one sync() and decrypts it. Real MLS, real SQL on PGlite, the real RN keystore on node:sqlite in memory. The budget here is
 // deliberately generous (this is a laptop running Postgres in WebAssembly, not a phone): the point of
 // the assertion is "completes in one batch, nothing duplicated, nothing lost", and the number it prints
 // is a baseline for the device measurement, not a substitute for it.
 //
-// The second half counts keystore writes during that batch. Every ratchet step is saved before the
-// next row is decrypted (forward secrecy: a crash must never reuse a generation), so today applyRows
-// writes `room:<id>:state` once per row and `room:<id>:local` (lastSeq) once per batch. The §11 target is
-// one state write per batch; that expectation is written as `it.fails` so it stays red-flag-free until
-// core-crypto changes the batching and then turns into an ordinary passing test (see §11.4).
+// The second half counts keystore writes during that batch: applyRows writes `room:<id>:state` and
+// `room:<id>:local` (lastSeq) once each per page, together at the end (P3-Q1, test-plan §11.4; the crash
+// and decrypt-failure rules are in client.ts above applyRows and in test/sync.batch.test.ts).
 import { describe, it, expect, beforeAll } from 'vitest';
 import { hasNodeSqlite } from './rn-mocks';
 import { bootDb, type Harness } from './harness';
@@ -26,7 +24,7 @@ beforeAll(async () => { h = await bootDb(); }, TIMEOUT);
 const describePerf = hasNodeSqlite ? describe : describe.skip;
 
 describePerf('perf: 200-message sync (web sends, phone catches up)', () => {
-  it(`syncs ${N} messages in one chat_fetch page: all present, in order, no duplicates, within budget`, async () => {
+  it(`syncs ${N} messages in one sync (one full chat_fetch page, then an empty one): all present, in order, no duplicates, within budget`, async () => {
     // The phone is already a member (welcome applied) when the browser talks for a while.
     const { owner, guest: phone, roomId } = await pairUp(h, 'web', 'phone');
     const fetchesBefore = phone.sql.filter(s => s.fn === 'chat_fetch').length;
@@ -46,8 +44,8 @@ describePerf('perf: 200-message sync (web sends, phone catches up)', () => {
     expect(new Set(msgs.map(m => m.id)).size).toBe(N);
     expect(msgs.map(m => m.body)).toEqual(Array.from({ length: N }, (_, i) => `m${String(i).padStart(3, '0')}`));
     expect(msgs.every((m, i) => i === 0 || m.seq > msgs[i - 1].seq)).toBe(true);
-    // One fetch page (p_limit 200) was enough: exactly one chat_fetch for this sync.
-    expect(phone.sql.filter(s => s.fn === 'chat_fetch')).toHaveLength(fetchesBefore + 1);
+    // A full page (exactly p_limit rows) makes sync() ask once more (P3-Q2); that second page is empty.
+    expect(phone.sql.filter(s => s.fn === 'chat_fetch')).toHaveLength(fetchesBefore + 2);
     expect(ms).toBeLessThan(BUDGET_MS);
 
     // Idempotent: a second sync finds nothing and changes nothing.
@@ -56,12 +54,10 @@ describePerf('perf: 200-message sync (web sends, phone catches up)', () => {
     expect(await phone.run(c => c.messages(roomId))).toHaveLength(N);
   }, TIMEOUT);
 
-  // Finding P3-Q2 (core-crypto): `sync()` fetches one page of 200 rows and stops. A member whose first
-  // sync has to cover the welcome, the owner's nick announcements and 200 texts gets the texts the page
-  // has room for and the rest on the *next* sync (the room screen polls every 4 s, so nothing is lost,
-  // but "200-message sync" is two round trips for a fresh member). This test pins the shape: nothing
-  // duplicated, nothing lost, drained by the second call.
-  it(`a fresh member with a welcome in front of ${N} texts needs two syncs (one page of 200 rows), and loses nothing`, async () => {
+  // P3-Q2: a member whose first sync has to cover the welcome, the owner's nick announcements and 200
+  // texts used to get the texts the first page had room for and the rest on the *next* poll. sync() now
+  // keeps fetching while a page comes back full, so one call drains it: nothing duplicated, nothing lost.
+  it(`a fresh member with a welcome in front of ${N} texts gets all of them from one sync (two pages), and loses nothing`, async () => {
     const owner = await makeDevice(h, 'web', 'owner');
     const phone = await makeDevice(h, 'phone', 'guest', true);
     const roomId = await owner.run(c => c.createRoom({ kind: 'secret', ttl: 300, mode: 'on_open', lifetime: 3600, name: 'qa-perf', nickname: 'Owner' }));
@@ -70,12 +66,13 @@ describePerf('perf: 200-message sync (web sends, phone catches up)', () => {
     expect(await owner.run(c => c.admitPending(roomId))).toBe(1);
     await sendMany(h, owner, roomId, N, i => `f${i}`);
 
+    const fetchesBefore = phone.sql.filter(s => s.fn === 'chat_fetch').length;
     const first = await phone.run(c => c.sync(roomId));
-    expect(first.joined).toBe(true);
-    expect(first.newMessages).toBeLessThan(N);          // the page also carried the welcome and the nick rows
-    expect(first.newMessages).toBeGreaterThan(N - 10);
-    const second = await phone.run(c => c.sync(roomId));
-    expect(first.newMessages + second.newMessages).toBe(N);
+    expect(first).toEqual({ joined: true, removed: false, newMessages: N, newAlerts: 0 });
+    // The first page (200 rows) also carried the welcome and the nick rows, so the texts spill into a second.
+    const fetches = phone.sql.filter(s => s.fn === 'chat_fetch').slice(fetchesBefore);
+    expect(fetches).toHaveLength(2);
+    expect(Number(fetches[1].args.p_after)).toBeGreaterThan(Number(fetches[0].args.p_after));
     const msgs = await phone.run(c => c.messages(roomId));
     expect(msgs).toHaveLength(N);
     expect(new Set(msgs.map(m => m.id)).size).toBe(N);
@@ -83,23 +80,20 @@ describePerf('perf: 200-message sync (web sends, phone catches up)', () => {
     expect((await phone.run(c => c.sync(roomId))).newMessages).toBe(0);
   }, TIMEOUT);
 
-  it('lastSeq (room:<id>:local) is written once per applyRows batch, and the batch is one keystore write per row today', async () => {
+  it('lastSeq (room:<id>:local) and the MLS state (room:<id>:state) are each written once for a 200-row page', async () => {
     const { owner, guest: phone, roomId } = await pairUp(h, 'web', 'phone');
     await sendMany(h, owner, roomId, N, i => `b${i}`);
 
     const local = await countPuts(phone, `room:${roomId}:local`, () => countPuts(phone, `room:${roomId}:state`, () => phone.run(c => c.sync(roomId))));
     expect(local.result.result.newMessages).toBe(N);
     expect(local.puts).toBe(1);
-    // Documented behaviour, not the target: see the `it.fails` below and test-plan §11.4.
     process.stdout.write(`perf sync.200 state writes: ${local.result.puts} for ${N} rows (target 1 per batch)\n`);
-    expect(local.result.puts).toBeGreaterThanOrEqual(1);
-    expect(local.result.puts).toBeLessThanOrEqual(N);
+    // One page of 200 rows, then an empty page that writes nothing.
+    expect(local.result.puts).toBe(1);
   }, TIMEOUT);
 
-  // Target from the §11 budget: one `room:<id>:state` write per applyRows batch. Red today by design
-  // (applyRows saves after every row). When core-crypto batches the save, this test starts passing,
-  // vitest reports it as failed ("expected to fail"), and qa removes `.fails`.
-  it.fails('TARGET (core-crypto P3-Q1): saveState is called once per applyRows batch, not once per message', async () => {
+  // Target from the §11 budget (P3-Q1): one `room:<id>:state` write per applyRows batch.
+  it('P3-Q1: saveState is called once per applyRows batch, not once per message', async () => {
     const { owner, guest: phone, roomId } = await pairUp(h, 'web', 'phone');
     for (let i = 0; i < 20; i++) await owner.run(c => c.send(roomId, `s${i}`, 300));
     const { result, puts } = await countPuts(phone, `room:${roomId}:state`, () => phone.run(c => c.sync(roomId)));

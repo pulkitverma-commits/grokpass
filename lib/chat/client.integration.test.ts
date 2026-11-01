@@ -81,7 +81,7 @@ function fakeSupabase(user: { id: string; is_anonymous?: boolean }) {
 }
 
 type Client = typeof import('./client');
-type Browser = { name: string; idb: IDBFactory; c: Client };
+type Browser = { name: string; idb: IDBFactory; c: Client; fake: ReturnType<typeof fakeSupabase> };
 
 async function browser(name: string, userId: string, anonymous = false): Promise<Browser> {
   await db.query(`insert into auth.users(id, is_anonymous) values ($1, $2) on conflict do nothing`, [userId, anonymous]);
@@ -91,7 +91,7 @@ async function browser(name: string, userId: string, anonymous = false): Promise
   const idb = new IDBFactory();
   (globalThis as any).indexedDB = idb;
   const c = await import('./client');
-  return { name, idb, c };
+  return { name, idb, c, fake };
 }
 
 /** Runs one browser's code with its own IndexedDB in place. */
@@ -335,5 +335,96 @@ describe('Secret Chat end to end (two browsers)', () => {
     await on(a, c => c.unlock());
     expect(a.c.isLocked()).toBe(false);
     expect((await on(a, c => c.myRooms())).map(r => r.id)).toContain(roomId);
+  });
+
+  // Phase 3 hardening (docs/mobile/test-plan.md §11.4): what the room page (app/chat/r/[id]/page.tsx)
+  // can observe from the shared core.
+  async function pair(tag: string) {
+    const a = await browser(`${tag}-a`, crypto.randomUUID());
+    const b = await browser(`${tag}-b`, crypto.randomUUID(), true);
+    const roomId = await on(a, c => c.createRoom({ kind: 'secret', ttl: 300, mode: 'on_open', lifetime: 3600 }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    await on(b, c => c.redeemInvite(tokenOf(link), 'Bee'));
+    await on(a, c => c.admitPending(roomId));
+    expect((await on(b, c => c.sync(roomId))).joined).toBe(true);
+    return { a, b, roomId };
+  }
+
+  it('P3-Q2: one sync (one pull on the page) drains a backlog bigger than a chat_fetch page', async () => {
+    const { a, b, roomId } = await pair('pages');
+    const N = 230;
+    for (let i = 0; i < N; i++) {
+      if (i > 0 && i % 100 === 0) await db.query(`delete from public.chat_rate_limits where bucket = 'send'`);
+      await on(a, c => c.send(roomId, `p${i}`, 300));
+    }
+    lastSql = [];
+    const r = await on(b, c => c.sync(roomId));
+    expect(r).toEqual({ joined: false, removed: false, newMessages: N, newAlerts: 0 });
+    expect(lastSql.filter(x => x.fn === 'chat_fetch')).toHaveLength(2);
+    expect((await on(b, c => c.messages(roomId))).map(m => m.body)).toEqual(Array.from({ length: N }, (_, i) => `p${i}`));
+  });
+
+  it('P3-Q4: a network failure reaches the page as ChatError code "network" (the message it shows is unchanged)', async () => {
+    const { b, roomId } = await pair('net');
+    const { friendlyError } = await import('../../app/chat/format');
+    const real = b.fake.rpc;
+    try {
+      b.fake.rpc = async () => ({ data: null, error: { message: 'TypeError: Failed to fetch' } });
+      await expect(on(b, c => c.send(roomId, 'x', 300))).rejects.toMatchObject({ code: 'network' });
+      b.fake.rpc = async () => { throw new TypeError('Failed to fetch'); };
+      const err = await on(b, c => c.sync(roomId)).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(b.c.ChatError);
+      expect((err as { code: string }).code).toBe('network');
+      // Before: 'fetch' (returned error) or a plain TypeError (''); all three fall to the same text.
+      expect(friendlyError('network')).toBe(friendlyError('fetch'));
+      expect(friendlyError('network')).toBe(friendlyError(''));
+    } finally {
+      b.fake.rpc = real;
+    }
+    // Server errors keep their codes: the page still redirects on not_signed_in, shows invite errors, etc.
+    await expect(on(b, c => c.redeemInvite('no-such-token', 'x'))).rejects.toMatchObject({ code: 'invite_invalid' });
+  });
+
+  it('P3-Q3: after CHANNEL_ERROR the room channel is re-opened (setAuth again) and the page hears "subscribed" again; no new event kinds by default', async () => {
+    const b = await browser('rt', crypto.randomUUID());
+    type Ch = { cb: ((s: string) => void) | null; handlers: ((m: { event: string; payload: unknown }) => void)[] };
+    const chans: Ch[] = [];
+    const removed: Ch[] = [];
+    const auth: string[] = [];
+    type FakeCh = Ch & { on(t: string, f: unknown, h: Ch['handlers'][number]): FakeCh; subscribe(cb: (s: string) => void): FakeCh };
+    // Swapped in on this browser's Supabase stand-in (the client reads these at call time).
+    const rt = b.fake as unknown as { channel: () => FakeCh; removeChannel: (ch: Ch) => void; realtime: { setAuth: (t: string) => Promise<void> } };
+    rt.channel = () => {
+      const ch: FakeCh = {
+        cb: null, handlers: [],
+        on(_t, _f, h) { ch.handlers.push(h); return ch; },
+        subscribe(cb) { ch.cb = cb; return ch; },
+      };
+      chans.push(ch);
+      return ch;
+    };
+    rt.removeChannel = (ch) => { removed.push(ch); };
+    rt.realtime.setAuth = async (t) => { auth.push(t); };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const events: string[] = [];
+      // Exactly the page's callback shape: (event) => ..., 'msg' pulls, anything else refreshes.
+      const off = b.c.subscribe('00000000-0000-4000-8000-0000000000aa', (event: string) => { events.push(event); });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(chans).toHaveLength(1);
+      chans[0].cb!('SUBSCRIBED');
+      chans[0].cb!('CHANNEL_ERROR');
+      expect(removed).toEqual([chans[0]]);
+      await vi.advanceTimersByTimeAsync(b.c.RESUBSCRIBE_DELAYS_MS[0]);
+      expect(chans).toHaveLength(2);
+      expect(auth).toEqual(['t', 't']);
+      chans[1].cb!('SUBSCRIBED');
+      chans[1].handlers.forEach(h => h({ event: 'msg', payload: {} }));
+      expect(events).toEqual(['subscribed', 'subscribed', 'msg']);
+      off();
+      expect(removed).toEqual([chans[0], chans[1]]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

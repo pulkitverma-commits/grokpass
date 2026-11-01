@@ -28,7 +28,12 @@ export interface KeyStore {
 
 // ---- Supabase. Typed structurally so the real SupabaseClient and a test fake both satisfy it.
 
-export type SupabaseError = { message: string };
+/**
+ * What supabase-js hands back as `error`. `code` is PostgREST's: a SQLSTATE (`P0001` for a
+ * `raise exception`) or `PGRST…` for errors from the server; empty or absent when the request
+ * never reached it (postgrest-js turns a failed fetch into `{ message: 'TypeError: …', code: '' }`).
+ */
+export type SupabaseError = { message: string; code?: string };
 
 /**
  * A downloaded object body: anything with `arrayBuffer()`. A browser `Blob` satisfies it as is;

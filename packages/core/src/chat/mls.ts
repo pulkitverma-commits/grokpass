@@ -50,9 +50,17 @@ const dec = new TextDecoder();
  */
 export type KeyDirectory = (deviceId: string) => Promise<Uint8Array | null>;
 
-/** Thrown by joinRoom/receive when a leaf's signature key disagrees with the server's listing for that device. */
+/**
+ * Thrown by joinRoom/receive when the group can't be trusted against the server's listing:
+ * `key`: a leaf's signature key disagrees with the key listed for that device;
+ * `format`: a credential is not a well-formed device id (`deviceIds` holds what could be decoded);
+ * `signer`: the Welcome was not signed by the device the caller expected (the listed owner);
+ * `committer`: a commit came from a device the caller does not accept commits from.
+ */
+export type KeyMismatchReason = 'key' | 'format' | 'signer' | 'committer';
 export class KeyMismatchError extends Error {
-  constructor(readonly deviceIds: string[]) { super('member_key_mismatch'); }
+  /** `keys[i]`: the key the group offered for `deviceIds[i]`, when known. */
+  constructor(readonly deviceIds: string[], readonly reason: KeyMismatchReason = 'key', readonly keys: (Uint8Array | null)[] = []) { super('member_key_mismatch'); }
 }
 
 /** What the chat client's identities look like: the server-issued device UUID, lowercase. */
@@ -60,6 +68,11 @@ const DEVICE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 /** The bare adapter (unit tests, the Phase 0 spike) also accepts short opaque ids such as `device-a`. */
 const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const strictDec = new TextDecoder('utf-8', { fatal: true });
+
+/** A device id as the chat server issues it (lowercase UUID). */
+export function isDeviceId(id: string) {
+  return DEVICE_UUID.test(id);
+}
 
 export function sameKey(a: Uint8Array, b: Uint8Array) {
   if (a.length !== b.length) return false;
@@ -81,23 +94,31 @@ export function sameKey(a: Uint8Array, b: Uint8Array) {
  *   not committed yet) and, by construction, any device a malicious server chooses to leave out of
  *   the listing; those keys are only checked by comparing safety numbers out of band.
  */
-export function keyCheck(directory?: KeyDirectory) {
+export function keyCheck(directory?: KeyDirectory, opts: { strictIds?: boolean } = {}) {
+  const strict = !!directory || !!opts.strictIds;
   const mismatched: string[] = [];
+  const mismatchedKeys: Uint8Array[] = [];
+  const malformed: string[] = [];
+  /** Every credential asked about, in order. In joinGroup the first one is the Welcome's signer (ts-mls 1.6.4 clientState.js:578). */
+  const seen: { deviceId: string; signaturePublicKey: Uint8Array }[] = [];
   const service: AuthenticationService = {
     async validateCredential(credential, signaturePublicKey) {
-      if (credential.credentialType !== 'basic') return false;
+      if (credential.credentialType !== 'basic') { malformed.push('<not basic>'); return false; }
       let id: string;
-      try { id = strictDec.decode(credential.identity); } catch { return false; }
-      if (!(directory ? DEVICE_UUID : DEVICE_ID).test(id)) return false;
+      try { id = strictDec.decode(credential.identity); } catch { malformed.push('<not utf-8>'); return false; }
+      seen.push({ deviceId: id, signaturePublicKey });
+      if (!(strict ? DEVICE_UUID : DEVICE_ID).test(id)) { malformed.push(id.slice(0, 64)); return false; }
       if (!directory) return true;
       const listed = await directory(id);
       if (!listed) return true;
       if (sameKey(listed, signaturePublicKey)) return true;
-      if (!mismatched.includes(id)) mismatched.push(id);
+      if (!mismatched.includes(id)) { mismatched.push(id); mismatchedKeys.push(signaturePublicKey); }
       return false;
     },
   };
-  return { service, mismatched };
+  /** The KeyMismatchError this check explains, if any (a format failure first: it is the louder one). */
+  const failure = () => malformed.length ? new KeyMismatchError(malformed, 'format') : mismatched.length ? new KeyMismatchError(mismatched, 'key', mismatchedKeys) : null;
+  return { service, mismatched, malformed, seen, failure };
 }
 
 function configWith(authService: AuthenticationService): ClientConfig {
@@ -111,9 +132,11 @@ function configWith(authService: AuthenticationService): ClientConfig {
   };
 }
 
-// The stored-state default: format check only. Calls that meet other members' keys (joinRoom,
-// receive) take a KeyDirectory and use a listing-aware service for that call.
+// The stored-state default: format check only (loose ids for the bare adapter; the chat client
+// loads its states with `strictIds`). Calls that meet other members' keys (joinRoom, receive) take
+// a KeyDirectory and use a listing-aware service for that call.
 const clientConfig: ClientConfig = configWith(keyCheck().service);
+const strictClientConfig: ClientConfig = configWith(keyCheck(undefined, { strictIds: true }).service);
 
 let implPromise: Promise<CiphersuiteImpl> | null = null;
 export function suite(): Promise<CiphersuiteImpl> {
@@ -218,16 +241,26 @@ async function commit(state: ClientState, extraProposals: Proposal[]) {
  * returned.
  */
 export async function joinRoom(welcome: Uint8Array, own: DeviceKeyPackage, directory?: KeyDirectory): Promise<ClientState> {
+  return (await joinRoomWithSigner(welcome, own, directory)).state;
+}
+
+/**
+ * joinRoom that also says who signed the Welcome (its GroupInfo signer's leaf: device id and key).
+ * The caller decides whether that signer is acceptable (the chat client requires the listed owner).
+ */
+export async function joinRoomWithSigner(welcome: Uint8Array, own: DeviceKeyPackage, directory?: KeyDirectory) {
   const m = decodeOne(welcome);
   if (m.wireformat !== 'mls_welcome') throw new Error('not_welcome');
   const check = keyCheck(directory);
+  let joined: ClientState;
   try {
-    const joined = await joinGroup(m.welcome, own.publicPackage, own.privatePackage, emptyPskIndex, await suite(), undefined, undefined, configWith(check.service));
-    return { ...joined, clientConfig };
+    joined = await joinGroup(m.welcome, own.publicPackage, own.privatePackage, emptyPskIndex, await suite(), undefined, undefined, configWith(check.service));
   } catch (e) {
-    if (check.mismatched.length) throw new KeyMismatchError(check.mismatched);
-    throw e;
+    throw check.failure() ?? e;
   }
+  const signer = check.seen[0];
+  if (!signer) throw new Error('no_signer');
+  return { state: { ...joined, clientConfig: directory ? strictClientConfig : clientConfig }, signer };
 }
 
 /** Plaintext payload carried inside an MLS application message. */
@@ -254,18 +287,28 @@ export type Incoming =
  * server's listing (keyCheck); a disagreement throws KeyMismatchError and the commit is not applied.
  * Application messages never consult the directory.
  */
-export async function receive(state: ClientState, bytes: Uint8Array, ownDeviceId: string, directory?: KeyDirectory): Promise<Incoming> {
+export async function receive(
+  state: ClientState, bytes: Uint8Array, ownDeviceId: string, directory?: KeyDirectory,
+  /** Commits only: whether this device may commit (the chat client accepts the listed owner only). */
+  acceptCommitter?: (deviceId: string) => Promise<boolean>,
+): Promise<Incoming> {
   const m = decodeOne(bytes);
   if (m.wireformat !== 'mls_private_message') throw new Error('not_private_message');
   const check = keyCheck(directory);
+  let committerLeaf: number | undefined;
   let r: Awaited<ReturnType<typeof processPrivateMessage>>;
   try {
-    r = await processPrivateMessage({ ...state, clientConfig: configWith(check.service) }, m.privateMessage, emptyPskIndex, await suite());
+    r = await processPrivateMessage({ ...state, clientConfig: configWith(check.service) }, m.privateMessage, emptyPskIndex, await suite(),
+      (incoming) => { if (incoming.kind === 'commit') committerLeaf = incoming.senderLeafIndex; return 'accept'; });
   } catch (e) {
-    if (check.mismatched.length) throw new KeyMismatchError(check.mismatched);
-    throw e;
+    throw check.failure() ?? e;
   }
   r.consumed.forEach(zeroOutUint8Array);
+  if (r.kind !== 'applicationMessage' && acceptCommitter) {
+    // Who committed, by their leaf in the tree before this commit. The new state is dropped unless accepted.
+    const before = committerLeaf === undefined ? undefined : memberLeaves(state).find(l => l.leafIndex === committerLeaf);
+    if (!before || !(await acceptCommitter(before.deviceId))) throw new KeyMismatchError(before ? [before.deviceId] : [], 'committer');
+  }
   const newState = { ...r.newState, clientConfig: state.clientConfig };
   if (r.kind === 'applicationMessage') {
     const payload = parsePayload(r.message);
@@ -314,10 +357,11 @@ export function saveState(state: ClientState): Uint8Array {
   return encodeGroupState(state);
 }
 
-export function loadState(bytes: Uint8Array): ClientState {
+/** `strictIds`: the chat client's stored states, whose own commits (adds) accept device UUIDs only. */
+export function loadState(bytes: Uint8Array, opts: { strictIds?: boolean } = {}): ClientState {
   const d = decodeGroupState(bytes, 0);
   if (!d) throw new Error('state_decode_failed');
-  return { ...d[0], clientConfig };
+  return { ...d[0], clientConfig: opts.strictIds ? strictClientConfig : clientConfig };
 }
 
 /**

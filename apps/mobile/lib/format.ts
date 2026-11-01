@@ -57,6 +57,16 @@ export function errorCode(e: unknown): string {
   return e && typeof e === 'object' && 'code' in e && typeof (e as { code: unknown }).code === 'string' ? (e as { code: string }).code : '';
 }
 
+/** Security review f2-tree-keys.md (F2-1, F2-2, F2-5, F2-6): copy for member keys. */
+export const UNLISTED_NOTE = 'Not listed by the server: this device can still read the chat';
+export const KEY_HISTORY_NOTE = 'The server once showed a different key for them; compare again.';
+export const KEY_STOP_NOTICE = 'This chat stopped updating because a member’s key doesn’t match. Don’t trust it until you’ve checked with them.';
+export function readersLine(n: number) { return `${n} ${n === 1 ? 'device can' : 'devices can'} read this chat`; }
+export function verifyHint(name: string) { return `Compare these numbers in person or on a call. If they match, the key this chat holds for ${name} is really theirs.`; }
+export function scanMatchLine(name: string) { return `The numbers match. The key this chat holds for ${name} is really theirs.`; }
+/** Devices with a leaf in this phone's copy of the group (`inGroup`; an older core without it: active members). */
+export function readersOf(members: { state: string; inGroup?: boolean }[]) { return members.filter((m) => m.inGroup ?? m.state === 'active').length; }
+
 export function friendlyError(code: string) {
   switch (code) {
     case 'access_code_wrong': return 'That access code isn’t right.';
@@ -103,8 +113,8 @@ export function maskLink(link: string) {
  * The core's `keyChanged`: a verified member whose signing key in the encrypted chat no longer matches
  * what was verified, or any member whose key in the chat and on the server disagree (`keyMismatch`).
  */
-export function keyChanged(m: { verified: string | null; signaturePub: Uint8Array; keyMismatch?: boolean }) {
-  if (m.keyMismatch) return true;
+export function keyChanged(m: { verified: string | null; signaturePub: Uint8Array; keyMismatch?: boolean; unlisted?: boolean }) {
+  if (m.keyMismatch || m.unlisted) return true;
   if (!m.verified) return false;
   let hex = '\\x';
   for (let i = 0; i < m.signaturePub.length; i++) hex += m.signaturePub[i]!.toString(16).padStart(2, '0');

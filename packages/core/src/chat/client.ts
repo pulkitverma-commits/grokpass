@@ -18,18 +18,26 @@
 //      member's device id and carry the listed key; otherwise it is not admitted (and members()
 //      shows it with keyMismatch).
 //   2. applyRows, `welcome` row (joiner): joinRoom checks the Welcome's signer and every leaf of the
-//      tree against the listing (mls.keyCheck), then the owner's listed device must have a leaf with
-//      that key. Otherwise the state is dropped, the device flagged, and sync() rejects with
-//      ChatError('member_key_mismatch').
+//      tree against the listing (mls.keyCheck); the signer must be the listed owner device with the
+//      listed key, and that owner must be in the group with it (F2-1). Otherwise nothing is kept,
+//      the device is flagged and, unless a genuine Welcome applies later in the page, sync() rejects
+//      with ChatError('member_key_mismatch') (lastSeq stays before the refused Welcome).
 //   3. applyRows, commit rows (every member): receive() checks the committer's new leaf and every
-//      added key package against the listing; a disagreement leaves the commit unapplied, flags the
-//      device and rejects sync() with ChatError('member_key_mismatch') (rows before it are kept).
+//      added key package against the listing, and only the listed owner device may commit (only
+//      the owner's app commits in this design: adds, removals; no self-updates). A refusal leaves the
+//      commit unapplied, flags the device and rejects sync() (rows before it are saved).
 //   4. members() / safetyNumberWith() / markVerified(): every call compares each tree leaf with the
-//      current listing (catches a listing changed after the fact). A mismatched member has
+//      current listing (catches a listing changed after the fact), and lists every leaf the server
+//      does not list as `unlisted` (it can read the chat). A mismatched member has
 //      `keyMismatch: true`, its safety number throws ChatError('member_key_mismatch') and it can't
 //      be marked verified.
-// Not covered: a device the server leaves out of the listing (its leaf is accepted on format alone)
-// and anything before admission (a pending member has no leaf yet); see known-limitations.md.
+// Device ids must be lowercase UUIDs everywhere (the stored state too, so the owner can't add
+// another); a malformed credential refuses the row like a key mismatch, never silently (F2-4).
+// Refusal flags are records, not blocks (F2-2): cleared when the refused row later applies, when
+// the device's leaf is removed, or by marking an agreeing key verified; a flag on this device
+// itself only says the server's listing was wrong about it. New unlisted leaves are not refused
+// (an honest member can leave before others sync); they are shown. Before admission a pending
+// member has no leaf; see known-limitations.md.
 
 import { randomToken, newKey, importKey, encryptBytes, decryptBytes } from '../crypto';
 import * as mls from './mls';
@@ -65,9 +73,15 @@ type MemberRow = { device_id: string; role: 'owner' | 'member'; state: 'pending'
 type PendingJoin = { publicBytes: Uint8Array; privatePackage: mls.DeviceKeyPackage['privatePackage']; nickname: string };
 type RoomLocal = {
   name: string | null; lastSeq: number; nicknames: Record<string, string>; verified: Record<string, string>;
-  /** Devices whose key in a refused Welcome or commit disagreed with the server's listing (F-2). */
-  mismatch?: Record<string, true>;
+  /**
+   * Devices named by a refused Welcome or commit (F-2): the offending key when known (bytea hex),
+   * the refused row's seq and when. A record, not a permanent block: cleared when that row later
+   * applies, when the device's leaf is removed, or when the member is verified on an agreeing key.
+   * (`true` is the format of the first F-2 build, read as `{ seq: 0, at: 0 }`.)
+   */
+  mismatch?: Record<string, MismatchFlag | true>;
 };
+type MismatchFlag = { key: string | null; seq: number; at: number };
 
 // ---- bytea over PostgREST: sent and received as "\x<hex>"
 export function toBytea(b: Uint8Array) {
@@ -117,8 +131,8 @@ const BUCKET = 'chat-attachments';
  * encrypted group no longer matches what was verified, or any member whose key in the group and in
  * the server's listing disagree (`keyMismatch`, possible key substitution).
  */
-export function keyChanged(m: { verified: string | null; signaturePub: Uint8Array; keyMismatch?: boolean }) {
-  return !!m.keyMismatch || (!!m.verified && m.verified !== toBytea(m.signaturePub));
+export function keyChanged(m: { verified: string | null; signaturePub: Uint8Array; keyMismatch?: boolean; unlisted?: boolean }) {
+  return !!m.keyMismatch || !!m.unlisted || (!!m.verified && m.verified !== toBytea(m.signaturePub));
 }
 
 /**
@@ -229,7 +243,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
 
   async function loadState(roomId: string) {
     const b = await ks.get<Uint8Array>(roomKey(roomId, 'state'));
-    return b ? mls.loadState(b) : null;
+    return b ? mls.loadState(b, { strictIds: true }) : null;
   }
   async function saveState(roomId: string, state: Awaited<ReturnType<typeof mls.createRoom>>) {
     await ks.put(roomKey(roomId, 'state'), mls.saveState(state));
@@ -342,35 +356,55 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
   /** True when a pending member's key package is for another device or carries a key other than the listed one. */
   function packageMismatch(row: MemberRow) {
     const info = mls.keyPackageInfo(fromBytea(row.key_package));
-    return !info || info.deviceId !== row.device_id || !mls.sameKey(info.signaturePublicKey, fromBytea(row.signature_pub));
+    return !info || !mls.isDeviceId(row.device_id) || info.deviceId !== row.device_id || !mls.sameKey(info.signaturePublicKey, fromBytea(row.signature_pub));
   }
 
   /**
-   * The member list with each device's key as the encrypted group holds it. `signaturePub` is the
-   * tree key when the device has a leaf (the listed key otherwise, e.g. a pending member);
-   * `keyMismatch` says the tree (or a pending key package, or a refused Welcome/commit) disagrees
-   * with the server's listing for that device.
+   * The member list as the encrypted group and the server's listing describe it together: every
+   * listed device plus every leaf of this device's group the server does not list (`unlisted`: it
+   * can still read the chat, F2-1). Per device:
+   * - `signaturePub`: the tree key when the device has a leaf (the listed key otherwise, e.g. pending);
+   * - `inGroup`: it has a leaf in this device's copy of the group (can read new messages);
+   * - `keyMismatch`: the tree (or a pending key package) disagrees with the listing now, or a refused
+   *   Welcome/commit named a device that still has no leaf here;
+   * - `keyHistory`: a refused Welcome/commit once named it, but its key in the group and the listing
+   *   agree now ("the server once showed a different key for them; compare again").
+   * A flag on this device itself means the server's listing was wrong about it; it never blocks.
    */
   async function memberView(roomId: string) {
+    const dev = await ensureDevice();
     const rows = await rpc<MemberRow[]>('chat_room_members', { p_room: roomId });
     const local = await roomLocal(roomId);
     const state = await loadState(roomId);
     const leaves = state ? mls.memberLeaves(state) : [];
+    const keysOf = (id: string) => leaves.filter(l => l.deviceId === id).map(l => l.signaturePublicKey);
+    const conflicting = (keys: Uint8Array[]) => keys.some(k => !mls.sameKey(k, keys[0]));
+    const flagged = (id: string) => id !== dev.id && !!local.mismatch?.[id];
+    const base = (id: string) => ({ nickname: local.nicknames[id] ?? null, verified: local.verified[id] ?? null });
+    const listedIds = new Set(rows.map(m => m.device_id));
     const list = rows.map(m => {
       const listed = fromBytea(m.signature_pub);
-      const keys = leaves.filter(l => l.deviceId === m.device_id).map(l => l.signaturePublicKey);
+      const keys = keysOf(m.device_id);
       const treeKey = keys[0] ?? null;
-      const keyMismatch = !!local.mismatch?.[m.device_id]
-        || keys.some(k => !mls.sameKey(k, listed))
+      const live = keys.some(k => !mls.sameKey(k, listed))
         || (!treeKey && m.state === 'pending' && !!m.key_package && packageMismatch(m));
       return {
         deviceId: m.device_id, role: m.role, state: m.state,
-        signaturePub: treeKey ?? listed, hasKeyPackage: !!m.key_package,
-        nickname: local.nicknames[m.device_id] ?? null, verified: local.verified[m.device_id] ?? null,
-        keyMismatch,
+        signaturePub: treeKey ?? listed, hasKeyPackage: !!m.key_package, ...base(m.device_id),
+        keyMismatch: live || (flagged(m.device_id) && !treeKey),
+        keyHistory: !live && !!treeKey && flagged(m.device_id),
+        inGroup: !!treeKey, unlisted: false,
       };
     });
-    return { list, state, local, treeKey: (id: string) => leaves.find(l => l.deviceId === id)?.signaturePublicKey ?? null };
+    for (const id of new Set(leaves.map(l => l.deviceId))) {
+      if (listedIds.has(id)) continue;
+      const keys = keysOf(id);
+      list.push({
+        deviceId: id, role: 'member', state: 'active', signaturePub: keys[0], hasKeyPackage: false, ...base(id),
+        keyMismatch: conflicting(keys), keyHistory: false, inGroup: true, unlisted: true,
+      });
+    }
+    return { dev, list, state, local, treeKey: (id: string) => leaves.find(l => l.deviceId === id)?.signaturePublicKey ?? null };
   }
 
   async function members(roomId: string) {
@@ -703,32 +737,49 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     let nickDirty = false;
     const nicknames = { ...local.nicknames };
     const listing = lazyListing(roomId);
-    let mismatch: string[] | null = null;  // F-2 checks 2 and 3: devices whose key was refused
+    // F-2 checks 2 and 3: what a refused Welcome/commit named (device id -> offending key, if known).
+    const refused = new Map<string, string | null>();
+    let refusedSeq = 0;
+    let stopped = false;                  // a refused commit: nothing after it can apply
+    let holdSeq = false;                  // a refused Welcome and no join yet: keep lastSeq before it
+    let fetchFailure: unknown = null;     // the listing could not be fetched (F2-3)
+    const applied: number[] = [];         // seqs of Welcomes/commits applied (their old flags clear)
+    const goneLeaves = new Set<string>(); // devices whose leaf a commit removed (their flags clear)
+    const ownerRow = async () => (await listing.rows()).find(m => m.role === 'owner') ?? null;
+    const refuse = (seq: number, e: mls.KeyMismatchError) => {
+      refusedSeq = seq;
+      if (!e.deviceIds.length) refused.set('<unknown>', null);
+      e.deviceIds.forEach((id, i) => refused.set(id, e.keys[i] ? toBytea(e.keys[i]!) : null));
+    };
 
     for (const row of rows) {
       const seq = Number(row.seq);
       const bytes = fromBytea(row.ciphertext);
       if (row.kind === 'welcome') {
         const pending = await ks.get<PendingJoin>(roomKey(roomId, 'pending'));
-        if (state || !pending) { lastSeq = seq; continue; }
+        if (state || !pending) { if (!holdSeq) lastSeq = seq; continue; }
         let joined: Awaited<ReturnType<typeof mls.joinRoom>>;
         try {
-          joined = await mls.joinRoom(bytes, mls.restoreKeyPackage(pending.publicBytes, pending.privatePackage), listing.lookup);
+          const r = await mls.joinRoomWithSigner(bytes, mls.restoreKeyPackage(pending.publicBytes, pending.privatePackage), listing.lookup);
+          joined = r.state;
+          // F-2 check 2 (F2-1): the Welcome must be signed by the listed owner device with the listed
+          // key (an honest owner always signs its own), and that owner must be in the group with it.
+          const owner = await ownerRow();
+          const ownerKeys = owner ? mls.memberLeaves(joined).filter(l => l.deviceId === owner.device_id) : [];
+          if (!owner || r.signer.deviceId !== owner.device_id || !mls.sameKey(r.signer.signaturePublicKey, fromBytea(owner.signature_pub))) {
+            throw new mls.KeyMismatchError([r.signer.deviceId], 'signer', [r.signer.signaturePublicKey]);
+          }
+          if (!ownerKeys.length || ownerKeys.some(l => !mls.sameKey(l.signaturePublicKey, fromBytea(owner.signature_pub)))) {
+            throw new mls.KeyMismatchError([owner.device_id], 'key');
+          }
         } catch (e) {
-          if (e instanceof mls.KeyMismatchError) { mismatch = e.deviceIds; break; }
-          if (listing.failure()) throw listing.failure();
+          if (listing.failure()) { fetchFailure = listing.failure(); break; }
+          // Refused: nothing kept; a later genuine Welcome in this page can still apply.
+          if (e instanceof mls.KeyMismatchError) { refuse(seq, e); holdSeq = true; continue; }
           continue;  // not a welcome we can open: skipped like any undecryptable row
         }
-        // F-2 check 2: the owner the server lists must be in the group with the listed key (the
-        // Welcome is signed by the owner's leaf, which keyCheck has compared when it was listed).
-        const owner = (await listing.rows()).find(m => m.role === 'owner');
-        if (owner) {
-          const ownerKeys = mls.memberLeaves(joined).filter(l => l.deviceId === owner.device_id);
-          if (!ownerKeys.length || ownerKeys.some(l => !mls.sameKey(l.signaturePublicKey, fromBytea(owner.signature_pub)))) {
-            mismatch = [owner.device_id];
-            break;
-          }
-        }
+        applied.push(seq);
+        holdSeq = false;
         // A welcome is written at once, with its lastSeq: the nickname announcement below loads
         // and saves the state itself, and the pending key package must not outlive the join.
         state = joined;
@@ -751,16 +802,22 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
         }
         continue;
       }
-      if (!state) { lastSeq = seq; continue; }  // traffic from before we joined: not ours to read
+      if (!state) { if (!holdSeq) lastSeq = seq; continue; }  // traffic from before we joined: not ours to read
       let got: Awaited<ReturnType<typeof mls.receive>>;
+      const before: ReturnType<typeof mls.memberLeaves> = mls.memberLeaves(state);
       try {
-        got = await mls.receive(state, bytes, dev.id, listing.lookup);
+        // F-2 check 3: keys against the listing, and only the listed owner device may commit (F2-1:
+        // in this design only the owner's app commits adds and removals; there are no self-updates).
+        got = await mls.receive(state, bytes, dev.id, listing.lookup, async (id) => (await ownerRow())?.device_id === id);
       } catch (e) {
-        if (e instanceof mls.KeyMismatchError) { mismatch = e.deviceIds; break; }  // F-2 check 3
-        if (listing.failure()) throw listing.failure();
+        if (listing.failure()) { fetchFailure = listing.failure(); break; }
+        if (e instanceof mls.KeyMismatchError) { refuse(seq, e); stopped = true; break; }
         continue;  // undecryptable (older epoch, tampered, replayed): skipped, see above
       }
       if (got.kind === 'commit') {
+        applied.push(seq);
+        const after = new Set(mls.memberLeaves(got.state).map(l => l.deviceId));
+        for (const l of before) if (!after.has(l.deviceId)) goneLeaves.add(l.deviceId);
         state = got.state; lastSeq = seq; stateDirty = true;
         if (got.removedSelf) { res.removed = true; break; }
         continue;
@@ -790,13 +847,21 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     if (res.removed) { await forgetRoom(roomId); return res; }
     if (stateDirty && state) await saveState(roomId, state);
     if (lastSeq !== savedSeq || nickDirty) await setRoomLocal(roomId, { lastSeq, nicknames });
-    if (mismatch) {
-      // The refused row is not applied and lastSeq stays before it, so every sync refuses it again.
-      const flagged = { ...(await roomLocal(roomId)).mismatch };
-      for (const id of mismatch) flagged[id] = true;
-      await setRoomLocal(roomId, { mismatch: flagged });
-      throw new ChatError('member_key_mismatch');
+    // F2-2: the flags are a record. Clear those whose refused row has now applied (a later sync got
+    // an agreeing listing) or whose device left the group; add what this page refused.
+    const prev = (await roomLocal(roomId)).mismatch ?? {};
+    const flags: Record<string, MismatchFlag | true> = {};
+    for (const [id, f] of Object.entries(prev)) {
+      const seqOf = f === true ? 0 : f.seq;
+      if (goneLeaves.has(id) || (seqOf && applied.includes(seqOf))) continue;
+      flags[id] = f;
     }
+    for (const [id, key] of refused) flags[id] = { key, seq: refusedSeq, at: Date.now() };
+    if (JSON.stringify(flags) !== JSON.stringify(prev)) await setRoomLocal(roomId, { mismatch: flags });
+    // A refused commit stops this member (lastSeq stays before it, so every sync refuses it again);
+    // a refused Welcome does too unless a genuine one applied after it.
+    if (stopped || (refused.size && !res.joined)) throw new ChatError('member_key_mismatch');
+    if (fetchFailure) throw fetchFailure;
     return res;
   }
 
@@ -834,22 +899,24 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
 
   /**
    * The key to verify for `deviceId`: its leaf in this device's copy of the group (F-2). Throws
-   * `member_key_mismatch` when that member's key, or this device's own, disagrees between the group
-   * and the server's listing; `no_local_state` before this device has joined; `not_a_member` when
-   * the device has no leaf (not admitted yet). `key: null` when the server does not list it at all.
+   * `member_key_mismatch` when that member's key disagrees between the group and the server's
+   * listing, or this device's own leaf is not its own key; `no_local_state` before this device has
+   * joined; `not_a_member` when the device has no leaf (not admitted yet). `key: null` when neither
+   * the server nor the group knows the device. A device the server does not list but the group
+   * holds (`unlisted`) gets a number: that is how it can be compared at all.
    */
   async function treeKeyToVerify(roomId: string, deviceId: string) {
-    const dev = await ensureDevice();
     const view = await memberView(roomId);
+    const dev = view.dev;
     const them = view.list.find(m => m.deviceId === deviceId);
-    if (!them) return { dev, key: null };
-    if (them.keyMismatch || view.list.find(m => m.deviceId === dev.id)?.keyMismatch) throw new ChatError('member_key_mismatch');
+    if (!them) return { dev, key: null, them: null };
+    if (them.keyMismatch) throw new ChatError('member_key_mismatch');
     if (!view.state) throw new ChatError('no_local_state');
     const mine = view.treeKey(dev.id);
     if (mine && !mls.sameKey(mine, dev.signing.publicKey)) throw new ChatError('member_key_mismatch');
     const key = view.treeKey(deviceId);
     if (!key) throw new ChatError('not_a_member');
-    return { dev, key };
+    return { dev, key, them };
   }
 
   /**
@@ -863,12 +930,14 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     return mls.safetyNumber({ key: dev.signing.publicKey, id: dev.id }, { key, id: deviceId });
   }
 
-  /** Records the member's key inside the group as verified. Refuses a mismatched member. */
+  /** Records the member's key inside the group as verified, and clears an old mismatch record for them. Refuses a mismatched member. */
   async function markVerified(roomId: string, deviceId: string) {
     const { key } = await treeKeyToVerify(roomId, deviceId);
     if (!key) return;
     const local = await roomLocal(roomId);
-    await setRoomLocal(roomId, { verified: { ...local.verified, [deviceId]: toBytea(key) } });
+    const mismatch = { ...local.mismatch };
+    delete mismatch[deviceId];
+    await setRoomLocal(roomId, { verified: { ...local.verified, [deviceId]: toBytea(key) }, mismatch });
   }
 
   // ---------------------------------------------------------------------------- leave, burn, panic

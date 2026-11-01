@@ -106,11 +106,11 @@ describe('F-2: member keys come from the MLS tree', () => {
     expect(await codeOf(owner.run(c => c.markVerified(roomId, g)))).toBe('member_key_mismatch');
     expect((await localOf(owner, roomId))!.verified[g]).toBe(before);   // unchanged, not re-marked to the fake
 
-    // Bob sees his own listing disagree with the group, so his number for the owner is refused too.
+    // Bob sees the server list a wrong key for him (shown on his own row), but that is the server's
+    // listing being wrong about this device, not a member to distrust (F2-2): his number for the
+    // owner is still computed from the two real keys, the same digits as before the lie.
     expect((await guest.run(c => c.members(roomId))).find(m => m.deviceId === g)!.keyMismatch).toBe(true);
-    expect(await codeOf(guest.run(c => c.safetyNumberWith(roomId, o)))).toBe('member_key_mismatch');
-    expect(await codeOf(guest.run(c => c.markVerified(roomId, o)))).toBe('member_key_mismatch');
-    expect((await localOf(guest, roomId))!.verified).toEqual({});
+    expect(await guest.run(c => c.safetyNumberWith(roomId, o))).toBe(await oldSafetyNumber(guest, roomId, o));
     // Messages still flow: the warning is shown, the chat is not silently broken.
     await owner.run(c => c.send(roomId, 'still here', 300));
     expect((await guest.run(c => c.sync(roomId))).newMessages).toBe(1);
@@ -162,7 +162,7 @@ describe('F-2: member keys come from the MLS tree', () => {
     expect(await codeOf(guest.run(c => c.sync(roomId)))).toBe('member_key_mismatch');
     expect(await stateOf(guest, roomId)).toBeNull();
     expect(await guest.run(c => c.keystore.get(`room:${roomId}:pending`))).toBeTruthy();   // still waiting for a real Welcome
-    expect((await localOf(guest, roomId))!.mismatch).toEqual({ [ownerId]: true });
+    expect((await localOf(guest, roomId))!.mismatch).toEqual({ [ownerId]: { key: toBytea(fakeOwner.publicPackage.leafNode.signaturePublicKey), seq: expect.any(Number), at: expect.any(Number) } });
     expect((await guest.run(c => c.members(roomId))).find(m => m.deviceId === ownerId)!.keyMismatch).toBe(true);
     expect(await codeOf(guest.run(c => c.safetyNumberWith(roomId, ownerId)))).toBe('member_key_mismatch');
     expect(await codeOf(guest.run(c => c.sync(roomId)))).toBe('member_key_mismatch');
@@ -192,5 +192,134 @@ describe('F-2: member keys come from the MLS tree', () => {
     expect(newNumber).not.toBe(oldNumber);
     await owner.run(c => c.markVerified(roomId, g));
     expect(keyChanged((await owner.run(c => c.members(roomId))).find(x => x.deviceId === g)!)).toBe(false);
+  }, TIMEOUT);
+
+  // ---------------------------------------------------------------------------- review f2-tree-keys.md
+
+  /** Owner + Carol (paired) + Bob admitted honestly, everyone synced. */
+  async function trio() {
+    const { owner, guest: carol, roomId } = await pairUp(h, 'web', 'web');
+    const bob = await makeDevice(h, 'web', 'bob', true);
+    const { link } = await owner.run(c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: true }));
+    await bob.run(c => c.redeemInvite(tokenOf(link), 'Bob'));
+    expect(await owner.run(c => c.admitPending(roomId))).toBe(1);
+    expect((await bob.run(c => c.sync(roomId))).joined).toBe(true);
+    await carol.run(c => c.sync(roomId));
+    return { owner, carol, bob, roomId, o: await devId(owner), b: await devId(bob), cId: await devId(carol) };
+  }
+
+  it('F2-1 (1): a Welcome signed by a server device X that also holds the owner\'s real leaf is refused (signer is not the listed owner)', async () => {
+    const { owner, guest, roomId, guestId, ownerId } = await pendingPair();
+    const rows = (await owner.fake.rpc('chat_room_members', { p_room: roomId })).data as { device_id: string; key_package: string }[];
+    const bobPackage = fromBytea(rows.find(m => m.device_id === guestId)!.key_package);
+    // A package with the owner's real signing key (what any package the owner ever uploaded is).
+    const ownerReal = await mls.newKeyPackage(ownerId, (await owner.run(c => c.ensureDevice())).signing);
+    const x = await mls.newKeyPackage(crypto.randomUUID());     // the server's own device, never listed
+    const fake = await mls.createRoom(roomId, x);
+    const added = await mls.addMembers(fake, [ownerReal.publicBytes, bobPackage]);
+    await h.db.query(`update public.chat_members set state = 'active', key_package = null where device_id = $1`, [guestId]);
+    const r = await owner.fake.rpc('chat_send', {
+      p_room: roomId, p_device: ownerId, p_id: crypto.randomUUID(), p_kind: 'welcome', p_epoch: 1,
+      p_ciphertext: toBytea(added.welcome!), p_to_device: guestId,
+    });
+    expect(r.error).toBeNull();
+    expect(await codeOf(guest.run(c => c.sync(roomId)))).toBe('member_key_mismatch');
+    expect(await stateOf(guest, roomId)).toBeNull();
+    expect(Object.keys((await localOf(guest, roomId))!.mismatch!)).toEqual([mls.leafSignatureKeys(added.state).keys().next().value]);
+  }, TIMEOUT);
+
+  it('F2-1 (2)+(3): a leaf the server stops listing still shows (unlisted, keyChanged) and is counted among the devices that can read the chat', async () => {
+    const { carol, roomId, b } = await trio();
+    const before = await carol.run(c => c.members(roomId));
+    expect(before.filter(m => m.inGroup)).toHaveLength(3);
+    expect(before.every(m => !m.unlisted)).toBe(true);
+    await h.db.query(`delete from public.chat_members where device_id = $1`, [b]);   // the server hides Bob
+    const after = await carol.run(c => c.members(roomId));
+    const hidden = after.find(m => m.deviceId === b)!;
+    expect(hidden).toMatchObject({ unlisted: true, inGroup: true, state: 'active', keyMismatch: false });
+    expect(keyChanged(hidden)).toBe(true);
+    expect(after.filter(m => m.inGroup)).toHaveLength(3);
+    // It can be compared: a number from the tree key.
+    expect(await carol.run(c => c.safetyNumberWith(roomId, b))).toMatch(/^\d{60}$/);
+  }, TIMEOUT);
+
+  it('F2-1 (4): a commit from a member that is not the listed owner is refused', async () => {
+    const { carol, bob, roomId, b } = await trio();
+    const st = (await stateOf(bob, roomId))!;
+    const rot = await mls.rotate(st);
+    const r = await bob.fake.rpc('chat_send', {
+      p_room: roomId, p_device: b, p_id: crypto.randomUUID(), p_kind: 'commit', p_epoch: Number(mls.epoch(st)), p_ciphertext: toBytea(rot.commit),
+    });
+    expect(r.error).toBeNull();
+    const epochBefore = mls.epoch((await stateOf(carol, roomId))!);
+    expect(await codeOf(carol.run(c => c.sync(roomId)))).toBe('member_key_mismatch');
+    expect(mls.epoch((await stateOf(carol, roomId))!)).toBe(epochBefore);
+  }, TIMEOUT);
+
+  it('F2-2: a listing that lied for one sync leaves no permanent mark: the refused commit applies on the next honest sync and the flag clears', async () => {
+    const { owner, carol, roomId } = await trio();
+    const dave = await makeDevice(h, 'web', 'dave', true);
+    const { link } = await owner.run(c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: true }));
+    await dave.run(c => c.redeemInvite(tokenOf(link), 'Dave'));
+    const d = await devId(dave);
+    expect(await owner.run(c => c.admitPending(roomId))).toBe(1);
+    const real = await listedKey(d);
+    await h.db.query(`update public.chat_devices set signature_pub = $1 where id = $2`, [(await mls.newSigningKey()).publicKey, d]);
+    expect(await codeOf(carol.run(c => c.sync(roomId)))).toBe('member_key_mismatch');
+    expect((await localOf(carol, roomId))!.mismatch![d]).toMatchObject({ seq: expect.any(Number) });
+    await h.db.query(`update public.chat_devices set signature_pub = $1 where id = $2`, [real, d]);
+    await carol.run(c => c.sync(roomId));
+    expect((await localOf(carol, roomId))!.mismatch ?? {}).toEqual({});
+    const seen = (await carol.run(c => c.members(roomId))).find(m => m.deviceId === d)!;
+    expect(seen).toMatchObject({ keyMismatch: false, keyHistory: false, inGroup: true });
+    expect(await carol.run(c => c.safetyNumberWith(roomId, d))).toMatch(/^\d{60}$/);
+  }, TIMEOUT);
+
+  it('F2-2: an old flag on a member whose group key agrees now is history, not a block; marking verified clears it', async () => {
+    const { owner, guest, roomId } = await pairUp(h, 'web', 'web');
+    const g = await devId(guest);
+    const local = await localOf(owner, roomId);
+    await owner.run(c => c.keystore.put(`room:${roomId}:local`, { ...local, mismatch: { [g]: true } }));
+    const m = (await owner.run(c => c.members(roomId))).find(x => x.deviceId === g)!;
+    expect(m).toMatchObject({ keyMismatch: false, keyHistory: true });
+    expect(await owner.run(c => c.safetyNumberWith(roomId, g))).toBe(await oldSafetyNumber(owner, roomId, g));
+    await owner.run(c => c.markVerified(roomId, g));
+    expect((await localOf(owner, roomId))!.mismatch).toEqual({});
+    expect((await owner.run(c => c.members(roomId))).find(x => x.deviceId === g)!.keyHistory).toBe(false);
+  }, TIMEOUT);
+
+  it('F2-3: a listing that can\'t be fetched mid-page keeps the rows already applied, then rejects the sync', async () => {
+    const { owner, carol, roomId } = await trio();
+    await owner.run(c => c.send(roomId, 'one', 300));
+    await owner.run(c => c.send(roomId, 'two', 300));
+    const dave = await makeDevice(h, 'web', 'dave', true);
+    const { link } = await owner.run(c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: true }));
+    await dave.run(c => c.redeemInvite(tokenOf(link), 'Dave'));
+    expect(await owner.run(c => c.admitPending(roomId))).toBe(1);   // a commit after the two texts
+    const rpc = carol.fake.rpc;
+    carol.fake.rpc = async (fn, args) => fn === 'chat_room_members' ? { data: null, error: { message: 'TypeError: Network request failed' } } : rpc(fn, args);
+    const seqBefore = (await localOf(carol, roomId) as unknown as { lastSeq: number }).lastSeq;
+    expect(await codeOf(carol.run(c => c.sync(roomId)))).toBe('network');
+    const after = (await localOf(carol, roomId) as unknown as { lastSeq: number }).lastSeq;
+    expect(after).toBeGreaterThan(seqBefore);   // the two texts were applied and saved
+    expect((await carol.run(c => c.messages(roomId))).map(m => m.body)).toEqual(expect.arrayContaining(['one', 'two']));
+    carol.fake.rpc = rpc;
+    await carol.run(c => c.sync(roomId));
+    expect(mls.leafSignatureKeys((await stateOf(carol, roomId))!).has(await devId(dave))).toBe(true);
+  }, TIMEOUT);
+
+  it('F2-4: a commit adding a non-UUID identity is a loud member_key_mismatch for the other members, not a silent skip', async () => {
+    const { owner, carol, roomId, o } = await trio();
+    const loose = mls.loadState((await owner.run(c => c.keystore.get<Uint8Array>(`room:${roomId}:state`)))!);   // the bare adapter's format check
+    const odd = await mls.newKeyPackage('device-a');
+    const added = await mls.addMembers(loose, [odd.publicBytes]);
+    const r = await owner.fake.rpc('chat_send', {
+      p_room: roomId, p_device: o, p_id: crypto.randomUUID(), p_kind: 'commit', p_epoch: Number(mls.epoch(loose)), p_ciphertext: toBytea(added.commit),
+    });
+    expect(r.error).toBeNull();
+    expect(await codeOf(carol.run(c => c.sync(roomId)))).toBe('member_key_mismatch');
+    // And the owner's own client would not have added it: its stored state checks ids strictly.
+    const strict = mls.loadState((await owner.run(c => c.keystore.get<Uint8Array>(`room:${roomId}:state`)))!, { strictIds: true });
+    await expect(mls.addMembers(strict, [odd.publicBytes])).rejects.toThrow();
   }, TIMEOUT);
 });

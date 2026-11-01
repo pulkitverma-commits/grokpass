@@ -563,6 +563,24 @@ describe('accessibility (qa A1, A2, §12 key-changed row)', () => {
     } finally { announce.mockRestore(); }
   });
 
+  test('F2-6: a sync refused for a key mismatch shows a persistent notice; a mismatched pending member gets the mismatch row with its own label', async () => {
+    chat.sync.mockRejectedValue(Object.assign(new Error('member_key_mismatch'), { code: 'member_key_mismatch' }));
+    chat.members.mockResolvedValue([MEMBERS[0]!, { ...MEMBERS[1]!, state: 'pending' as const, keyMismatch: true }] as never);
+    await open([]);
+    expect(await screen.findByText('This chat stopped updating because a member’s key doesn’t match. Don’t trust it until you’ve checked with them.')).toBeTruthy();
+    const row = await screen.findByTestId('room.keyMismatch');
+    expect(row.props.accessibilityLabel).toBe('A member’s key doesn’t match the chat. Open Verify people.');
+    expect(screen.getByText('Bea wasn’t let in. This member’s key doesn’t match the chat. Don’t trust this chat until you’ve checked with them.')).toBeTruthy();
+  });
+
+  test('F2-1: a device the server does not list gets its own row', async () => {
+    chat.members.mockResolvedValue([MEMBERS[0]!, { ...MEMBERS[1]!, unlisted: true, inGroup: true }] as never);
+    await open([]);
+    const row = await screen.findByTestId('room.unlisted');
+    expect(row.props.accessibilityLabel).toBe('A device the server doesn’t list can read this chat. Open Verify people.');
+    expect(screen.getByText('Bea: Not listed by the server: this device can still read the chat.')).toBeTruthy();
+  });
+
   test('the key-changed row has a fixed label without the nickname', async () => {
     const changed = [MEMBERS[0]!, { ...MEMBERS[1]!, verified: '\\x99' }];   // verified a key that is no longer theirs
     chat.members.mockResolvedValue(changed);

@@ -510,11 +510,11 @@ describeInterop.each(ROLES)('Web <-> mobile interop: %s', (_label, ownerKind, gu
 
     const fake = await mls.newSigningKey();
     await h.db.query(`update public.chat_devices set signature_pub = $1 where id = $2`, [fake.publicKey, g.id]);
-    for (const [d, other] of [[owner, g.id], [guest, o.id]] as const) {
-      const err = await d.run(c => c.safetyNumberWith(roomId, other)).then(() => null, (e: { code?: string }) => e);
-      expect(err?.code, d.name).toBe('member_key_mismatch');
-      expect((await d.run(c => c.members(roomId))).find(m => m.deviceId === g.id)!.keyMismatch).toBe(true);
-    }
+    const err = await owner.run(c => c.safetyNumberWith(roomId, g.id)).then(() => null, (e: { code?: string }) => e);
+    expect(err?.code, owner.name).toBe('member_key_mismatch');
+    for (const d of [owner, guest]) expect((await d.run(c => c.members(roomId))).find(m => m.deviceId === g.id)!.keyMismatch, d.name).toBe(true);
+    // The guest's own listing is what the server lied about: its number for the owner still uses the real keys (F2-2).
+    expect(await guest.run(c => c.safetyNumberWith(roomId, o.id))).toBe(fromGuest);
     await sweep([owner, guest], [], [token]);
   }, TIMEOUT);
 });

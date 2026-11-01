@@ -64,21 +64,26 @@ Plain statements of what Secret Chat does not do. The public page (/secret-chat)
    signing keys inside the encrypted group (the MLS tree), so a server that swaps a member's key can no
    longer make two screens show the same number. The apps also compare each member's key in the group
    with the key the server lists for that device: the owner won't admit a key package that doesn't
-   match, a member refuses a Welcome or a commit that brings in a key that doesn't match (the chat then
-   stops syncing for that member and says "This member's key doesn't match the chat"), and a member
-   whose key changes on the server afterwards is shown as a key mismatch and can't be marked verified.
+   match; a member refuses a Welcome that the listed owner didn't sign with its listed key, a commit
+   from anyone but the owner's device, and a Welcome or commit that brings in a key that doesn't match
+   (the chat then stops updating for that member and says so); and a member whose key changes on the
+   server afterwards is shown as a key mismatch and can't be marked verified. Every device in the
+   encrypted group is in the member list, and the verify screen says how many devices can read the chat.
    What remains open:
    - **Before admission.** A person who has used an invite but isn't let in yet has no key in the group,
      so there is no safety number to compare until the owner admits them; until then their key is only
      the one the server lists.
-   - **Devices the server doesn't list.** A device that is still in the group but no longer listed (it
-     left or was revoked and the owner's app hasn't committed the removal yet), or one a malicious server
-     leaves out, is checked by format only; only an out-of-band safety-number comparison catches a wrong
-     key there.
+   - **Devices the server doesn't list.** A device that is still in the encrypted group but that the
+     server doesn't list (one that left or was revoked before the owner's app removed it, or one a
+     malicious server hides) is shown in the member list as "Not listed by the server: this device can
+     still read the chat", and it can read the chat until it is removed. Its key is checked by format
+     only; compare its safety number, or have the owner remove it.
    - **Who sent a message.** Which member a message or nickname is shown under is still the server's
      word (security review F-3): the encryption proves a current member wrote it and nobody changed it,
      not which member.
    - **A refused key stops the chat for that member.** When a Welcome or commit is refused, that device
-     stays at the last state it trusted and the chat can't continue there until the owner sorts it out
-     (for example by removing the member and inviting them again). Chats made before this check, whose
-     groups already hold a substituted key, show a key mismatch rather than recovering silently.
+     stays at the last state it trusted and the chat can't continue there until the server delivers it
+     with a listing that agrees. The warning is a record, not a permanent block: it clears when the
+     refused change later applies with an agreeing listing, when that device leaves the group, or when
+     the member is verified again on a key that agrees; until then a member whose key agrees again shows
+     "The server once showed a different key for them; compare again."

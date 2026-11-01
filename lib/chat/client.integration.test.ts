@@ -228,6 +228,30 @@ describe('Secret Chat end to end (two browsers)', () => {
     expect((await on(b, c => c.sync(roomId))).joined).toBe(false);
   });
 
+  it('F2-1: a device in the chat that the server stops listing still shows on the page (unlisted, warned), the device count includes it, and the copy says what a match proves', async () => {
+    const fmt = await import('../../app/chat/format');
+    const a = await browser('a4', '33000000-0000-4000-8000-000000000033');
+    const b = await browser('b4', '43000000-0000-4000-8000-000000000043');
+    const roomId = await on(a, c => c.createRoom({ kind: 'secret', ttl: 300, mode: 'on_open', lifetime: 3600 }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    await on(b, c => c.redeemInvite(tokenOf(link), 'Bo'));
+    await on(a, c => c.admitPending(roomId));
+    await on(b, c => c.sync(roomId));
+    const bDev = (await on(b, c => c.ensureDevice())).id;
+    let ms = await on(a, c => c.members(roomId));
+    expect(ms.filter(m => m.inGroup)).toHaveLength(2);
+    expect(fmt.readersLine(ms.filter(m => m.inGroup).length)).toBe('2 devices can read this chat');
+    await db.query(`delete from public.chat_members where device_id = $1`, [bDev]);   // the server hides b
+    ms = await on(a, c => c.members(roomId));
+    const hidden = ms.find(m => m.deviceId === bDev)!;
+    expect(hidden).toMatchObject({ unlisted: true, inGroup: true, state: 'active' });
+    expect(ms.filter(a.c.keyChanged).map(m => m.deviceId)).toEqual([bDev]);   // the page's warning list
+    expect(ms.filter(m => m.inGroup)).toHaveLength(2);
+    expect(fmt.UNLISTED_NOTE).toBe('Not listed by the server: this device can still read the chat');
+    expect(fmt.verifyLine('Bo')).toBe('Compare these numbers in person or on a call. If they match on both screens, your messages reach Bo’s real device. Everyone who can read this chat is in the member list.');
+    expect(fmt.KEY_HISTORY_NOTE).toBe('The server once showed a different key for them; compare again.');
+  });
+
   it('removed members are locked out; Burn Chat wipes server and local state', async () => {
     const owner = await browser('owner', '50000000-0000-4000-8000-000000000005');
     const m1 = await browser('m1', '60000000-0000-4000-8000-000000000006');

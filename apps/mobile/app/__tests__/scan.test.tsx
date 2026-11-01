@@ -87,7 +87,7 @@ test('a safety number from the room: compared with each other member; a match of
   await scan(`onepeek-verify:${DIGITS}`);
   expect(await screen.findByText('Matches Bea')).toBeTruthy();
   // F-2 fixed in the core: the compared keys are the ones inside the encrypted group.
-  expect(screen.getByText('The numbers match. These are the keys inside your encrypted chat.')).toBeTruthy();
+  expect(screen.getByText('The numbers match. The key this chat holds for Bea is really theirs.')).toBeTruthy();
   expect(screen.queryByText(/does not yet prove/)).toBeNull();
   expect(screen.queryByText(/intercept/i)).toBeNull();
   expect(screen.getByText('They match — mark verified')).toBeTruthy();

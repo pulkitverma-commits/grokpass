@@ -35,7 +35,7 @@ import { Sheet } from '../../components/Sheet';
 import { Segmented } from '../../components/Segmented';
 import { colors, radii, spacing, touchTarget } from '../../theme';
 import { MAX_ATTACHMENT_BYTES, deletePicked, pickDocument, pickPhoto, fileSource, type Picked } from '@/lib/files';
-import { KIND_SHORT, TIMERS, errorCode, friendlyError, keyChanged, memberName, roomTitle, ttlLabel } from '@/lib/format';
+import { KEY_STOP_NOTICE, KIND_SHORT, TIMERS, UNLISTED_NOTE, errorCode, friendlyError, keyChanged, memberName, roomTitle, ttlLabel } from '@/lib/format';
 import { secretLinkFrom, stashHandoff } from '@/lib/links';
 import type { LocalMessage } from '@onepeek/core';
 
@@ -51,6 +51,9 @@ const INTRO_SECRET = `Press and hold a message to read it. ${SHOT_LINE} No app c
 // A fixed label for the "<name>'s security key changed" row (qa §12): the nickname stays out of the
 // announcement, the visible text still names the member.
 const KEY_CHANGED_LABEL = 'A member’s security key changed. Verify again.';
+// The same for the F-2 rows (review f2-tree-keys.md F2-6): their own labels, no nickname.
+const KEY_MISMATCH_LABEL = 'A member’s key doesn’t match the chat. Open Verify people.';
+const UNLISTED_LABEL = 'A device the server doesn’t list can read this chat. Open Verify people.';
 const INTRO_QUICK = `Messages are encrypted on each device and disappear on a timer. ${SHOT_LINE}`;
 
 /** Runs `fn` one at a time; calls made while it runs collapse into one more run afterwards (the web's useCoalesced). */
@@ -83,6 +86,7 @@ export default function RoomScreen() {
   const [joined, setJoined] = useState(false);
   const [synced, setSynced] = useState(false);
   const [ended, setEnded] = useState<string | null>(null);
+  const [keyStop, setKeyStop] = useState(false);   // sync refused a Welcome/commit: member_key_mismatch
   const [text, setText] = useState('');
   const [ttl, setTtl] = useState(60);
   const [replyTo, setReplyTo] = useState<Msg | null>(null);
@@ -123,8 +127,12 @@ export default function RoomScreen() {
 
   const refreshOnce = useCallback(async () => {
     try {
-      const r = await guard(() => chat().sync(roomId));
-      if (r.removed) { setEnded((e) => e ?? 'This chat has ended, or you were removed.'); return; }
+      // A sync refused for a key mismatch (F-2) still loads the room and its members, so the notice
+      // and the row naming the member can be shown.
+      let r: Awaited<ReturnType<ReturnType<typeof chat>['sync']>> | null = null;
+      try { r = await guard(() => chat().sync(roomId)); setKeyStop(false); }
+      catch (e) { if (errorCode(e) !== 'member_key_mismatch') throw e; setKeyStop(true); }
+      if (r?.removed) { setEnded((e) => e ?? 'This chat has ended, or you were removed.'); return; }
       const rooms = await chat().myRooms();
       const current = rooms.find((x) => x.id === roomId) ?? null;
       listed.current = !!current;
@@ -153,11 +161,13 @@ export default function RoomScreen() {
   const pullOnce = useCallback(async () => {
     try {
       const r = await guard(() => chat().sync(roomId));
+      setKeyStop(false);
       if (r.removed) { setEnded((e) => e ?? 'This chat has ended, or you were removed.'); return; }
       if (r.newMessages || r.newAlerts || r.joined) await showStored();
       if (r.joined) void refresh();
     } catch (e) {
       if (errorCode(e) === 'not_signed_in') router.replace('/welcome');
+      if (errorCode(e) === 'member_key_mismatch') setKeyStop(true);
     }
   }, [chat, guard, roomId, router, showStored, refresh]);
   const pull = useCoalesced(pullOnce);
@@ -386,9 +396,14 @@ export default function RoomScreen() {
           ListHeaderComponent={
             <View style={styles.intro}>
               <Text variant="meta" tone="muted" center style={styles.introBox}>{secret ? INTRO_SECRET : INTRO_QUICK}</Text>
-              {members.filter((m) => m.state === 'active' && keyChanged(m)).map((m) => (
-                <Pressable key={m.deviceId} onPress={() => setMenu('verify')} accessibilityRole="button" accessibilityLabel={KEY_CHANGED_LABEL} style={styles.introBox} testID="room.keyChanged">
-                  <Text variant="meta" tone="danger" center>{nameOf(m.deviceId)}’s security key changed. Verify again.</Text>
+              {keyStop ? <Text variant="meta" tone="danger" center style={styles.introBox} accessibilityLiveRegion="polite" testID="room.keyStop">{KEY_STOP_NOTICE}</Text> : null}
+              {members.filter((m) => (m.state === 'active' || m.keyMismatch) && keyChanged(m)).map((m) => (
+                <Pressable key={m.deviceId} onPress={() => setMenu('verify')} accessibilityRole="button"
+                  accessibilityLabel={m.keyMismatch ? KEY_MISMATCH_LABEL : m.unlisted ? UNLISTED_LABEL : KEY_CHANGED_LABEL} style={styles.introBox}
+                  testID={m.keyMismatch ? 'room.keyMismatch' : m.unlisted ? 'room.unlisted' : 'room.keyChanged'}>
+                  <Text variant="meta" tone="danger" center>{m.keyMismatch
+                    ? `${nameOf(m.deviceId)}${m.state === 'pending' ? ' wasn’t let in.' : ':'} ${friendlyError('member_key_mismatch')}`
+                    : m.unlisted ? `${nameOf(m.deviceId)}: ${UNLISTED_NOTE}.` : `${nameOf(m.deviceId)}’s security key changed. Verify again.`}</Text>
                 </Pressable>
               ))}
               {synced && !joined ? <Text variant="meta" tone="muted" center style={styles.introBox} testID="room.waiting">Waiting for the owner to let you in. Messages will appear once you’re admitted.</Text> : null}

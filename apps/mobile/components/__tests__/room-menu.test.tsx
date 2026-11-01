@@ -62,7 +62,8 @@ test('safety number comes from safetyNumberWith, in groups of five with a QR; ma
   expect(screen.getAllByText('12345')).toHaveLength(6);
   expect(screen.getByTestId('qr')).toBeTruthy();
   // F-2 fixed in the core: the numbers come from the keys inside the encrypted group, and the copy says that much.
-  expect(screen.getByText('Compare these numbers in person or on a call. If they match, these are the keys inside your encrypted chat.')).toBeTruthy();
+  expect(screen.getByText('Compare these numbers in person or on a call. If they match, the key this chat holds for Bea is really theirs.')).toBeTruthy();
+  expect(screen.getByTestId('verify.readers').props.children).toBe('2 devices can read this chat');
   expect(screen.queryByText(/does not yet prove/)).toBeNull();
   expect(screen.queryByText(/intercept/i)).toBeNull();
   expect(screen.getByText('They match — mark verified')).toBeTruthy();

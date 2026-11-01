@@ -24,6 +24,14 @@ export function shortId(id: string) {
   return id.replace(/-/g, '').slice(0, 4).toUpperCase();
 }
 
+/** Security review f2-tree-keys.md (F2-1, F2-2, F2-5): copy for member keys. */
+export const UNLISTED_NOTE = 'Not listed by the server: this device can still read the chat';
+export const KEY_HISTORY_NOTE = 'The server once showed a different key for them; compare again.';
+export function readersLine(n: number) { return `${n} ${n === 1 ? 'device can' : 'devices can'} read this chat`; }
+export function verifyLine(name: string) {
+  return `Compare these numbers in person or on a call. If they match on both screens, your messages reach ${name}’s real device. Everyone who can read this chat is in the member list.`;
+}
+
 export function friendlyError(code: string) {
   switch (code) {
     case 'access_code_wrong': return 'That access code isn’t right.';

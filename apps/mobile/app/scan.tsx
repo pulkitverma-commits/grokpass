@@ -16,7 +16,7 @@ import { Icon } from '../components/Icon';
 import { Screen } from '../components/Screen';
 import { Text } from '../components/Text';
 import { colors, radii, spacing, touchTarget } from '../theme';
-import { errorCode, friendlyError, memberName } from '@/lib/format';
+import { errorCode, friendlyError, memberName, scanMatchLine } from '@/lib/format';
 import { classify, stashHandoff } from '@/lib/links';
 
 type Found =
@@ -141,7 +141,7 @@ export default function ScanScreen() {
                 <ResultHead icon="shield" title="Safety number" sub="Comparing with the people in this chat…" />
               ) : found.match ? (
                 <>
-                  <ResultHead icon="check" title={`Matches ${found.match.name}`} sub="The numbers match. These are the keys inside your encrypted chat." accent />
+                  <ResultHead icon="check" title={`Matches ${found.match.name}`} sub={scanMatchLine(found.match.name)} accent />
                   <Button title={busy ? 'Saving…' : 'They match — mark verified'} busy={busy} onPress={markVerified} testID="scan.verify" />
                 </>
               ) : (

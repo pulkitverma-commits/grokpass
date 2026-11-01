@@ -22,7 +22,7 @@ import { SectionLabel } from '../SectionLabel';
 import { Segmented } from '../Segmented';
 import { Sheet } from '../Sheet';
 import { Text } from '../Text';
-import { KIND_NAME, LIFETIMES, TIMERS, countdown, errorCode, friendlyError, keyChanged, memberName, ttlLabel } from '@/lib/format';
+import { KEY_HISTORY_NOTE, KIND_NAME, LIFETIMES, TIMERS, UNLISTED_NOTE, countdown, errorCode, friendlyError, keyChanged, memberName, readersLine, readersOf, ttlLabel, verifyHint } from '@/lib/format';
 import { REPORT_REASONS, reportRoom, type ReportReason } from '@/lib/report';
 
 export type MenuView = null | 'menu' | 'members' | 'invite' | 'verify' | 'timer' | 'rename' | 'leave' | 'burn' | 'report';
@@ -32,7 +32,8 @@ export const blockedKey = (roomId: string) => `room:${roomId}:blocked`;
 
 export type Member = {
   deviceId: string; role: 'owner' | 'member'; state: 'pending' | 'active';
-  signaturePub: Uint8Array; hasKeyPackage: boolean; nickname: string | null; verified: string | null; keyMismatch?: boolean;
+  signaturePub: Uint8Array; hasKeyPackage: boolean; nickname: string | null; verified: string | null;
+  keyMismatch?: boolean; keyHistory?: boolean; inGroup?: boolean; unlisted?: boolean;
 };
 
 export type MenuRoom = { id: string; kind: 'quick' | 'secret' | 'business'; role: 'owner' | 'member'; ttl: number; mode: 'on_open' | 'on_send'; expiresAt: string; name: string | null };
@@ -68,7 +69,7 @@ export function RoomMenu({ view, setView, room, title, members, me, ttl, setTtl,
       {view === 'members' ? <Members room={room} members={members} me={me} isOwner={isOwner} blocked={blocked} onChange={onChange} /> : null}
       {view === 'report' ? <Report room={room} onDone={close} /> : null}
       {view === 'invite' ? <Invite room={room} /> : null}
-      {view === 'verify' ? <Verify roomId={room.id} members={active.filter((m) => m.deviceId !== me)} onChange={onChange} onClose={close} /> : null}
+      {view === 'verify' ? <Verify roomId={room.id} members={active.filter((m) => m.deviceId !== me)} readers={readersOf(members)} onChange={onChange} onClose={close} /> : null}
       {view === 'timer' ? <Timer room={room} ttl={ttl} setTtl={setTtl} isOwner={isOwner} onSaved={() => { onChange(); close(); }} /> : null}
       {view === 'rename' ? <Rename room={room} onSaved={() => { onChange(); close(); }} /> : null}
       {view === 'leave' ? (
@@ -170,7 +171,7 @@ function Members({ room, members, me, isOwner, blocked, onChange }: { room: Menu
           const changed = keyChanged(m);
           const name = memberName(m.nickname, m.deviceId) + (m.deviceId === me ? ' (you)' : '') + (m.role === 'owner' ? ' · owner' : '');
           const isBlocked = blocked.includes(m.deviceId);
-          const status = isBlocked ? 'Blocked on this phone' : m.keyMismatch ? 'Key mismatch' : changed ? 'Key changed' : m.verified ? 'Verified' : 'Not verified';
+          const status = isBlocked ? 'Blocked on this phone' : m.keyMismatch ? 'Key mismatch' : m.unlisted ? UNLISTED_NOTE : changed ? 'Key changed' : m.verified ? 'Verified' : 'Not verified';
           const who = memberName(m.nickname, m.deviceId);
           return (
             <ListRow key={m.deviceId} leading={<Icon name={isBlocked ? 'ban' : m.verified && !changed ? 'check' : 'user'} size={20} color={isBlocked || changed ? colors.danger : m.verified ? colors.secure : colors.muted} />}
@@ -288,7 +289,7 @@ function Invite({ room }: { room: MenuRoom }) {
 
 // ---------------------------------------------------------------------------- verify (safety number)
 
-function Verify({ roomId, members, onChange, onClose }: { roomId: string; members: Member[]; onChange: () => void; onClose: () => void }) {
+function Verify({ roomId, members, readers, onChange, onClose }: { roomId: string; members: Member[]; readers: number; onChange: () => void; onClose: () => void }) {
   const { chat, guard } = useChat();
   const router = useRouter();
   const [who, setWho] = useState<Member | null>(members.length === 1 ? members[0]! : null);
@@ -311,7 +312,7 @@ function Verify({ roomId, members, onChange, onClose }: { roomId: string; member
       <View style={styles.card}>
         {members.map((m) => (
           <ListRow key={m.deviceId} leading={<Icon name="shield" size={20} color={colors.muted} />} title={memberName(m.nickname, m.deviceId)}
-            subtitle={m.keyMismatch ? 'Key mismatch' : m.verified ? (keyChanged(m) ? 'Key changed' : 'Verified') : 'Not verified'} chevron onPress={() => select(m)} testID="verify.member" />
+            subtitle={m.keyMismatch ? 'Key mismatch' : m.unlisted ? 'Not listed by the server' : m.verified ? (keyChanged(m) ? 'Key changed' : 'Verified') : 'Not verified'} chevron onPress={() => select(m)} testID="verify.member" />
         ))}
       </View>
     );
@@ -321,12 +322,15 @@ function Verify({ roomId, members, onChange, onClose }: { roomId: string; member
   return (
     <View style={styles.stack}>
       <Text variant="title" tone="heading">Verify {name}</Text>
-      <Text variant="sub" tone="muted">Compare these numbers in person or on a call. If they match, these are the keys inside your encrypted chat.</Text>
+      <Text variant="sub" tone="muted">{verifyHint(name)}</Text>
+      {who.unlisted ? <Notice tone="error" text={`${UNLISTED_NOTE}.`} /> : null}
+      {who.keyHistory ? <Notice tone="info" text={KEY_HISTORY_NOTE} /> : null}
       {num ? (
         <View style={styles.digits} accessible accessibilityLabel={`Safety number ${groups.join(' ')}`} testID="verify.number">
           {groups.map((g, i) => <Text key={i} variant="h2" mono style={styles.digit}>{g}</Text>)}
         </View>
       ) : <Text variant="sub" tone="muted" center accessibilityLiveRegion="polite">Calculating…</Text>}
+      {num ? <Text variant="meta" tone="muted" center testID="verify.readers">{readersLine(readers)}</Text> : null}
       {num ? (
         <View style={styles.qrWrap} accessible accessibilityLabel="Safety number as a QR code">
           <View style={styles.qrBox}><QRCode value={`onepeek-verify:${num}`} size={150} color="#000" backgroundColor="#fff" /></View>

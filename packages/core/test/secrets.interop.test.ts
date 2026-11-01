@@ -7,27 +7,25 @@
 //   1. "web path": the browser's exact code path, lifted step for step from `app/page.tsx`
 //      (`createSecret`) and `app/s/[id]/page.tsx` (peek, open, decrypt). It runs today and is the
 //      specification the phone must meet: link format, header, burn, expiry, flags, file bytes.
-//   2. "app <-> web": the core module `packages/core/src/secrets.ts` (core-crypto, C4) on the phone
-//      side, in both directions. `describe.skip` until that module is merged (TODO below).
+//   2. "app <-> web": the core module `packages/core/src/secrets.ts` (core-crypto, C4) as the phone,
+//      in both directions, with a `fetch` that routes `POST https://onepeek.io/api/open` to the mirror.
 // Every scenario ends with the same sweep: key, plaintext, file name, file bytes and Wi-Fi password
 // never appear in the SQL log, the database dump, the stored objects, the `/api/open` bodies or the
 // responses, in text, hex, base64 or base64url, except as ciphertext.
 import { describe, it, expect, beforeAll } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   newKey, importKey, encryptJson, encryptText, encryptBytes, decryptJson, decryptText, decryptBytes, randomToken, fromB64Url,
   type SecretHeader, type WifiSecret,
 } from '../src/crypto';
+import { createSecret, peekSecret, openSecret, parseSecretLink, SecretError, type SecretsDeps } from '../src/secrets';
 import { bootSecretsDb, ROOT, WEB_ORIGIN, type SecretsHarness, type OpenRow } from './secrets-harness';
 import { BODY, FILE_NAME, FILE_BODY, forbidden, expectClean, type Forbidden } from './fixtures';
 
 const TIMEOUT = 120_000;
 const LINK = /^https:\/\/onepeek\.io\/s\/([A-Za-z0-9]{10})#([A-Za-z0-9_-]{43})$/;
 const WIFI: WifiSecret = { ssid: 'Okonkwo-Guest', password: 'river-4471-blue', security: 'WPA' };
-/** The core module under test in half 2; absent until C4 merges. */
-const SECRETS_MODULE = path.join(ROOT, 'packages/core/src/secrets.ts');
-const CORE_PRESENT = existsSync(SECRETS_MODULE);
 
 let h: SecretsHarness;
 
@@ -352,142 +350,178 @@ describe('one-time secrets: the website path on the production schema', () => {
 
 // ---------------------------------------------------------------------------- 2. app <-> web through the core module
 
-// TODO(lead, after C4 merges): change `describe.skip` to `describe` once packages/core/src/secrets.ts
-// exists, and align `appDeps()` with its real `deps` shape (`createSecret(deps, input, opts)`,
-// `peekSecret(deps, url)`, `openSecret(deps, url, unlock?)` per the lead's contract and
-// apps/mobile/lib/secrets.ts). Everything the module needs from the outside is here: a Supabase
-// stand-in as a signed-in phone, a `fetch` that routes POST https://onepeek.io/api/open to the route
-// mirror and records every body, and the site/api base URL.
-describe.skip('one-time secrets: app <-> web through packages/core/src/secrets.ts (unskip after C4 merges)', () => {
-  type SecretsModule = {
-    createSecret(deps: unknown, input: unknown, opts: unknown): Promise<{ id: string; url: string }>;
-    peekSecret(deps: unknown, url: string): Promise<{ header: SecretHeader; viewsLeft: number | null; maxViews: number | null; locked: boolean }>;
-    openSecret(deps: unknown, url: string, unlock?: unknown): Promise<
-      | { kind: 'text'; text: string; header: SecretHeader }
-      | { kind: 'wifi'; wifi: WifiSecret; header: SecretHeader }
-      | { kind: 'file'; bytes: Uint8Array; name: string; mime: string; header: SecretHeader }
-    >;
-    isSecretLink?(url: string): boolean;
-  };
-  let mod: SecretsModule;
+describe('one-time secrets: app <-> web through packages/core/src/secrets.ts', () => {
   /** Request bodies the phone sent to /api/open. */
   const phoneRequests: string[] = [];
 
-  beforeAll(async () => {
-    expect(CORE_PRESENT, `${SECRETS_MODULE} is missing`).toBe(true);
-    // A computed specifier: tsc and vitest do not resolve it at build time, so the file may be absent.
-    mod = (await import(/* @vite-ignore */ `../src/${'secrets'}`)) as SecretsModule;
-  });
-
+  /** A signed-in phone: the core module over a Supabase stand-in as `authenticated`, a fetch that reaches only the route mirror. */
   async function phone() {
     const userId = crypto.randomUUID();
     await h.addUser({ id: userId });
     const supabase = h.fakeSupabase({ id: userId });
-    const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const fetch: SecretsDeps['fetch'] = async (url, init) => {
       expect(url, 'the phone opens secrets only through onepeek.io/api/open').toBe(`${WEB_ORIGIN}/api/open`);
-      expect(init?.method).toBe('POST');
-      const body = typeof init?.body === 'string' ? init.body : '';
-      phoneRequests.push(body);
-      const res = await h.openRoute(JSON.parse(body));
-      return new Response(JSON.stringify(res.json), { status: res.status, headers: { 'content-type': 'application/json' } });
+      expect(init.method).toBe('POST');
+      phoneRequests.push(init.body);
+      const res = await h.openRoute(JSON.parse(init.body));
+      return { ok: res.status < 300, status: res.status, json: async () => res.json };
     };
-    const deps = { supabase, fetch, siteUrl: WEB_ORIGIN, apiBaseUrl: WEB_ORIGIN, clientId: `app-${randomToken(12)}`, deviceLabel: 'iPhone 15' };
+    const clientId = `app-${randomToken(12)}`;
+    const deps: SecretsDeps = { supabase, fetch, apiBase: WEB_ORIGIN, origin: WEB_ORIGIN, tz: () => 'Asia/Kolkata', clientId: () => clientId };
     return { userId, supabase, deps };
   }
 
-  const opts = { ttlSeconds: 3600, views: 1, timer: 30, guard: true, noCopy: true, noSave: true };
+  const parse = (url: string) => {
+    const p = parseSecretLink(url);
+    expect(p, `parseSecretLink(${url.replace(/#.*$/, '#…')})`).not.toBeNull();
+    return p!;
+  };
+  const code = async (p: Promise<unknown>) => {
+    try { await p; } catch (e) { expect(e).toBeInstanceOf(SecretError); return (e as SecretError).code; }
+    return 'resolved';
+  };
 
-  it('app → web, text: the phone creates, the website opens; flags round-trip; second open gone', async () => {
+  const flags = { ttlSeconds: 3600, views: 1, timer: 30, guard: true, noCopy: true, noSave: true };
+
+  it('app → web, text: the phone creates, the website peeks and opens; flags round-trip; the second open is gone', async () => {
     const p = await phone();
     const b = browser();
-    const { id, url } = await mod.createSecret(p.deps, { kind: 'text', text: BODY }, opts);
+    const { id, url } = await createSecret(p.deps, { kind: 'text', text: BODY }, flags);
     expect(url).toMatch(LINK);
     expect(LINK.exec(url)![1]).toBe(id);
     const keyB64 = LINK.exec(url)![2];
     const peeked = await webPeek(b, url);
     expect(peeked!.header).toEqual({ v: 1, type: 'text', timer: 30, guard: true, noCopy: true, noSave: true });
+    expect(peeked!.peek.views_left).toBe(1);
     const opened = await webOpen(b, url, peeked!.header);
-    expect(opened).toMatchObject({ kind: 'text', text: BODY });
+    expect(opened).toMatchObject({ kind: 'text', text: BODY, row: { final: true, views_left: 0 } });
     expect(await webOpen(b, url, peeked!.header)).toEqual({ kind: 'gone' });
-    // The phone's create path sent the server only ciphertext, under its own session.
+    expect(await webPeek(b, url)).toBeNull();
+    // The phone's create path: one create_secret under its own session (so it is logged to the owner), ciphertext only.
     const creates = p.supabase.sql.filter(c => c.fn === 'create_secret');
     expect(creates).toHaveLength(1);
-    expect(await h.count(`select count(*) n from public.secret_log where id = $1 and owner = $2`, [id, p.userId])).toBe(1);
+    expect(creates[0].args.p_header).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(creates[0].args.p_body).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(await h.count(`select count(*) n from public.secret_log where id = $1 and owner = $2 and kind = 'text'`, [id, p.userId])).toBe(1);
     await sweep(forbiddenFor(keyB64, [forbidden('body', BODY)]));
   });
 
-  it('app → web, wifi', async () => {
+  it('app → web, wifi: the template flag and the password survive', async () => {
     const p = await phone();
     const b = browser();
-    const { url } = await mod.createSecret(p.deps, { kind: 'wifi', wifi: WIFI }, { ttlSeconds: 3600, views: 1 });
+    const { url } = await createSecret(p.deps, { kind: 'wifi', wifi: WIFI }, { ttlSeconds: 3600 });
     const peeked = await webPeek(b, url);
-    expect(peeked!.header.tpl).toBe('wifi');
+    expect(peeked!.header).toEqual({ v: 1, type: 'text', tpl: 'wifi', timer: 0 });
     const opened = await webOpen(b, url, peeked!.header);
-    expect(opened).toMatchObject({ kind: 'wifi', wifi: { ssid: WIFI.ssid, password: WIFI.password, security: 'WPA' } });
-    await sweep(forbiddenFor(LINK.exec(url)![2], [forbidden('wifi password', WIFI.password)]));
+    expect(opened).toMatchObject({ kind: 'wifi', wifi: { ssid: WIFI.ssid, password: WIFI.password, security: 'WPA', hidden: false } });
+    expect(await webOpen(b, url, peeked!.header)).toEqual({ kind: 'gone' });
+    await sweep(forbiddenFor(parse(url).keyB64, [forbidden('wifi password', WIFI.password), forbidden('wifi ssid', WIFI.ssid)]));
   });
 
-  it('app → web, file: bytes equal, name and mime in the header, ciphertext removed after the final view', async () => {
+  it('app → web, file: bytes equal, name/mime/size in the header, ciphertext unreadable before and removed after the view', async () => {
     const p = await phone();
     const b = browser();
     const bytes = new Uint8Array(Buffer.from(FILE_BODY, 'utf8'));
-    const file = { name: FILE_NAME, mime: 'text/plain', size: bytes.length, bytes: async () => bytes };
-    const { url } = await mod.createSecret(p.deps, { kind: 'file', file }, { ttlSeconds: 3600, views: 1 });
+    const reads: number[] = [];
+    const file = { name: FILE_NAME, mime: 'text/plain', size: bytes.length, bytes: async () => { reads.push(Date.now()); return bytes; } };
+    const { id, url } = await createSecret(p.deps, { kind: 'file', file }, { ttlSeconds: 3600, guard: true });
+    expect(reads).toHaveLength(1);
     expect(p.supabase.uploads).toHaveLength(1);
+    const filePath = p.supabase.uploads[0];
+    expect(h.objects.get(filePath)!.length).toBe(bytes.length + 12 + 16); // iv + ciphertext + GCM tag
+    expect((await b.supabase.storage.from('secrets').download(filePath)).data).toBeNull();
     const peeked = await webPeek(b, url);
-    expect(peeked!.header).toMatchObject({ type: 'file', name: FILE_NAME, mime: 'text/plain', size: bytes.length });
+    expect(peeked!.header).toEqual({ v: 1, type: 'file', name: FILE_NAME, mime: 'text/plain', size: bytes.length, timer: 0, guard: true });
+    expect(peeked!.peek.kind).toBe('file');
     const opened = await webOpen(b, url, peeked!.header);
     expect(opened.kind).toBe('file');
     if (opened.kind !== 'file') return;
     expect(Buffer.from(opened.bytes).equals(Buffer.from(bytes))).toBe(true);
-    expect(h.objects.has(p.supabase.uploads[0])).toBe(false);
-    await sweep(forbiddenFor(LINK.exec(url)![2], [forbidden('file name', FILE_NAME), forbidden('file body', FILE_BODY)]));
+    expect(h.objects.has(filePath)).toBe(false);
+    expect(await h.count(`select count(*) n from public.secret_log where id = $1 and kind = 'file' and size = $2`, [id, bytes.length])).toBe(1);
+    await sweep(forbiddenFor(parse(url).keyB64, [forbidden('file name', FILE_NAME), forbidden('file body', FILE_BODY)]));
   });
 
-  it('web → app, text: the website creates, the phone peeks then opens; second open refused; expiry refused', async () => {
+  it('web → app, text: the website creates, the phone peeks then opens; second open and expiry are `gone`; the phone sends only the id', async () => {
     const b = browser();
     const p = await phone();
     const { link, id, keyB64 } = await webCreate(b, { kind: 'text', text: BODY }, { ttlSeconds: 3600, timer: 30, guard: true, noCopy: true, noSave: true });
-    if (mod.isSecretLink) expect(mod.isSecretLink(link)).toBe(true);
-    const peek = await mod.peekSecret(p.deps, link);
+    const l = parse(link);
+    expect(l.id).toBe(id);
+    expect(l.keyB64).toBe(keyB64);
+    const peek = await peekSecret(p.deps, l.id, l.keyB64);
     expect(peek.header).toEqual({ v: 1, type: 'text', timer: 30, guard: true, noCopy: true, noSave: true });
-    expect(peek.viewsLeft).toBe(1);
-    expect(peek.locked).toBe(false);
-    const opened = await mod.openSecret(p.deps, link);
-    expect(opened).toMatchObject({ kind: 'text', text: BODY, header: { guard: true, timer: 30, noCopy: true, noSave: true } });
-    await expect(mod.openSecret(p.deps, link)).rejects.toThrow();
-    // The phone sent the server only the id.
-    for (const req of phoneRequests) expect(Object.keys(JSON.parse(req)).every(k => ['id', 'precise', 'unlockToken'].includes(k)), req).toBe(true);
+    expect(peek).toMatchObject({ kind: 'text', viewsLeft: 1, maxViews: 1, locked: false, lockHint: null, notYet: null });
+    expect(await h.count(`select count(*) n from public.secrets where id = $1`, [id])).toBe(1); // peek does not burn
+    const opened = await openSecret(p.deps, l.id, l.keyB64);
+    expect(opened).toMatchObject({ kind: 'text', text: BODY, final: true, viewsLeft: 0, header: { guard: true, timer: 30, noCopy: true, noSave: true } });
+    expect(await h.count(`select count(*) n from public.secrets where id = $1`, [id])).toBe(0);
+    expect(await code(openSecret(p.deps, l.id, l.keyB64))).toBe('gone');
+    expect(await code(peekSecret(p.deps, l.id, l.keyB64))).toBe('gone');
     // Expiry, seen from the phone.
     const second = await webCreate(b, { kind: 'text', text: BODY }, { ttlSeconds: 300 });
+    const l2 = parse(second.link);
+    expect((await peekSecret(p.deps, l2.id, l2.keyB64)).kind).toBe('text');
     await h.expire(second.id);
-    await expect(mod.peekSecret(p.deps, second.link)).rejects.toThrow();
-    await expect(mod.openSecret(p.deps, second.link)).rejects.toThrow();
-    void id;
-    await sweep([...forbiddenFor(keyB64, [forbidden('body', BODY)]), forbidden('key 2', second.keyB64)]);
-    expectClean(phoneRequests.join('\n'), forbiddenFor(keyB64, [forbidden('body', BODY)]), 'phone request bodies');
+    expect(await code(peekSecret(p.deps, l2.id, l2.keyB64))).toBe('gone');
+    expect(await code(openSecret(p.deps, l2.id, l2.keyB64))).toBe('gone');
+    // Wrong key: refused on the phone before any RPC (bad_key), and a mismatching key cannot read the header.
+    const before = h.allSql.length;
+    expect(await code(peekSecret(p.deps, l2.id, 'A'.repeat(40)))).toBe('bad_key');
+    expect(h.allSql.length).toBe(before);
+    // Every phone request carried only the id (and the optional precise/unlockToken fields).
+    expect(phoneRequests.length).toBeGreaterThan(0);
+    for (const req of phoneRequests) {
+      const o = JSON.parse(req) as Record<string, unknown>;
+      expect(Object.keys(o).every(k => ['id', 'precise', 'unlockToken'].includes(k)), req).toBe(true);
+      expect(o.id).toMatch(/^[A-Za-z0-9]{10}$/);
+    }
+    await sweep([...forbiddenFor(keyB64, [forbidden('body', BODY)]), ...forbiddenFor(second.keyB64)]);
+    expectClean(phoneRequests.join('\n'), [...forbiddenFor(keyB64, [forbidden('body', BODY)]), ...forbiddenFor(second.keyB64)], 'phone request bodies');
   });
 
-  it('web → app, wifi and file', async () => {
+  it('web → app, wifi and a 2-view file: both views decrypt to the same bytes, the third is gone', async () => {
     const b = browser();
     const p = await phone();
     const w = await webCreate(b, { kind: 'wifi', wifi: WIFI }, { ttlSeconds: 3600 });
-    expect(await mod.openSecret(p.deps, w.link)).toMatchObject({ kind: 'wifi', wifi: { ssid: WIFI.ssid, password: WIFI.password } });
+    const lw = parse(w.link);
+    expect((await peekSecret(p.deps, lw.id, lw.keyB64)).header.tpl).toBe('wifi');
+    expect(await openSecret(p.deps, lw.id, lw.keyB64)).toMatchObject({ kind: 'wifi', wifi: { ssid: WIFI.ssid, password: WIFI.password, security: 'WPA' } });
     const bytes = new Uint8Array(Buffer.from(FILE_BODY, 'utf8'));
     const f = await webCreate(b, { kind: 'file', name: FILE_NAME, mime: 'text/plain', bytes }, { ttlSeconds: 3600, views: 2 });
-    const first = await mod.openSecret(p.deps, f.link);
-    expect(first.kind).toBe('file');
+    const lf = parse(f.link);
+    const filePath = b.supabase.uploads[0];
+    expect((await peekSecret(p.deps, lf.id, lf.keyB64))).toMatchObject({ kind: 'file', viewsLeft: 2, maxViews: 2 });
+    const first = await openSecret(p.deps, lf.id, lf.keyB64);
+    expect(first).toMatchObject({ kind: 'file', name: FILE_NAME, mime: 'text/plain', final: false, viewsLeft: 1 });
     if (first.kind !== 'file') return;
     expect(Buffer.from(first.bytes).equals(Buffer.from(bytes))).toBe(true);
-    expect(first).toMatchObject({ name: FILE_NAME, mime: 'text/plain' });
-    // Second of two views: still readable, then gone.
-    const second = await mod.openSecret(p.deps, f.link);
-    expect(second.kind).toBe('file');
-    await expect(mod.openSecret(p.deps, f.link)).rejects.toThrow();
+    expect(h.objects.has(filePath)).toBe(true); // not the last view: the ciphertext stays
+    const second = await openSecret(p.deps, lf.id, lf.keyB64);
+    expect(second).toMatchObject({ kind: 'file', final: true, viewsLeft: 0 });
+    if (second.kind !== 'file') return;
+    expect(Buffer.from(second.bytes).equals(Buffer.from(bytes))).toBe(true);
+    expect(await code(openSecret(p.deps, lf.id, lf.keyB64))).toBe('gone');
     await sweep([
       ...forbiddenFor(w.keyB64, [forbidden('wifi password', WIFI.password)]),
       ...forbiddenFor(f.keyB64, [forbidden('file name', FILE_NAME), forbidden('file body', FILE_BODY)]),
     ]);
+  });
+
+  it('app → app: a phone-made link opens on another phone exactly once', async () => {
+    const a = await phone();
+    const c = await phone();
+    const { url } = await createSecret(a.deps, { kind: 'text', text: BODY }, { ttlSeconds: 3600 });
+    const l = parse(url);
+    expect(await openSecret(c.deps, l.id, l.keyB64)).toMatchObject({ kind: 'text', text: BODY, final: true });
+    expect(await code(openSecret(a.deps, l.id, l.keyB64))).toBe('gone');
+    await sweep(forbiddenFor(l.keyB64, [forbidden('body', BODY)]));
+  });
+
+  it('the phone refuses what the website refuses: lifetime under 5 minutes, empty text', async () => {
+    const p = await phone();
+    expect(await code(createSecret(p.deps, { kind: 'text', text: BODY }, { ttlSeconds: 60 }))).toBe('invalid_expiry');
+    expect(await code(createSecret(p.deps, { kind: 'text', text: '   ' }, { ttlSeconds: 3600 }))).toBe('empty');
+    expect(p.supabase.sql.filter(c => c.fn === 'create_secret')).toHaveLength(0);
   });
 });

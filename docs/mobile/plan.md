@@ -161,7 +161,12 @@ screenshots on Android, blanked recording on iOS, lock works, no open high findi
 | B5 | backend | Report-chat endpoint (ids only), additive RPC if needed |
 | Q5 | qa | Cross-platform secret tests: app → web, web → app; link routing with and without the app; share from Photos and Files |
 
-Gate 2 as in the prompt.
+Gate 2 (reconstructed by the lead on 2026-11-01; the build prompt file is no longer on this Mac, so the human confirms
+the wording at the gate): a one-time secret made in the app opens on the website and one made on the website opens in
+the app (text, Wi-Fi, file; views burn, expiry holds); `onepeek.io/s/...` and `/chat/join` links open the app when it
+is installed and the website when it is not, with the fragment never leaving the device; sharing from Photos and Files
+into the app works on both platforms; the QR scanner handles invites, secrets and safety numbers; report-chat sends ids
+only; no open high findings.
 
 ## 5. Phase 3: hardening and beta (target 3 weeks)
 

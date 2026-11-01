@@ -4,6 +4,11 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- W3 fixes merged (W3-1 hidden Secret parent never quoted in a sent bubble; W3-2 the invite link unmasks only when
+  `extra.e2e` is true, which only the `e2e` EAS profile sets; W3-4 `treeText()` deny-list; W3-5 no backend call between
+  `verifyOtp` and the login-CSRF sign-out). Totals: web 123, core 194, mobile 203; 17 flows clean. **Gate 1 reached:**
+  `docs/mobile/gates/phase-1.md` written. Stopping for human approval; nothing pushed (PAT lacks `workflow`), nothing
+  applied to production, no accounts created.
 - security-reviewer close-out `phase-1-close-out.md`: no open high or critical; W2-1/2/3/5/7/8/10, W1-10 and the backend
   test gaps closed with tests; W2-4 closed by decision; W2-6 partial (guard relies on an EAS-only variable). **New
   medium W3-1:** a sent reply quotes the hidden Secret parent's text in the sender's bubble (same on the web). Lows

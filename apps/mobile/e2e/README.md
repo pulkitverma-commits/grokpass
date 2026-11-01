@@ -10,6 +10,10 @@ Phase 2 flows use the `secret.*`, `link.<id>`, `viewer.peek|open|revealed|timer`
 ids proposed in `TESTIDS.md` ("Phase 2 proposed"); until mobile-ui lands them (U8) every such step is dry
 and `check-flows.mjs` lists it (`23 flows, 226 ids in TESTIDS.md (59 proposed)`, `flows OK`).
 
+Phase 3 adds `scripts/check-a11y.mjs` (`node apps/mobile/e2e/scripts/check-a11y.mjs`, `--strict` to exit 1): a static
+scan of `app/` and `components/` for pressables without `accessibilityLabel` / `accessibilityRole`; its findings go to
+mobile-ui and the per-screen checklist is `docs/mobile/test-plan.md` §12.
+
 **Status 2026-10-31 (wave 2): written and statically checked, not run.** This Mac has no Xcode,
 Android Studio, Java or Maestro (`docs/mobile/log.md`), and there is no device build yet (EAS
 account pending). What was checked: every file parses as YAML, every `id:` exists in `TESTIDS.md`

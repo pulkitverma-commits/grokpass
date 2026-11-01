@@ -256,6 +256,70 @@ Console service account) is likewise deferred.
 
 ---
 
+## Part C: Phase 3 (beta and store submission), added 2026-11-01
+
+Order: C1 (entity / D-U-N-S, if not settled in A2/B4) → C2 and C3 in parallel → C4 → C5 → C6. The runbook
+for the uploads themselves is `beta-runbook.md`; the texts to paste are in `apps/mobile/store/**`.
+
+### C1. Entity decision and D-U-N-S number (only if not already done for A2 / B4)
+
+| | |
+| --- | --- |
+| **Where to click** | Apple: the D-U-N-S lookup/request tool is linked from https://developer.apple.com/enroll/duns-lookup/ ; Google Play Organization accounts ask for a D-U-N-S number at signup (B4). Dun & Bradstreet issues it free; Apple says allow up to two weeks. The legal entity's registered name and address must match what the stores show. |
+| **Bring back** | The D-U-N-S number (public), the exact legal name for the stores' seller field and the copyright line in `apps/mobile/store/app-store/listing.md`. |
+| **Costs** | Free (D-U-N-S); the Apple and Play fees are A2 and B4. A Personal Play account instead needs the closed-test period before production (runbook §3.5). |
+| **Unblocks** | Organization enrolment for both stores; otherwise the human's own name is the seller. |
+
+### C2. App Store Connect: complete the 1.0 record
+
+| | |
+| --- | --- |
+| **Where to click** | https://appstoreconnect.apple.com → Apps → OnePeek (created in B6). (1) **App Information**: subtitle, categories, content rights, age rating questionnaire, Privacy Policy URL → `apps/mobile/store/app-store/listing.md`. (2) **App Privacy** → `privacy-labels.md` (after the adviser confirms the two judgement calls). (3) **App Information → App Encryption Documentation** → `export-compliance.md` (after the adviser confirms). (4) **1.0 Prepare for Submission**: promotional text, description, keywords, support and marketing URLs, what's new, screenshots (`screenshots.md`, once a build exists), App Review Information → `review-notes.md`, "Sign-in required: No". (5) **TestFlight → Test Information** (for external beta): the same notes. (6) **Users and Access** → add the lead as **Developer** or **App Manager** only if you want them to see build status; they still cannot submit without your Apple ID. |
+| **Bring back** | The numeric Apple ID of the app (if not already in `eas.json` from B6) and the Team ID → `apps/mobile/eas.json` `submit.production.ios.ascAppId` / `appleTeamId`, committed by the lead. |
+| **Costs** | Included in A2. |
+| **Unblocks** | `eas submit` iOS, TestFlight external beta, App Store review. |
+
+### C3. Google Play Console: complete the app record and App content
+
+| | |
+| --- | --- |
+| **Where to click** | https://play.google.com/console → OnePeek (B4). **Grow → Store presence → Main store listing** and **Store settings** → `apps/mobile/store/play/listing.md` (icon 512², feature graphic 1024×500, phone screenshots). **Policy → App content**: Privacy policy URL, App access (`review-notes.md`, Play section), Ads (No), Content rating questionnaire (`content-rating.md`), Target audience (`target-audience.md`, 18+), News app (No), Data safety (`data-safety.md`, after the adviser confirms the E2EE exemption reading), Government app (No), Financial features (No), Health (No). **Test and release → Testing → Internal testing**: the first AAB is uploaded by hand (runbook §3.2). After the first upload: **Setup → App signing** → SHA-256 → Vercel `ANDROID_SHA256_CERT_FINGERPRINTS` (B3) and SHA-1 → Google OAuth Android client (B5). Optional for `eas submit`: service account (runbook §3.3). |
+| **Bring back** | Play App Signing SHA-256 and SHA-1; confirmation that the App content items show "Complete". |
+| **Costs** | Included in B4. Internal and closed testing are free. |
+| **Unblocks** | Internal testing (no review), closed testing (needs App content complete), production (Personal accounts: after the closed-test period). |
+
+### C4. Review counterpart on onepeek.io (the "review account")
+
+| | |
+| --- | --- |
+| **What** | The app has no password login (Apple, Google, email link, guest), so there is no username/password to give App Review. The review path in `review-notes.md` is the **guest path** plus a counterpart you run: a **Business Room created on onepeek.io** (or on a team phone) whose invite link and access code you paste into the review notes on the day of submission, and whose owner device stays signed in so you can "Let in" the reviewer (owner-only admission). Rooms live at most 7 days, so create it when you submit and recreate it if review takes longer. Also create one harmless **one-time text secret** on onepeek.io and paste its link if you want the reviewer to try the Universal Link path; it burns after one view, so expect to recreate it. |
+| **Where to click** | https://onepeek.io/chat → New chat → Business Room → invite link + access code; https://onepeek.io → Send secrets → text → Create secure link. Sign in on the web with the account you want to own the review room (your own; never share its credentials). |
+| **Bring back** | The invite link and code, into App Store Connect → App Review Information → Notes (and Play → App access instructions). **Never into the repo**, not even as a placeholder value. |
+| **Decision for you** | If Apple rejects "no credentials" (guideline 2.1 asks for a demo account when account features exist), the options are: add an email **code** (OTP) sign-in to the app so a mailbox you control can be used by the reviewer (product change, lead), or accept Sign in with Apple with the reviewer's own Apple ID as the account path and say so. Decide before the first external TestFlight submission, which uses the same notes. |
+| **Costs** | None. |
+| **Unblocks** | Beta App Review, App Store review, Play App access declaration. |
+
+### C5. Adviser sign-off and the privacy policy
+
+| | |
+| --- | --- |
+| **What** | (1) A trade-compliance / legal adviser confirms `apps/mobile/store/app-store/export-compliance.md` (5D992.c, §740.17(b)(1), the France question, who files the 1 February BIS self-classification report for an India-based developer) and the two privacy-label judgement calls (`privacy-labels.md`, `play/data-safety.md`). (2) The web owner publishes `docs/mobile/release/privacy-policy-additions.md` on https://onepeek.io/privacy and the **account deletion page** it describes (Apple 5.1.1(v), Play account-deletion policy); the lead links it from the app's Settings. |
+| **Bring back** | The adviser's written answers → one line each in `docs/mobile/log.md`; the live privacy and deletion URLs → App Store Connect and Play Console. |
+| **Costs** | The adviser's fee. Nothing else. |
+| **Unblocks** | Entering the encryption answers (removes "Missing Compliance" on TestFlight builds), App Privacy, Data safety, external beta, store review. |
+
+### C6. Lead-side fixes the store material assumes (not yours to do, listed so you can ask for them)
+
+- `app.config.ts`: `['expo-camera', { recordAudioAndroid: false, microphonePermission: false }]` and `['expo-image-picker', { microphonePermission: false }]` so the build declares no `RECORD_AUDIO` and no microphone usage string (`apps/mobile/store/play/permissions.md`).
+- The app's secret viewer tells the viewer when a link's sender turned on "Show me where it's opened", as the web viewer does (mobile-ui; `privacy-labels.md` Coarse Location row).
+- `apps/mobile/eas.json` `submit.production.ios` placeholders replaced with the public values from C2.
+- Optional: "Delete account" row in Settings linking to the deletion page from C5.
+
+**Phase 3 costs at a glance:** Play Console US$25 (if not paid in B4), adviser fee, nothing else fixed; EAS
+paid month only with your OK (runbook §6).
+
+---
+
 ## Values summary: what goes where
 
 | Value | Public? | Destination |

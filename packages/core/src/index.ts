@@ -2,6 +2,8 @@
 // (lib/crypto.ts, lib/chat/*.ts); apps/mobile imports the package by name.
 
 export * from './crypto';
+export * from './time';
+export * from './secrets';
 export * as mls from './chat/mls';
 export * from './chat/ports';
 export { pack, unpack, seal, unseal, isExpired, type Sealed } from './chat/keystore';

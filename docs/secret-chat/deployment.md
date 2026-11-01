@@ -97,6 +97,32 @@ Security review wave 1 (`docs/mobile/security-review/phase-1-wave-1.md`), folded
 - **W1-3** — tokens must be 32–512 chars of `[A-Za-z0-9:_-]` (else `bad_token`, also a table check); each owner is trimmed to their 10 most recently seen tokens after every registration; `pushToNative` reads at most 10 (`order last_seen desc limit 10`) and sends 10 requests at a time instead of all at once. Both RPCs run with `search_path = ''` and schema-qualified names.
 - **W1-5** — `nodeHttp2Request` always settles: `close`/`timeout` on the stream and the session reject (or resolve with the status already seen), the session has an idle timeout, and a 15 s hard deadline rejects and destroys the session, so one slow APNs stream can no longer hang `/api/chat/notify`.
 
+### Migration 009 (`supabase/migrations/009_chat_reports.sql`) — Phase 2, report a chat
+
+Apply **after 008**. Adds `public.chat_reports` (id, room, reporter, reason, created_at; `unique (room, reporter)`;
+RLS on, **no grants to `anon`/`authenticated` at all**, service role only) and one RPC the app calls through
+`POST /api/chat/report { room, reason }`: `report_chat(p_room uuid, p_reason text)` (`authenticated` only,
+`search_path = ''`). The caller must be a current member by 006's own `chat_is_member` predicate (else
+`not_a_member`), `reason` is one of `spam | abuse | illegal | other` (else `bad_reason`), a second report of the
+same room updates the row, and a reporter is capped at 20 rooms per rolling day (`too_many_reports`). The route
+calls the RPC with the caller's own session, so those checks run in SQL; it forwards nothing but the two ids.
+Nothing else is stored: no message text, nicknames, device ids or file names (the server never has them).
+Tested in PGlite (`supabase/tests/chat-reports.test.ts`, down/up/down) and in the schema-history replay.
+
+```sql
+select count(*) from pg_tables where schemaname = 'public' and tablename = 'chat_reports';  -- 1
+select proname from pg_proc where proname = 'report_chat';  -- 1 row
+```
+
+Reports are **reviewed by a human** who reads the table with the service role (SQL editor, or a service-role
+client) and has no access to any content, because there is none on the server:
+
+```sql
+select created_at, room, reporter, reason from public.chat_reports order by created_at desc limit 100;
+```
+
+Rollback: run `009_chat_reports_down.sql`. It drops the table (all reports) and the RPC, nothing else; 006–008 are untouched.
+
 ### Vercel env (server only, never in the app or `apps/mobile`)
 
 | Variable | What | Where it comes from |

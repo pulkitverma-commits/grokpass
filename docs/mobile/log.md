@@ -4,6 +4,17 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- backend (B5) merged: migration `009_chat_reports` (+down; table service-role only, no policies), RPC `report_chat`
+  (member check via 006's `chat_is_member`, reason enum, 20/day cap, upsert per room+reporter), route
+  `POST /api/chat/report` with the caller's bearer (anon key + session; exactly `{ p_room, p_reason }` forwarded).
+  13 PGlite + 6 route tests; web 142. Not applied anywhere.
+- core-crypto (C4) merged: `packages/core/src/secrets.ts` (create/peek/open/unlock, byte-for-byte the web's header,
+  ciphertext, `create_secret` args incl. the offset-timezone retry, `/api/open` body and error codes; file ciphertext in
+  the `secrets` bucket as on the web), `src/time.ts` moved from `lib/time.ts` (web re-exports, zero behaviour change),
+  `apps/mobile/lib/secrets.ts` implemented with a widened contract (wifi input, unlock-code helpers, `SecretError`,
+  superset peek/open types), client id for the free quota in SecureStore (not wiped by reset: quota identity, lead
+  decision), `auth.setForeground()` for Supabase token refresh. Core 275, mobile 230. Geofenced links stay
+  website-only in the app (no expo-location); told mobile-ui and qa.
 - **Human approved Gate 1 with device verification deferred** (2026-11-01). Phase 2 starts: C4 secrets in core,
   U8 (send-as-secret sheet, share target, QR scanner, block member, report chat), N6 (share extension / share intent,
   FLAG_SECURE on the secret viewer, Universal Links with the fragment on device), B5 (report endpoint, ids only), Q5

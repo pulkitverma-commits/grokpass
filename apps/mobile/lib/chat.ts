@@ -5,11 +5,15 @@
 //
 // Contract:
 // - getChat(): the single ChatClient for this app (Supabase + RN keystore + RN platform).
+// - getSupabase(): the same Supabase client, for lib/secrets (create_secret / peek_secret and the
+//   `secrets` bucket); null when the app is not configured.
 // - getLockStore(): the panic-lock flag store (SecureStore, this device only).
 // - auth: session helpers. Sign-in with Apple (identity token + nonce), Google through the system
 //   browser (startOAuth returns the URL, completeFromUrl finishes with the onepeek://auth callback),
 //   email link (also completed by completeFromUrl; the link is bound to the address requested on this
-//   phone, review W1-1), guest (anonymous), sign out.
+//   phone, review W1-1), guest (anonymous), sign out. setForeground(active) starts / stops the
+//   session auto-refresh with the AppState (the Expo-documented pattern: on React Native supabase-js
+//   has no `window` focus events, so the root layout drives it).
 // - push: this phone's push token. register() calls the core RPC and keeps the token sealed in the auth
 //   store; unregister() forgets it server-side first. signOut() and resetThisPhone() unregister before
 //   the session goes, so a token never outlives the account that registered it (review W1-2).
@@ -114,6 +118,11 @@ function get(): Built {
 
 export function getChat(): ChatClient {
   return get().chat;
+}
+
+/** The app's Supabase client for modules outside chat (lib/secrets). Null when not configured. */
+export function getSupabase(): SupabaseClient | null {
+  return get().supabase;
 }
 
 export function getLockStore(): RnLockStore {
@@ -251,6 +260,20 @@ export const auth = {
 
   async signInAsGuest(): Promise<void> {
     await getChat().ensureSession(true);
+  },
+
+  /**
+   * Called by the root layout from AppState: `true` when the app comes to the foreground, `false`
+   * when it goes to the background. supabase-js refreshes the session on a timer only while this
+   * is on (`startAutoRefresh` / `stopAutoRefresh`), so a phone that was in the background for
+   * hours refreshes as soon as it is back, and no timer runs while suspended. A no-op when the app
+   * is not configured.
+   */
+  setForeground(active: boolean): void {
+    const s = get().supabase;
+    if (!s) return;
+    if (active) s.auth.startAutoRefresh();
+    else s.auth.stopAutoRefresh();
   },
 
   /**

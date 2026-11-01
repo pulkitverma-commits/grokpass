@@ -543,3 +543,16 @@ describe('without Supabase configuration', () => {
     }
   });
 });
+
+describe('auth.setForeground', () => {
+  it('starts the session auto-refresh when the app is active and stops it in the background', () => {
+    getChat();
+    sbMock.__calls.length = 0;
+    auth.setForeground(true);
+    auth.setForeground(false);
+    auth.setForeground(true);
+    expect(sbMock.__calls.map(c => c.method)).toEqual(['startAutoRefresh', 'stopAutoRefresh', 'startAutoRefresh']);
+    // Nothing else is touched: no RPC, no table, no bucket.
+    expect(nonRpcCalls()).not.toMatch(/"from"|"storage|"channel"/);
+  });
+});

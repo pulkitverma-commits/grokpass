@@ -12,6 +12,8 @@ export function createFakeSupabase(fn: typeof jest.fn) {
   const clients: Record<string, unknown>[] = [];
   const otp = { email: 'owner@example.test' };
   const failRpc = new Set<string>();
+  // RPC names in `__rpcAnswers` are answered by the given function (lib/secrets tests).
+  const rpcAnswers = new Map<string, (args: Record<string, unknown>) => unknown>();
   const createClient = fn((url: string, key: string, opts: { auth: { storage: Storage } }) => {
     const storage = opts.auth.storage;
     const STORAGE_KEY = 'sb-xyzcompany-auth-token';
@@ -55,19 +57,31 @@ export function createFakeSupabase(fn: typeof jest.fn) {
         async signInAnonymously() { rec('signInAnonymously'); session = newSession({ id: 'guest-user', is_anonymous: true }); await persist(); return { data: { session }, error: null }; },
         async signOut(o: unknown) { rec('signOut', o); session = null; await persist(); return { error: null }; },
         stopAutoRefresh() { rec('stopAutoRefresh'); },
+        startAutoRefresh() { rec('startAutoRefresh'); },
         passkey: { list: async () => ({ data: [] }) },
         async signInWithPasskey() { return { error: null }; },
       },
       async rpc(fn: string, args: Record<string, unknown>) {
         rec('rpc', fn, args);
         if (failRpc.has(fn)) return { data: null, error: { message: 'rpc_failed' } };
+        const answer = rpcAnswers.get(fn);
+        if (answer) return { data: answer(args), error: null };
         if (fn === 'chat_register_device') return { data: 'device-1', error: null };
         return { data: null, error: null };
       },
       // Table, bucket and realtime access are recorded like `rpc` so a test can prove nothing touched
       // the backend in a given window (W3-5); none of them is answered.
       from(table: string) { rec('from', table); throw new Error('unused'); },
-      storage: { from: (bucket: string) => { rec('storage.from', bucket); return { upload: async () => ({ error: null }), download: async () => ({ data: null, error: { message: 'none' } }) }; } },
+      storage: {
+        from: (bucket: string) => {
+          rec('storage.from', bucket);
+          return {
+            upload: async (...a: unknown[]) => { rec('storage.upload', bucket, ...a); return { error: null }; },
+            download: async (...a: unknown[]) => { rec('storage.download', bucket, ...a); return { data: null, error: { message: 'none' } }; },
+            remove: async (...a: unknown[]) => { rec('storage.remove', bucket, ...a); return { data: [], error: null }; },
+          };
+        },
+      },
       channel: (name: string) => { rec('channel', name); throw new Error('unused'); },
       removeChannel: () => {},
       realtime: { setAuth: () => {} },
@@ -75,5 +89,5 @@ export function createFakeSupabase(fn: typeof jest.fn) {
     clients.push(client);
     return client;
   });
-  return { __esModule: true, createClient, __calls: calls, __clients: clients, __otp: otp, __failRpc: failRpc };
+  return { __esModule: true, createClient, __calls: calls, __clients: clients, __otp: otp, __failRpc: failRpc, __rpcAnswers: rpcAnswers };
 }

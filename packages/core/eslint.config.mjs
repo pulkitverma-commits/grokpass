@@ -115,7 +115,7 @@ export default tseslint.config(
   },
   {
     // The platform-neutral core reaches the browser only through the ports in chat/ports.ts.
-    files: ['src/chat/**/*.ts', 'src/crypto.ts'],
+    files: ['src/chat/**/*.ts', 'src/crypto.ts', 'src/secrets.ts', 'src/time.ts'],
     rules: {
       'no-restricted-globals': [
         'error',
@@ -141,7 +141,7 @@ export default tseslint.config(
   },
   {
     // Flat config replaces a rule's options wholesale, so each narrower block restates the leak guard.
-    files: ['src/chat/**/*.ts', 'src/crypto.ts', 'src/adapters/rn/**/*.ts'],
+    files: ['src/chat/**/*.ts', 'src/crypto.ts', 'src/secrets.ts', 'src/time.ts', 'src/adapters/rn/**/*.ts'],
     rules: {
       'no-restricted-syntax': ['error', GLOBAL_THIS_GUARD, ...LEAK_GUARD],
     },

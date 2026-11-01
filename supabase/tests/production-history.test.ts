@@ -33,8 +33,12 @@ describe('production schema history', () => {
   it('applies every migration in order, including Secret Chat', async () => {
     expect(migrations).toContain('006_secret_chat.sql');
     expect(migrations).toContain('007_block_anonymous_accounts.sql');
-    const n = (await db.query<any>(`select count(*)::int n from pg_tables where schemaname = 'public' and tablename like 'chat_%'`)).rows[0].n;
+    expect(migrations).toContain('009_chat_reports.sql');
+    // 006's twelve chat_* tables, plus 009's chat_reports (mobile Phase 2, report a chat).
+    const n = (await db.query<any>(`select count(*)::int n from pg_tables where schemaname = 'public' and tablename like 'chat_%' and tablename <> 'chat_reports'`)).rows[0].n;
     expect(n).toBe(12);
+    const reports = (await db.query<any>(`select count(*)::int n from pg_tables where schemaname = 'public' and tablename = 'chat_reports'`)).rows[0].n;
+    expect(reports).toBe(1);
   });
 
   it('leaves the existing OnePeek tables in place', async () => {

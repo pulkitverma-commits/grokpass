@@ -4,6 +4,21 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- qa (Phase 3) merged: device matrix (§10: iPhone 16, iPhone 11 on iOS 17, Redmi 13C, Galaxy A35, Pixel 8/9; build
+  floors read from the SDK: iOS 16.4, Android minSdk 24), performance and offline core tests (12, one `it.fails`
+  target for P3-Q1), accessibility checklist and `check-a11y.mjs`, Gate 3 map (§13). Findings routed: P3-Q1..Q4 to
+  core-crypto (state saved per row, single-page sync, no resubscribe, no stable network code), a11y A1/A2/P3-A1 and
+  the key-changed row label to mobile-ui. Decisions on its questions: iPhone 11 on iOS 17 accepted with the 16.4 floor
+  marked untested (human may source an iOS 16 phone); Play device catalogue excludes API < 29 so the tested and
+  installable floors agree (release, at upload time); `lib/perf.ts` and a perf variant of the preview profile
+  deferred until a device build exists.
+- Usage limit cut off two agents mid-run; lead switched model to Opus 5.5 and relaunched both (the low-fix agent
+  resumed from its uncommitted tree). Low fixes merged: hand-off TTL 30 s + cleared on relock/reset, Join prefers the
+  link token (P3-2); per-share nonce directories written by the Kotlin module, consume deletes only its own share,
+  launch sweep skips fresh files (P3-3); substring link routing in the share bridge (P3-5); per-share byte budget
+  (P3-6); pending email address sealed in SecureStore so an email link completes after a cold start (W1-1 residual).
+  Mobile 420. Running: core sync hardening (P3-Q1..Q5), full-report app fixes (F-1 sign-out wipes like the web, F-2
+  wording, F-4 QR behind a tap, F-7 reset not deep-linkable, F-9 duplicate notify, a11y, location notice).
 - release (Phase 3) merged: App Store listing, privacy labels, review notes, export-compliance draft (every answer
   marked for a human adviser), screenshot plan; Play listing, Data safety, content rating, permissions, target
   audience; `beta-runbook.md`; privacy-policy additions; checklist Part C. Honest-copy decisions recorded in its

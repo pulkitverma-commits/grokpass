@@ -2,6 +2,16 @@
 
 Newest first. One line per decision, blocker or agent report.
 
+## 2026-11-01
+
+- security-reviewer close-out `phase-1-close-out.md`: no open high or critical; W2-1/2/3/5/7/8/10, W1-10 and the backend
+  test gaps closed with tests; W2-4 closed by decision; W2-6 partial (guard relies on an EAS-only variable). **New
+  medium W3-1:** a sent reply quotes the hidden Secret parent's text in the sender's bubble (same on the web). Lows
+  W3-2 (E2E guard should fail closed on the `e2e` profile only), W3-3 (sink lint blind spots: Sharing, Notifications,
+  MediaLibrary; name-based), W3-4 (`treeText()` allow-list), W3-5 (core-side W2-9 test). Dispatched W3-1, W3-2 (fail
+  closed via `extra.e2e`), W3-4, W3-5 to one fix branch; W3-3 to qa in Phase 2. Consolidated open lows are listed in
+  the report; the web parity items (reply preview and parent quote) go to the human as a web change.
+
 ## 2026-10-31
 
 - Wave 2 review fixes merged: backend W2-5 (`push_devices` grants select/delete only) and the four §1.5 test gaps

@@ -68,5 +68,14 @@
     "lint": "eslint .",
     "test": "jest --passWithNoTests"
   },
-  "private": true
+  "private": true,
+  "expo": {
+    "autolinking": {
+      "android": {
+        "exclude": [
+          "expo-share-intent"
+        ]
+      }
+    }
+  }
 }

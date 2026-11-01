@@ -370,3 +370,31 @@ test('recipient lock: the server saying recipient_locked on open resets the code
   expect(screen.getByTestId('sview.lockEmail')).toBeTruthy();
   expect(screen.getByTestId('sview.open').props.accessibilityState.disabled).toBe(true);
 });
+
+describe('location notice (release finding: the sender asked to see where it is opened)', () => {
+  const NOTICE = 'The sender asked to see where this is opened. OnePeek on this phone never reads your location, so opening shares only an approximate city from your network.';
+
+  test('shown before Open when the peek carries shareLocation; Open still works and sends no location', async () => {
+    mockLinking.url = SECRET_URL;
+    secrets.peekSecretLink.mockResolvedValueOnce({ ...peek(), shareLocation: true, fence: null } as never);
+    await renderScreen(<SecretViewerRoute />);
+    expect(await screen.findByTestId('sview.open')).toBeTruthy();
+    expect(screen.getByTestId('sview.location')).toBeTruthy();
+    expect(screen.getByText(NOTICE)).toBeTruthy();
+    expect(screen.getByText('shares location')).toBeTruthy();
+    expect(secrets.openSecretLink).not.toHaveBeenCalled();
+    await fireEvent.press(screen.getByTestId('sview.open'));
+    await waitFor(() => expect(secrets.openSecretLink).toHaveBeenCalledWith(SECRET_URL));
+    // The app has no precise option: whatever the screen passes, it is never coordinates.
+    expect(JSON.stringify(secrets.openSecretLink.mock.calls[0])).not.toMatch(/lat|lon|accuracy/);
+  });
+
+  test('absent when the sender did not ask', async () => {
+    mockLinking.url = SECRET_URL;
+    secrets.peekSecretLink.mockResolvedValueOnce({ ...peek(), shareLocation: false, fence: null } as never);
+    await renderScreen(<SecretViewerRoute />);
+    expect(await screen.findByTestId('sview.open')).toBeTruthy();
+    expect(screen.queryByTestId('sview.location')).toBeNull();
+    expect(screen.queryByText('shares location')).toBeNull();
+  });
+});

@@ -3,7 +3,7 @@
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
-import { AUTH_REDIRECT_URL, auth, getChat, getLockStore, parseAuthCallback, PENDING_EMAIL_KEY, push, resetThisPhone, type AuthSession } from '../chat';
+import { AUTH_REDIRECT_URL, auth, getChat, getLockStore, getSupabase, parseAuthCallback, PENDING_EMAIL_KEY, push, resetThisPhone, type AuthSession } from '../chat';
 import { stashHandoff, takeHandoff } from '../links';
 import { CLIENT_ID_KEY, getClientId, resetClientIdCache } from '../secrets';
 import type { FakeSqlite } from './fake-sqlite';
@@ -493,8 +493,10 @@ describe('auth', () => {
       expect(disk).not.toContain(hex(secret));
       expect(disk).not.toContain(b64(secret));
     }
-    // SecureStore holds only the two wrapping keys (chat, auth); the auth one is this-device-only.
-    expect([...secureItems.keys()].sort()).toEqual(['onepeek.wrap', 'onepeek.wrap.auth']);
+    // SecureStore holds only the wrapping keys (auth, and chat once anything was stored: sign-out
+    // deletes the chat one, F-1); the auth one is this-device-only.
+    expect([...secureItems.keys()]).toContain('onepeek.wrap.auth');
+    for (const k of secureItems.keys()) expect(['onepeek.wrap', 'onepeek.wrap.auth']).toContain(k);
     await auth.signOut();
     expect(authDb.sealed.size).toBe(0);
   });
@@ -604,6 +606,74 @@ describe('push', () => {
     expect(order.indexOf('rpc:unregister_push_device')).toBeLessThan(order.indexOf('signOut'));
     expect(sqliteFake.files.get('onepeek-auth.db')!.sealed.size).toBe(0);
     expect(await push.current()).toBe(false);
+  });
+});
+
+describe('signOut removes this account\'s chats from the phone (review F-1)', () => {
+  const chatDb = () => sqliteFake.files.get('onepeek-chat.db')!;
+  const roomRows = () => [...chatDb().sealed.keys()].filter(k => k.startsWith('room:'));
+  type AuthLike = { auth: { signOut: (o: unknown) => Promise<unknown> } };
+
+  it('wipes the chat keystore (rows and wrapping key) before the Supabase sign-out, then drops the ChatClient', async () => {
+    expect(await auth.completeFromUrl('onepeek://auth?code=good-code')).toBe(true);
+    const before = getChat();
+    await before.ensureDevice();
+    await before.keystore.put('room:r1:state', new Uint8Array([1, 2, 3]));
+    await before.keystore.put('room:r1:msg:m1', { id: 'm1', body: 'The locker code is 4471.' });
+    expect(roomRows().length).toBe(2);
+    expect([...chatDb().sealed.keys()]).toContain(`device:${USER.id}`);
+    expect(secureItems.has('onepeek.wrap')).toBe(true);
+    const client = getSupabase() as unknown as AuthLike;
+    const real = client.auth.signOut;
+    const atSignOut: { rows: number; wrap: boolean }[] = [];
+    client.auth.signOut = async (o) => { atSignOut.push({ rows: chatDb().sealed.size, wrap: secureItems.has('onepeek.wrap') }); return real(o); };
+    const builds = sbMock.createClient.mock.calls.length;
+    try { await auth.signOut(); } finally { client.auth.signOut = real; }
+
+    expect(atSignOut).toEqual([{ rows: 0, wrap: false }]);   // gone before the session was
+    expect(callsOf('signOut')[0].args).toEqual([{ scope: 'local' }]);
+    expect(chatDb().sealed.size).toBe(0);
+    expect(secureItems.has('onepeek.wrap')).toBe(false);
+    expect(await auth.getSession()).toBeNull();
+    const after = getChat();
+    expect(after).not.toBe(before);                                // fresh client: no cached device
+    expect(getChat()).toBe(after);
+    expect(sbMock.createClient.mock.calls.length).toBe(builds);   // the Supabase client (and its listeners) stays
+    expect(getSupabase()).toBe(client);
+  });
+
+  it('the next account on the phone sees none of the previous account\'s rooms, messages or device key', async () => {
+    expect(await auth.completeFromUrl('onepeek://auth?code=good-code')).toBe(true);
+    const a = getChat();
+    const devA = await a.ensureDevice();
+    await a.keystore.put('room:shared-room:state', new Uint8Array([9, 9, 9]));
+    await a.keystore.put('room:shared-room:local', { name: 'Family', lastSeq: 3, nicknames: {}, verified: {} });
+    await a.keystore.put('room:shared-room:msg:m1', { id: 'm1', seq: 1, mine: true, sender: devA.id, body: 'The locker code is 4471.', ttl: 30, sentAt: Date.now(), expiresAt: null });
+    expect(await a.messages('shared-room')).toHaveLength(1);
+    await auth.signOut();
+
+    await auth.signInAsGuest();
+    const b = getChat();
+    expect(await b.messages('shared-room')).toEqual([]);
+    expect(await b.keystore.get('room:shared-room:state')).toBeNull();
+    expect(await b.keystore.get('room:shared-room:local')).toBeNull();
+    expect(roomRows()).toEqual([]);
+    const devB = await b.ensureDevice();
+    expect(devB.userId).toBe('guest-user');
+    expect([...chatDb().sealed.keys()]).toEqual(['device:guest-user']);   // A's device key is gone
+    expect(atRest()).not.toContain(hex(devA.signing.signKey));
+    await auth.signOut();
+  });
+
+  it('a failed wipe still signs the phone out and is reported', async () => {
+    await auth.signInAsGuest();
+    const ks = getChat().keystore;
+    const wipe = jest.spyOn(ks, 'wipe').mockRejectedValueOnce(new Error('disk_full'));
+    try {
+      await expect(auth.signOut()).rejects.toThrow('disk_full');
+    } finally { wipe.mockRestore(); }
+    expect(callsOf('signOut')).toHaveLength(1);
+    expect(await auth.getSession()).toBeNull();
   });
 });
 

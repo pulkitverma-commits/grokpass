@@ -73,6 +73,11 @@ test('text secret: the chosen options reach createSecretLink; the key is never d
   expect(await screen.findByTestId('secret.result')).toBeTruthy();
   // Masked on screen: the id may show, the key never does; the QR carries the full link (it is the sharing surface).
   expect(screen.getByTestId('secret.resultLink').props.children).toBe(`https://onepeek.io/s/abcdefgh12345678#••••••`);
+  // F-4: the QR carries the key, so it is absent until "Show QR code", and the tree holds no key then.
+  expect(screen.queryByTestId('qr')).toBeNull();
+  expect(treeStrings()).not.toContain(SECRET_KEY);
+  await fireEvent.press(screen.getByTestId('secret.qr.show'));
+  expect(screen.getByTestId('qr').props.accessibilityValue.text).toBe(SECRET_URL);
   const drawn = treeStrings().split('\n').filter((s) => s !== SECRET_URL);   // the QR value is the link by design
   expect(drawn.join('\n')).not.toContain(SECRET_KEY);
   expect(screen.getByText('Can be opened 3 times and expires in 1 hour if unopened. The key is in the link itself, so share it the way you’d share the secret.')).toBeTruthy();

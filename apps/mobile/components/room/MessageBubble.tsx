@@ -2,16 +2,19 @@
 // others sit left on the dark fill. In Secret rooms someone else's text is NOT in the tree until
 // the bubble is pressed and held (`held`): the outer Pressable carries `msg.<id>` so a long press
 // hits it, the first hold starts the timer upstream, and releasing hides the text again. Nothing
-// about the content goes into accessibility labels: the hidden state announces "Hold to read" and
-// the shown state lets VoiceOver read the bubble text itself.
-import { memo } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+// about the content goes into accessibility labels: the hidden state's label names the sender and
+// the time only ("Hidden message from Bea, 9:41. Hold to read."; qa A1). A screen reader's
+// double-tap-and-hold does not move focus to the revealed text, so while held the body is announced
+// once with AccessibilityInfo.announceForAccessibility (qa A2); nothing is announced on release, and
+// nothing is announced outside a hold.
+import { memo, useEffect } from 'react';
+import { AccessibilityInfo, Pressable, StyleSheet, View } from 'react-native';
 import { colors, radii, spacing, touchTarget } from '../../theme';
 import { Icon } from '../Icon';
 import { Text } from '../Text';
 import { MineGradient } from './MineGradient';
 import { fileSize } from '@/lib/files';
-import { timerText } from '@/lib/format';
+import { sentTime, timerText } from '@/lib/format';
 import { secretLinkFrom } from '@/lib/links';
 
 export type BubbleMessage = {
@@ -67,6 +70,14 @@ export const MessageBubble = memo(function MessageBubble({ m, parent, secret, he
   // In a Secret room the button exists only while the text is shown (held): before that, even "there is a
   // secret link in here" stays hidden, and the viewer cannot be reached without the room's hold (P2-6).
   const link = !f && !hidden && onOpenLink ? secretLinkFrom(m.body) : null;
+
+  // A2: one announcement per hold, of the text the hold reveals. Keyed on the hold starting, so a
+  // re-render while held does not repeat it and a release (held → false) says nothing.
+  const reveal = guarded && held;
+  useEffect(() => {
+    if (reveal && m.body) AccessibilityInfo.announceForAccessibility(m.body);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per hold, not per body change
+  }, [reveal]);
 
   const fileTitle = f
     ? f.viewOnce ? (m.mine ? 'View-once file' : m.viewed ? 'Opened' : f.mime.startsWith('image/') ? 'View-once photo' : 'View-once file')
@@ -125,7 +136,7 @@ export const MessageBubble = memo(function MessageBubble({ m, parent, secret, he
           delayLongPress={120}
           onLongPress={() => {}}
           accessibilityRole="button"
-          accessibilityLabel={hidden ? 'Hold to read this message' : 'Message shown while held'}
+          accessibilityLabel={hidden ? `Hidden message from ${senderName}, ${sentTime(m.sentAt)}. Hold to read.` : 'Message shown while held'}
           accessibilityHint="Press and hold to show the message. It starts its timer the first time."
           testID={`msg.${m.id}`}
           style={({ pressed }) => [styles.press, pressed && styles.pressing]}

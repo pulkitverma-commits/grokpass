@@ -12,4 +12,11 @@ describe('+native-intent (expo-share-intent wake URL)', () => {
     expect(redirectSystemPath({ path: 'onepeek://auth?code=xyz', initial: false })).toBe('onepeek://auth?code=xyz');
     expect(redirectSystemPath({ path: '/chat/join', initial: false })).toBe('/chat/join');
   });
+
+  test('F-7: /reset is never a deep-link target; it opens home', () => {
+    for (const path of ['onepeek://reset', 'onepeek://reset?now=1', '/reset', 'reset', 'https://onepeek.io/reset', 'ONEPEEK://RESET#x']) {
+      expect(redirectSystemPath({ path, initial: true })).toBe('/');
+    }
+    expect(redirectSystemPath({ path: 'onepeek://resetting', initial: false })).toBe('onepeek://resetting');
+  });
 });

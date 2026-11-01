@@ -61,6 +61,10 @@ test('safety number comes from safetyNumberWith, in groups of five with a QR; ma
   expect(await screen.findByTestId('verify.number')).toBeTruthy();
   expect(screen.getAllByText('12345')).toHaveLength(6);
   expect(screen.getByTestId('qr')).toBeTruthy();
+  // F-2: the numbers compare keys the server supplied; the copy says so and claims nothing more.
+  expect(screen.getByText('Compare these numbers in person or on a call. If they match, you’re both seeing the same keys the server gave each of you. This does not yet prove the server didn’t substitute a key.')).toBeTruthy();
+  expect(screen.queryByText(/intercept/i)).toBeNull();
+  expect(screen.getByText('They match — mark verified')).toBeTruthy();
   await fireEvent.press(screen.getByTestId('verify.mark'));
   await waitFor(() => expect(chat.markVerified).toHaveBeenCalledWith(ROOM.id, THEM));
   expect(onChange).toHaveBeenCalled();

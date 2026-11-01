@@ -12,7 +12,7 @@ import { PROTECTION_COPY, useSecurity } from '@/security';
 import { Avatar } from '../components/Avatar';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
-import { useChat } from '../components/ChatProvider';
+import { allowReset, useChat } from '../components/ChatProvider';
 import { Header } from '../components/Header';
 import { Icon } from '../components/Icon';
 import { ListRow } from '../components/ListRow';
@@ -25,6 +25,12 @@ import { auth, push, type AuthSession } from '@/lib/chat';
 import { errorCode, friendlyError } from '@/lib/format';
 
 type Device = { id: string; label: string; created_at: string; last_seen: string; revoked_at: string | null };
+
+// Sign out removes this account's chats and chat keys from the phone, as signing out on onepeek.io
+// does (review F-1). Reset ("Forgets every chat and key stored here") is the recovery wipe of the whole
+// phone and keeps its own wording.
+const SIGN_OUT_ACCOUNT = 'Removes this account’s chats and chat keys from this phone, as signing out on onepeek.io does. Your other devices keep theirs.';
+const SIGN_OUT_GUEST = 'Removes this guest’s chats and chat keys from this phone. A guest session can’t be signed back into.';
 
 const LOCK_NAME: Record<string, string> = { face: 'Face ID lock', fingerprint: 'Fingerprint lock', passcode: 'Passcode lock', none: 'No screen lock' };
 
@@ -118,7 +124,7 @@ export default function SettingsScreen() {
       <View style={styles.card}>
         <ListRow title="Notifications" subtitle="“New message in a private chat”, never content" testID="settings.notifications"
           trailing={<Switch value={notify} disabled={notifyBusy} onValueChange={toggleNotify} trackColor={{ true: colors.accent, false: colors.segOn }} thumbColor={colors.white} accessibilityLabel="Notifications" testID="settings.notify" />} />
-        <ListRow title="Reset chats on this phone" subtitle="Forgets every chat and key stored here. Other devices are not affected." chevron onPress={() => router.push('/reset')} testID="settings.reset" divider={__DEV__} />
+        <ListRow title="Reset chats on this phone" subtitle="Forgets every chat and key stored here. Other devices are not affected." chevron onPress={() => { allowReset(); router.push('/reset'); }} testID="settings.reset" divider={__DEV__} />
         {__DEV__ ? <ListRow title="Run the Phase 0 crypto spike" subtitle="Development builds only" chevron onPress={() => router.push('/spike')} testID="settings.spike" divider={false} /> : null}
       </View>
       {notifyErr ? <View style={styles.gap}><Notice tone="error" text={notifyErr} testID="settings.notifyError" /></View> : null}
@@ -151,7 +157,7 @@ export default function SettingsScreen() {
 
       <SectionLabel>Account</SectionLabel>
       <View style={styles.card}>
-        <ListRow title={busy ? 'Signing out…' : 'Sign out'} subtitle={session?.isAnonymous ? 'A guest session can’t be signed back into; its chats stay on this phone until they expire.' : undefined} onPress={busy ? undefined : signOut} testID="settings.signOut" divider={false} />
+        <ListRow title={busy ? 'Signing out…' : 'Sign out'} subtitle={session?.isAnonymous ? SIGN_OUT_GUEST : SIGN_OUT_ACCOUNT} onPress={busy ? undefined : signOut} testID="settings.signOut" divider={false} />
       </View>
       {err ? <View style={styles.gap}><Notice tone="error" text={err} /></View> : null}
 

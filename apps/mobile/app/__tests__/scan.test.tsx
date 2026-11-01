@@ -86,6 +86,10 @@ test('a safety number from the room: compared with each other member; a match of
   await screen.findByTestId('scan.camera');
   await scan(`onepeek-verify:${DIGITS}`);
   expect(await screen.findByText('Matches Bea')).toBeTruthy();
+  // F-2: honest wording; the compared keys come from the server, so no "nobody is intercepting".
+  expect(screen.getByText('The numbers match. You’re seeing the same keys the server gave each of you. This does not yet prove the server didn’t substitute a key.')).toBeTruthy();
+  expect(screen.queryByText(/intercept/i)).toBeNull();
+  expect(screen.getByText('They match — mark verified')).toBeTruthy();
   expect(chat.safetyNumberWith).toHaveBeenCalledWith('aaaaaaaa-0000-0000-0000-000000000001', THEM);
   expect(chat.safetyNumberWith).toHaveBeenCalledTimes(1);   // never with my own device
   await fireEvent.press(screen.getByTestId('scan.verify'));

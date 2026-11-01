@@ -1,11 +1,15 @@
 // Recovery screen for `keystore_unavailable`: the phone's wrapping key is gone (restored backup, new
 // phone) while sealed chat rows exist. Keys are never backed up by design, so the only way forward is
 // to forget the chats stored on this phone. Two taps: the second button is the confirmation.
+// The screen acts only when the app sent the user here (review F-7): ChatProvider's guard() on
+// `keystore_unavailable` and Settings arm a one-shot pass (ChatProvider allowReset); a deep link such as
+// `onepeek://reset` from another app or a message has none, renders nothing and is sent home.
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Avatar } from '../components/Avatar';
 import { Button } from '../components/Button';
+import { consumeReset, resetAllowed } from '../components/ChatProvider';
 import { Notice } from '../components/Notice';
 import { Screen } from '../components/Screen';
 import { Text } from '../components/Text';
@@ -17,8 +21,15 @@ export default function ResetScreen() {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  // Read once at mount; the pass is spent after mount, so a later deep link needs a new one.
+  const [allowed] = useState(resetAllowed);
+  useEffect(() => {
+    consumeReset();
+    if (!allowed) router.replace('/');
+  }, [allowed, router]);
 
   async function reset() {
+    if (!allowed) return;
     setErr(''); setBusy(true);
     try {
       await resetThisPhone();
@@ -28,6 +39,8 @@ export default function ResetScreen() {
       setBusy(false);
     }
   }
+
+  if (!allowed) return null;
 
   return (
     <Screen

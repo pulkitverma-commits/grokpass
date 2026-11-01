@@ -52,7 +52,7 @@ test('a shared file: the first active room is preselected, view once is on, Encr
   await fireEvent.press(rows[1]!);
   await fireEvent.press(screen.getByTestId('share.send'));
   await waitFor(() => expect(chat.sendFile).toHaveBeenCalledWith(ROOMS[1]!.id, expect.objectContaining({ name: 'Passport scan.jpg', size: 2_516_582 }), 3600, true));
-  expect(chat.notifyRoom).toHaveBeenCalledWith(ROOMS[1]!.id);
+  expect(chat.notifyRoom).not.toHaveBeenCalled();   // sendFile() notifies once (F-9)
   expect(router.replace).toHaveBeenCalledWith(`/room/${ROOMS[1]!.id}`);
   // P2-3: the share cache copy is consumed once the send has settled, not before.
   expect(mockSecurity.consumeShare).toHaveBeenCalledTimes(1);

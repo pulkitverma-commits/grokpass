@@ -144,13 +144,14 @@ test('Quick room: text shows directly and is marked opened once on screen', asyn
   await waitFor(() => expect(chat.markOpened).toHaveBeenCalledTimes(1));
 });
 
-test('send: send() with the room, body, timer and a fresh id, then notifyRoom', async () => {
+test('send: send() with the room, body, timer and a fresh id; the screen sends no second notifyRoom (F-9)', async () => {
   await open([]);
   await waitFor(() => expect(screen.getByTestId('room.composer').props.editable).toBe(true));
   await fireEvent.changeText(screen.getByTestId('room.composer'), 'Got it, thanks.');
   await fireEvent.press(screen.getByTestId('room.send'));
   await waitFor(() => expect(chat.send).toHaveBeenCalledWith(ROOM.id, 'Got it, thanks.', 30, undefined, 'uuid-1'));
-  await waitFor(() => expect(chat.notifyRoom).toHaveBeenCalledWith(ROOM.id));
+  await waitFor(() => expect(screen.getByText('Got it, thanks.')).toBeTruthy());
+  expect(chat.notifyRoom).not.toHaveBeenCalled();   // the core's send() notifies once
   expect(screen.getByText('Got it, thanks.')).toBeTruthy();
   expect(screen.getByTestId('room.composer').props.value).toBe('');
 });
@@ -164,7 +165,8 @@ test('attach: Photo → sendFile with the picked file, the timer and view once',
   expect(screen.getByTestId('attach.viewOnce').props.value).toBe(true);   // Secret rooms default to view once
   await fireEvent.press(screen.getByTestId('attach.send'));
   await waitFor(() => expect(chat.sendFile).toHaveBeenCalledWith(ROOM.id, expect.objectContaining({ name: 'holiday.png', size: 1258291 }), 30, true));
-  await waitFor(() => expect(chat.notifyRoom).toHaveBeenCalled());
+  await waitFor(() => expect(files().deletePicked).toHaveBeenCalled());
+  expect(chat.notifyRoom).not.toHaveBeenCalled();   // sendFile() notifies once (F-9)
 });
 
 test('view-once: first open decrypts, marks viewed and shows the viewer; second open is refused with viewer.gone', async () => {
@@ -481,4 +483,93 @@ test('U8 attach → Send as a one-time secret: the sheet opens; "Send in this ch
   await fireEvent.press(await screen.findByTestId('secret.sendLink'));
   await waitFor(() => expect(chat.send).toHaveBeenLastCalledWith(ROOM.id, SECRET_URL, 30, undefined, 'uuid-1'));
   await waitFor(() => expect(screen.queryByTestId('secret.sheet')).toBeNull());
+});
+
+describe('F-1: a room that myRooms() does not list for this session', () => {
+  afterEach(() => { chat.subscribe.mockImplementation(() => () => {}); });
+
+  test('never reads or renders the stored copies, even when sync reports new messages; shows the ended state', async () => {
+    chat.myRooms.mockResolvedValue([room({ id: 'bbbbbbbb-0000-0000-0000-000000000002' })]);   // another room only
+    chat.sync.mockResolvedValue({ joined: true, removed: false, newMessages: 3, newAlerts: 0 });
+    chat.messages.mockResolvedValue([message(), message({ id: 'm9', mine: true, body: 'Previous account wrote this.' })]);
+    let ping: ((event: string) => void) | null = null;
+    chat.subscribe.mockImplementation(((_room: string, cb: (event: string) => void) => { ping = cb; return () => {}; }) as never);
+    await renderScreen(<RoomScreen />);
+    await act(async () => { ping?.('msg'); });   // a Realtime ping: the pull path, racing the first refresh
+    expect(await screen.findByTestId('room.ended')).toBeTruthy();
+    expect(screen.getByText('This chat has ended.')).toBeTruthy();
+    expect(chat.messages).not.toHaveBeenCalled();
+    expect(chat.forgetRoom).toHaveBeenCalledWith(ROOM.id);
+    const all = treeText();
+    expect(all).not.toContain('Previous account wrote this.');
+    expect(all).not.toContain('4471');
+  });
+
+  test('stored copies appear only after myRooms() has listed the room', async () => {
+    let listRooms: (rooms: unknown[]) => void = () => {};
+    chat.myRooms.mockImplementation(() => new Promise((res) => { listRooms = res as never; }));
+    chat.sync.mockResolvedValue({ joined: true, removed: false, newMessages: 1, newAlerts: 0 });
+    chat.messages.mockResolvedValue([message({ mine: true, body: 'Listed room message.' })]);
+    let ping: ((event: string) => void) | null = null;
+    chat.subscribe.mockImplementation(((_room: string, cb: (event: string) => void) => { ping = cb; return () => {}; }) as never);
+    await renderScreen(<RoomScreen />);
+    await act(async () => { ping?.('msg'); });
+    expect(chat.messages).not.toHaveBeenCalled();
+    expect(screen.queryByText('Listed room message.')).toBeNull();
+    await act(async () => { listRooms([ROOM]); });
+    expect(await screen.findByText('Listed room message.')).toBeTruthy();
+    expect(chat.messages).toHaveBeenCalledWith(ROOM.id);
+  });
+});
+
+describe('accessibility (qa A1, A2, §12 key-changed row)', () => {
+  test('A1: a hidden Secret bubble is labelled with the sender and the time, never the text', async () => {
+    const sentAt = new Date(2026, 10, 1, 9, 41).getTime();
+    await open([message({ sentAt })]);
+    const bubble = await screen.findByTestId('msg.m1');
+    expect(bubble.props.accessibilityLabel).toBe('Hidden message from Bea, 9:41. Hold to read.');
+    expect(bubble.props.accessibilityLabel).not.toMatch(/locker|4471/);
+  });
+
+  test('A2: holding announces the body once; re-renders while held and the release announce nothing', async () => {
+    const { AccessibilityInfo } = require('react-native');
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => {});
+    announce.mockClear();   // react-native's jest setup already mocks it: drop calls from earlier tests
+    try {
+      await open();
+      const bubble = await screen.findByTestId('msg.m1');
+      expect(announce).not.toHaveBeenCalled();   // nothing outside a hold
+      await act(async () => { fireEvent(bubble, 'pressIn'); });
+      await waitFor(() => expect(chat.markOpened).toHaveBeenCalledTimes(1));   // re-render while held
+      expect(announce).toHaveBeenCalledTimes(1);
+      expect(announce).toHaveBeenCalledWith('The locker code is 4471.');
+      await act(async () => { fireEvent(screen.getByTestId('msg.m1'), 'pressOut'); });
+      expect(announce).toHaveBeenCalledTimes(1);
+      // A second hold is a second reveal: announced once more.
+      await act(async () => { fireEvent(screen.getByTestId('msg.m1'), 'pressIn'); });
+      expect(announce).toHaveBeenCalledTimes(2);
+    } finally { announce.mockRestore(); }
+  });
+
+  test('A2: own messages and Quick rooms are never announced (their text is on screen anyway)', async () => {
+    const { AccessibilityInfo } = require('react-native');
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => {});
+    announce.mockClear();   // react-native's jest setup already mocks it: drop calls from earlier tests
+    try {
+      chat.myRooms.mockResolvedValue([room({ id: ROOM.id, kind: 'quick', name: 'Vault handover', ttl: 60 })]);
+      await open([message(), message({ id: 'm2', mine: true, body: 'Mine.' })]);
+      expect(await screen.findByText('The locker code is 4471.')).toBeTruthy();
+      expect(announce).not.toHaveBeenCalled();
+    } finally { announce.mockRestore(); }
+  });
+
+  test('the key-changed row has a fixed label without the nickname', async () => {
+    const changed = [MEMBERS[0]!, { ...MEMBERS[1]!, verified: '\\x99' }];   // verified a key that is no longer theirs
+    chat.members.mockResolvedValue(changed);
+    await open([]);
+    const row = await screen.findByTestId('room.keyChanged');
+    expect(row.props.accessibilityLabel).toBe('A member’s security key changed. Verify again.');
+    expect(row.props.accessibilityRole).toBe('button');
+    expect(screen.getByText('Bea’s security key changed. Verify again.')).toBeTruthy();
+  });
 });

@@ -44,6 +44,15 @@ const WEBSITE_ONLY = ' Open the link in a browser on onepeek.io instead.';
 const BROWSER_NOTE = 'Opens in your browser. The full link, key included, is handed to the browser and will be in its history.';
 const KEPT = ' Nothing has been opened or deleted.';
 
+/**
+ * Shown before Open when the peek says the sender asked to see where the secret is opened. The first
+ * sentence is the website's; the second is what the app does instead of the web's precise / approximate
+ * choice: the app never reads the phone's location, so the server records only the city its network
+ * address points to (privacy-labels "Coarse Location"). Same notice for a geofenced secret, which the
+ * app hands to the website anyway.
+ */
+const LOCATION_NOTICE = 'The sender asked to see where this is opened. OnePeek on this phone never reads your location, so opening shares only an approximate city from your network.';
+
 type Phase = 'loading' | 'ready' | 'opening' | 'revealed' | 'vanished' | 'cleared' | 'error';
 
 const INCOMPLETE = 'This link is incomplete. Ask the sender to share the full link.';
@@ -244,6 +253,8 @@ export default function SecretViewerRoute() {
   const noCopy = !!header?.noCopy;
   const noSave = !!header?.noSave;
   const maxViews = peek?.maxViews ?? 1;
+  // The sender turned on "Show me where it's opened" (web): said before Open, as the website does.
+  const sharesLocation = !!peek?.shareLocation;
   const viewsLeft = peek?.viewsLeft ?? 1;
   const finalView = viewsLeft <= 1;
   const low = timer > 0 && remaining <= Math.min(5, Math.ceil(timer / 3));
@@ -294,10 +305,13 @@ export default function SecretViewerRoute() {
             <Badge label={maxViews > 1 ? `${viewsLeft} of ${maxViews} views left` : '1 view'} tone="neutral" />
             {peek.locked ? <Badge label="recipient only" tone="neutral" icon="user" /> : null}
             {guard ? <Badge label="hold to view" tone="neutral" icon="eye" /> : null}
+            {sharesLocation ? <Badge label="shares location" tone="neutral" /> : null}
           </View>
           <Text variant="sub" tone="muted">
             It will be decrypted on this phone. {maxViews > 1 ? `This link can be opened ${viewsLeft} more time${viewsLeft === 1 ? '' : 's'}, then it’s deleted from OnePeek.` : 'As soon as you open it, it’s deleted from OnePeek — this link won’t work again.'}{timer > 0 ? ` You’ll have ${timer} second${timer === 1 ? '' : 's'} to view it.` : ''}
           </Text>
+
+          {sharesLocation ? <Notice tone="info" text={LOCATION_NOTICE} testID="sview.location" /> : null}
 
           {needsCode ? (
             <View style={styles.box} testID="sview.locked">

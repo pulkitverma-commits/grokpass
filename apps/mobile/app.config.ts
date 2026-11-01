@@ -93,8 +93,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     'expo-sqlite',
     'expo-local-authentication',
     'expo-notifications',
-    'expo-camera',
-    'expo-image-picker',
+    // No feature records audio: keep the microphone permission and usage string out of the build (release, Phase 3).
+    ['expo-camera', { recordAudioAndroid: false, microphonePermission: false }],
+    ['expo-image-picker', { microphonePermission: false }],
     'expo-document-picker',
     'expo-apple-authentication',
     // native-security (N1, N3): FLAG_SECURE on MainActivity; Android backup/transfer rules.

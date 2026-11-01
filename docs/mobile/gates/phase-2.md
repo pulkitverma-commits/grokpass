@@ -25,7 +25,7 @@ npm run typecheck        → clean (web root, @onepeek/core, @onepeek/mobile)
 npm run lint             → 0 errors
 npm test                 → web vitest 142/142 (was 123 at Gate 1)
                            @onepeek/core vitest 322/322 (was 194)
-                           @onepeek/mobile jest 397/397 (was 203)
+                           @onepeek/mobile jest 396/396 (39 suites; was 203)
 npm run build            → next build: Compiled successfully (incl. /api/chat/report)
 expo export --platform ios     → 2601 modules to Hermes bytecode (before the review fixes; not re-run, disk)
 node apps/mobile/e2e/scripts/check-flows.mjs → 23 flows, flows OK

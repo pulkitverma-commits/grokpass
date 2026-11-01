@@ -10,7 +10,7 @@ Newest first. One line per decision, blocker or agent report.
   a link). Open lows to Phase 3: P3-2 hand-off TTL (mobile-ui), P3-3 per-nonce share consume and sweep race, P3-5
   substring link classification in the bridge, P3-6 per-share byte total (native-security), plus the Phase 1
   carry-overs (spike deletion after the run, EXIF, pending email in memory, web parity). **Gate 2 reached:**
-  `docs/mobile/gates/phase-2.md`. Final: web 142, core 322, mobile 397. Stopping for human approval.
+  `docs/mobile/gates/phase-2.md`. Final: web 142, core 322, mobile 396. Stopping for human approval.
 - P2 fixes merged: `auth.onSignedIn` (fires only from sign-ins this module completed and checked; `PushRefresher`
   uses it, never Supabase's SIGNED_IN), `forgetLinkingURL()` called by the viewer and Join, `consumeShare()` on every
   share-screen exit, "Open secret" gated on held, unlock token used as the string it is (viewer test against the real

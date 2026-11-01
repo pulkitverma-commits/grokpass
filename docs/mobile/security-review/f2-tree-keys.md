@@ -127,3 +127,118 @@ After F2-1 points 1 and 2 land, the web may say: "If they match on both screens,
 - **Listing fetch.** It runs under the room lock (`client.ts:655`), once per page, after the rows are fetched (so it includes members just admitted), and only when ts-mls meets a credential. A failed fetch throws inside `validateCredential`, ts-mls passes the error up, `listing.failure()` turns it into a sync rejection rather than a skip, and the cached rejected promise keeps it failing for the rest of the page.
 - **Format-only branch.** Production `joinRoom` and `receive` always get a directory (`applyRows`). The format-only service is used only for the owner's own commits, after the listing check (except F2-4).
 - **Denial of service.** A refused row stops that member's room. That fails closed and is no stronger than the server simply holding rows back; the exception is the sticky flag (F2-2).
+
+---
+
+## Re-review of 677ea2c
+
+Reviewer: security-reviewer. Date: 2026-11-01. Read-only review of `a550379..677ea2c`; no tests or builds run (author reports core 374, web 148, mobile 448 green). ts-mls 1.6.4 sources checked again where the fix relies on its internals.
+
+### Verdict
+
+**F-2 is not fully closed: one high remains (F2-7), no critical.**
+
+The commit lands F2-2, F2-3, F2-4 and F2-6, and F2-1 parts (2) and (3). The Welcome-signer check, F2-1 (1), is in place, but it trusts the server's listing to say which device is the owner. A server that labels its own device as "owner" to the joiner can still run the split-group attack. It can also add a ghost to the owner's real group, so the device counts on the two screens match. The pairwise safety numbers then match while the server reads both directions.
+
+What is better than before: every device that can read the chat is now listed on each screen, so the copy is literally true and an attentive user can catch the attack. But "they match" no longer implies "nobody else is reading", which is what users will take from it.
+
+The owner-only commit rule, F2-1 (4), also lets any member freeze the room for everyone (F2-8, medium).
+
+### Status of F2-1 to F2-6
+
+| Finding | Status | Proof |
+|---|---|---|
+| F2-1 (1) Welcome signer = listed owner | **Landed, but can be bypassed** (see F2-7) | `tree-keys.integration.test.ts:211`. The signer comes from `keyCheck().seen[0]`. In ts-mls 1.6.4, `joinGroup`'s first `validateCredential` call is the GroupInfo signer (`clientState.js:578`), and the GroupInfo signature is then verified with that same key (`:581`). A test pins this. |
+| F2-1 (2)+(3) unlisted leaves shown and counted | **Closed** | `client.ts` `memberView` takes the union of leaves and listing rows. Unlisted leaves get `unlisted`, `inGroup` and `keyChanged`, and a safety number can be computed for them. Test `:231`. Web and app show `UNLISTED_NOTE` and `readersLine`. |
+| F2-1 (4) only the owner may commit | **Landed, but creates a new problem** (F2-8) | `mls.ts` `receive`: the callback records `senderLeafIndex`, and a commit is accepted only if the committer's leaf in the tree before the commit is the listed owner. Test `:246`. |
+| F2-2 sticky flag | **Closed** | Flags are `{key, seq, at}`. They clear when the refused row later applies, when the device's leaf is removed, or on `markVerified` against an agreeing key. A flag on this device itself never blocks. Tests `:259`, `:278`. |
+| F2-3 progress lost on listing failure | **Closed** | The loop breaks, saves what it applied, records flags, then throws. Test `:291`. |
+| F2-4 non-UUID ids | **Closed** | Stored state loads with `strictIds`, `packageMismatch` requires a UUID, and a malformed credential gives a loud `member_key_mismatch` (`format`). Test `:311`. |
+| F2-5 copy | **Partial** | The app wording is fine. The web sentence is literally true but needs the count and every-device instruction (F2-7). `known-limitations.md` 15 is accurate except that it doesn't mention F2-7. |
+| F2-6 app notices | **Closed** | `room/[id].tsx`: `keyStop` notice; `room.keyMismatch`, `room.unlisted` and `room.keyChanged` rows, each with its own label; pending members are included when mismatched. `room.test.tsx`. |
+
+### New findings
+
+#### F2-7 (high, residual of F-2): the joiner learns who the owner is from the server, so a relabelled "owner" passes the signer check and pairwise numbers match while the server reads both directions
+
+- Where:
+  - `client.ts` `applyRows`, the Welcome branch: `ownerRow()` is the listing row with `role === 'owner'`.
+  - `acceptCommitter`, which uses the same row.
+- Scenario. Owner Alice, joiner Bob, in a non-business room that auto-admits.
+  1. To Bob only, the server lists its own device X with `role: 'owner'` and X's real key. It lists Alice's real device as a `member` with key A.
+  2. It builds a fake group {X, Alice's copied key-package leaf, B} and signs the Welcome as X. Every check passes:
+     - the signer is the listed "owner";
+     - the "owner" has a leaf with the listed key;
+     - every leaf agrees with the listing.
+  3. In Alice's real group, the server lists a pending device Y, and Alice's app auto-admits it.
+  4. Each side now sees three devices. Both phones show "3 devices can read this chat". Alice and Bob compare their pairwise numbers, SN(A, B), and they match.
+  5. The server reads Alice's messages through Y and Bob's messages through X. With F-3 it gives X and Y believable nicknames (`nicknames[row.sender_device]`).
+  6. Only a user who also verifies the extra, unverified device on their own screen catches it.
+- Precondition: Alice's device has uploaded at least one key package (it has joined any room before). Without that, step 2 has no Alice leaf: Bob's number with Alice fails or the counts differ, and the attack is visible.
+- Fix: pin the owner without trusting the server.
+  1. When the owner's app builds an invite link, put the owner's device id and a hash of its signing key in the URL fragment, next to the token (the fragment never reaches the server).
+  2. `redeemInvite` stores that pin in `PendingJoin`.
+  3. The Welcome branch requires the signer to be the pinned device with the pinned key, whatever the listing says.
+  4. `acceptCommitter` uses the pinned owner as well; store it in `RoomLocal` at join time.
+
+  With these in place the joiner is always in the owner's real group. Any ghost (Y) is then in the same tree for both people, so both see it and both counts include it.
+- Until the fix lands, use this web and app copy:
+  - Verify sheet: "Compare these numbers in person or on a call. If they match on both screens, your messages reach {name}’s real device. Everyone who can read this chat is in the member list: check that both screens show the same devices, and verify each one you don’t recognise."
+  - App scan result: "The numbers match. The key this chat holds for {name} is really theirs. Check the member list for devices you don’t recognise."
+- Tests to add:
+  - a Welcome signed by a device the server lists as "owner" that is not the pinned owner is refused;
+  - after the fix, the scenario above (X listed as owner, Alice demoted to member) is refused at join.
+
+#### F2-8 (medium, new in 677ea2c): any member can freeze the room for everyone with one commit or proposal
+
+- Where: `client.ts` `applyRows`, the receive catch: `if (e instanceof mls.KeyMismatchError) { refuse(seq, e); stopped = true; break; }`.
+  - A `committer` refusal stops the room, and `lastSeq` stays before the row.
+  - `mls.ts` `receive`: a by-reference proposal (no commit callback, so `committerLeaf` stays undefined) is also refused as `committer`.
+- Scenario. Any member, a guest included, uses a modified client to post one valid commit; test `:246` does exactly this with `mls.rotate`. A proposal works too.
+  - Every other member refuses it, including the owner (whose `acceptCommitter` also says no).
+  - Every later sync stops at that row again, so nobody ever reaches the owner's next commit or any later message. That includes the owner's removal of the culprit.
+  - There is no recovery short of the server deleting the row.
+  - Before 677ea2c the same commit was simply applied, so this is a new lever for members. For the server it is nothing new.
+- Fix:
+  - Treat `committer` refusals, and proposals, as skip-and-record: advance `lastSeq`, continue, and flag the device ("tried to change the group").
+  - The honest group stays at the epoch everyone else is in, so skipping is safe. The owner's next commit for that epoch applies normally.
+  - Keep stop-on-refusal only for `key` and `format` refusals of the owner's own commits.
+  - Test: after a rogue member's commit, Carol still receives the owner's later message and the owner's removal of the rogue member.
+
+#### F2-9 (low): one seq per page for refusals; a refused Welcome can hide a genuine one behind a page boundary
+
+- `refusedSeq` is a single value per page, so every flag set in a page records the last refused row's seq. Applying that row later then clears flags from earlier refused rows in the same page too. Fix: keep a seq per id.
+- A refused Welcome holds `lastSeq`, and `applyRows` throws when the page didn't join. If the server puts at least `SYNC_PAGE_SIZE` rows between a fake Welcome and the genuine one, the genuine Welcome is never reached. This is denial of service only, and the server could withhold rows anyway.
+
+### Answers to the lead's questions
+
+- **Can the clearable flag or `keyHistory` hide a real substitution?** No.
+  - A flag clears only when the refused row applies against an agreeing listing. At that point the substituted key is in the tree and in the listing, so the pairwise number still differs from the peer's, and a previously verified member shows "Key changed".
+  - `keyHistory` appears only when the tree key and the listing agree, and it doesn't change the number.
+  - `markVerified` clears a flag only on a user action, after the agreement checks.
+  - The server can erase the *record* of an attempt, but not the detection.
+- **Can `acceptCommitter` be bypassed?**
+  - Through an external commit: no. `receive` accepts `mls_private_message` only; external commits are PublicMessage, so they are skipped as undecryptable. An undefined `senderLeafIndex` is refused.
+  - Through the Welcome path: no in itself, because a Welcome carries no commit and its signer must be the listed owner.
+  - Through the listing: **yes**. The server can relabel which device is the owner (F2-7).
+- **Does the owner-only rule break legitimate flows?** No legitimate flow commits as a non-owner. Only the owner's app calls `addMembers` and `removeDevice`; `mls.rotate` is adapter-only and the client never calls it. A room whose owner device is revoked or gone can no longer admit or commit, which is the same as before. The rule's problem is availability (F2-8).
+- **Is the stronger web sentence true?**
+  - Literally, yes. Every leaf in this device's tree is now in the member list, including unlisted ones, and "reach {name}'s real device" holds for the compared pair.
+  - F-3 does not make it false: the comparison binds device id and key, and which person a label shows comes out in the in-person comparison.
+  - It is misleading under F2-7: counts can match while each side carries one plausible extra device. Use the wording above until the owner is pinned.
+
+### Checked and correct (677ea2c)
+
+- `joinRoomWithSigner`: the signer is recorded before the format and listing checks run, and a `format` failure wins over a `key` failure.
+- `{ ...joined, clientConfig }` now uses `strictClientConfig` when a directory is given.
+- `memberView`:
+  - a flag on this device is ignored;
+  - a flagged device with no leaf counts as `keyMismatch`;
+  - an unlisted leaf with conflicting keys under one id counts as `keyMismatch`.
+- `treeKeyToVerify` no longer fails because of this device's own row.
+- The `readers` count includes this device on both screens, so the two counts are comparable.
+- `applyRows`:
+  - the Welcome branch keeps nothing from a refused Welcome, and a genuine Welcome later in the same page still applies;
+  - commit removals feed `goneLeaves`, which clears flags;
+  - flags are written only when they change.
+- App: `keyStop` is set on `member_key_mismatch` in both `refreshOnce` and `pullOnce`, and cleared on a successful sync. Web: a mismatch still loads the room and the members.

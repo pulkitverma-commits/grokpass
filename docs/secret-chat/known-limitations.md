@@ -49,3 +49,10 @@ Plain statements of what Secret Chat does not do. The public page (/secret-chat)
    sent file once the send has settled, and sweeps the picker and viewer cache folders on every launch
    and on "Reset chats on this phone". The original photo stays in the phone's photo library, and a
    document picked from Files/iCloud Drive stays where it was; both are the user's, not OnePeek's.
+13. **The phone app's free-quota id.** One-time links made from the phone app carry an anonymous per-install
+   id (`p_client_id`, the same role as the website's `localStorage` entry) so the free quota can be counted.
+   It is kept in the phone's keychain, this device only. Signing out and "Reset chats on this phone" wipe it
+   (the quota then starts over); otherwise it persists, including across accounts used on the same phone
+   and, on iOS, across deleting and reinstalling the app as long as the keychain keeps the entry. OnePeek
+   can therefore tell that secrets created between two of those wipes came from the same phone; it never
+   learns their content or keys.

@@ -3,7 +3,8 @@
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
-import { AUTH_REDIRECT_URL, auth, getChat, getLockStore, parseAuthCallback, push, resetThisPhone } from '../chat';
+import { AUTH_REDIRECT_URL, auth, getChat, getLockStore, parseAuthCallback, push, resetThisPhone, type AuthSession } from '../chat';
+import { CLIENT_ID_KEY, getClientId, resetClientIdCache } from '../secrets';
 import type { FakeSqlite } from './fake-sqlite';
 
 const URL = 'https://xyzcompany.supabase.co';
@@ -239,7 +240,13 @@ describe('auth', () => {
       it("W3-5: nothing reaches the backend on the attacker's session: no rpc, from(), storage or channel call between verifyOtp and signOut", async () => {
         await auth.sendEmailLink('me@x.test');
         sbMock.__otp.email = 'other@evil.test';
+        // P2-1: a verified-sign-in listener that would act on the session (the way PushRefresher does)
+        // is never told, and so cannot put an RPC into the window.
+        const signedIn = jest.fn((_s: AuthSession) => { void getChat().registerPushDevice('ios', PUSH_TOKEN); });
+        const off = auth.onSignedIn(signedIn);
         expect(await auth.completeFromUrl('onepeek://auth?token_hash=attackers-hash&type=magiclink')).toBe(false);
+        off();
+        expect(signedIn).not.toHaveBeenCalled();
         const methods = sbMock.__calls.map(c => c.method);
         const verified = methods.indexOf('verifyOtp');
         const out = methods.indexOf('signOut', verified);
@@ -254,6 +261,25 @@ describe('auth', () => {
         // And after the sign-out, still nothing: the device is not registered under the attacker's account.
         expect(methods.slice(out + 1).filter(m => ['rpc', 'from', 'storage.from', 'channel'].includes(m))).toEqual([]);
         expect(rpcsOf('chat_register_device')).toEqual([]);
+        expect(rpcsOf('register_push_device')).toEqual([]);
+      });
+
+      it('P2-1: onSignedIn fires once for a matching email link, after the address check, with the verified session', async () => {
+        const signedIn = jest.fn((_s: AuthSession) => {});
+        const off = auth.onSignedIn(signedIn);
+        try {
+          await auth.sendEmailLink('owner@example.test');
+          expect(await auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(true);
+          expect(signedIn).toHaveBeenCalledTimes(1);
+          expect(signedIn.mock.calls[0][0]).toMatchObject({ email: USER.email, isAnonymous: false });
+          // Fired after verifyOtp and the compare; the session it reports is the one now installed.
+          expect(await auth.getSession()).toEqual(signedIn.mock.calls[0][0]);
+          // A refused link (no pending address) is not a sign-in.
+          expect(await auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(false);
+          expect(signedIn).toHaveBeenCalledTimes(1);
+          await auth.signOut();
+          expect(signedIn).toHaveBeenCalledTimes(1);   // sign-out is not a sign-in
+        } finally { off(); }
       });
 
       it('a session without an email never matches', async () => {
@@ -294,6 +320,64 @@ describe('auth', () => {
         expect(await auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(false);
         expect(callsOf('verifyOtp')).toEqual([]);
       });
+    });
+
+    it('P2-1: onSignedIn fires for the Google code exchange, Apple and guest, never from the raw auth event, and unsubscribes', async () => {
+      const signedIn = jest.fn((_s: AuthSession) => {});
+      const raw = jest.fn();
+      const off = auth.onSignedIn(signedIn);
+      const offRaw = auth.onChange(raw);
+      try {
+        expect(await auth.completeFromUrl('onepeek://auth?code=good-code')).toBe(true);
+        expect(signedIn).toHaveBeenCalledTimes(1);
+        expect(signedIn.mock.calls[0][0]).toMatchObject({ userId: USER.id, email: USER.email, isAnonymous: false });
+        await auth.signOut();
+        expect(await auth.completeFromUrl('onepeek://auth?code=bad-code')).toBe(false);
+        expect(signedIn).toHaveBeenCalledTimes(1);
+
+        await auth.signInWithApple('apple-identity-token', 'nonce-1');
+        expect(signedIn).toHaveBeenCalledTimes(2);
+        expect(signedIn.mock.calls[1][0]).toMatchObject({ userId: 'apple-user', isAnonymous: false });
+        await auth.signOut();
+
+        await auth.signInAsGuest();
+        expect(signedIn).toHaveBeenCalledTimes(3);
+        expect(signedIn.mock.calls[2][0]).toMatchObject({ userId: 'guest-user', isAnonymous: true });
+        await auth.signOut();
+
+        // The signal is this module's, not Supabase's: the fake never fires auth events, and the
+        // listener count is exactly the module's own emits (one per completed sign-in).
+        expect(raw).not.toHaveBeenCalled();
+        off();
+        await auth.signInAsGuest();
+        expect(signedIn).toHaveBeenCalledTimes(3);
+        await auth.signOut();
+      } finally { off(); offRaw(); }
+    });
+
+    it('P2-1: a throwing onSignedIn listener does not break the sign-in or the other listeners', async () => {
+      const bad = jest.fn(() => { throw new Error('listener bug'); });
+      const good = jest.fn();
+      const offs = [auth.onSignedIn(bad), auth.onSignedIn(good)];
+      try {
+        await auth.signInAsGuest();
+        expect(bad).toHaveBeenCalledTimes(1);
+        expect(good).toHaveBeenCalledTimes(1);
+        expect(await auth.getSession()).toMatchObject({ isAnonymous: true });
+      } finally { offs.forEach(f => f()); await auth.signOut(); }
+    });
+
+    it('P2-9: signOut wipes the secrets quota id (onepeek.client) from SecureStore and memory', async () => {
+      await auth.signInAsGuest();
+      resetClientIdCache();
+      const id = await getClientId();
+      expect(secureItems.get(CLIENT_ID_KEY)).toBe(id);
+      await auth.signOut();
+      expect(secureItems.has(CLIENT_ID_KEY)).toBe(false);
+      const next = await getClientId();   // a fresh identity, not the cached one
+      expect(next).not.toBe(id);
+      expect(secureItems.get(CLIENT_ID_KEY)).toBe(next);
+      secureItems.delete(CLIENT_ID_KEY); resetClientIdCache();
     });
 
     it('refuses provider errors and implicit-flow tokens in the fragment', async () => {
@@ -446,10 +530,16 @@ describe('resetThisPhone', () => {
     expect(secureItems.has('onepeek.wrap.auth')).toBe(true);
     const builds = sbMock.createClient.mock.calls.length;
     mockFiles.clearPickerCaches.mockClear();
+    resetClientIdCache();
+    const clientId = await getClientId();   // the secrets quota id: wiped by the reset too (P2-9)
+    expect(secureItems.get(CLIENT_ID_KEY)).toBe(clientId);
 
     await resetThisPhone();
 
     expect(mockFiles.clearPickerCaches).toHaveBeenCalledTimes(1);   // picker copies and viewer temps go too (W2-2 / W2-3)
+    expect(secureItems.has(CLIENT_ID_KEY)).toBe(false);
+    expect(await getClientId()).not.toBe(clientId);
+    secureItems.delete(CLIENT_ID_KEY); resetClientIdCache();
     expect(callsOf('stopAutoRefresh')).toHaveLength(1);
     expect(callsOf('signOut')[0].args).toEqual([{ scope: 'local' }]);
     expect(sqliteFake.files.get('onepeek-chat.db')!.sealed.size).toBe(0);

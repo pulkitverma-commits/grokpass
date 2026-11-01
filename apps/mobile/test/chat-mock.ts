@@ -70,6 +70,8 @@ export const message = (over: Partial<MockMessage> = {}): MockMessage => ({
 export const auth = {
   getSession: jest.fn(async () => null as null | { userId: string; email: string | null; isAnonymous: boolean }),
   onChange: jest.fn((_cb: unknown) => () => {}),
+  /** P2-1: the verified sign-in signal; PushRefresher listens here, never on onChange. */
+  onSignedIn: jest.fn((_cb: unknown) => () => {}),
   signInWithApple: jest.fn(async () => {}),
   startOAuth: jest.fn(async () => 'https://auth.example/oauth?provider=google'),
   completeFromUrl: jest.fn(async () => true),
@@ -83,12 +85,12 @@ export const resetThisPhone = jest.fn(async () => {});
 /** Stub of the lib's `push` export (core-crypto wave 2) until the merged lib carries the real one. */
 export const push = { register: jest.fn(async (_p: 'ios' | 'android', _t: string) => {}), unregister: jest.fn(async () => {}), current: jest.fn(async () => false) };
 
-/** C4 adds `getSupabase()` to lib/chat; a test that needs it sets `supabaseHolder.getSupabase` (read through a getter, so a namespace import sees it). */
-export const supabaseHolder: { getSupabase: undefined | (() => unknown) } = { getSupabase: undefined };
+/** The lib's `getSupabase()`: null (not configured) unless a test installs a client here. */
+export const getSupabase = jest.fn((): unknown => null);
 
 export const chatMock = {
   AUTH_REDIRECT_URL: 'onepeek://auth',
-  get getSupabase() { return supabaseHolder.getSupabase; },
+  getSupabase,
   getChat: () => chat,
   getLockStore: () => ({ set() {}, get: () => false, clear() {} }),
   auth,
@@ -103,6 +105,7 @@ export function resetChatMock() {
   for (const fn of Object.values(chat)) if (typeof fn === 'function') (fn as jest.Mock).mockClear();
   chat.keystore.get.mockClear().mockResolvedValue({});
   for (const fn of Object.values(auth)) fn.mockClear();
+  getSupabase.mockReset().mockReturnValue(null);
   resetThisPhone.mockClear();
   push.register.mockClear(); push.unregister.mockClear(); push.current.mockClear().mockResolvedValue(false);
   chat.myRooms.mockResolvedValue([]);

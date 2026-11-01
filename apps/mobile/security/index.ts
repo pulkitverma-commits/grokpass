@@ -6,10 +6,10 @@ export { Watermark, shortDeviceCode, watermarkText, type WatermarkProps } from '
 export { LockCover } from './LockCover';
 export { excludeChatDbFromBackup } from './backup';
 export { probeDeviceAuth, type Biometrics } from './biometrics';
-// N6: links, share intent (Android) / App Group share (iOS).
+// N6: links, share intent (Android module) / share extension (iOS, expo-share-intent).
 export { parseOnePeekLink, isSecretLink, isInviteLink, isShareWakeUrl, forgetLinkingURL, type OnePeekLink } from './links';
-export { useShareIntent, consumeShare, sweepShareCache, readPendingShare, shareParams, SHARE_ROUTE, SHARE_SECURE_KEY, type PendingShare } from './shareIntent';
-export { readAppGroupShare, APP_GROUP, SHARE_DIR } from './appGroup';
+export { useShareIntent, consumeShare, sweepShareCache, readPendingShare, shareParams, resetPackageShare, SHARE_ROUTE, SHARE_SECURE_KEY, packageHookOptions, type PendingShare } from './shareIntent';
+export { importShareIntent, sweepGroupContainer, APP_GROUP, SHARE_DIR } from './iosShare';
 export {
-  AUTO_LOCK_MS, COVER_LABEL, DEVICE_INSECURE_WARNING, PROTECTION_COPY, SCREENSHOT_NOTICE_MINE, screenshotNoticeTheirs, UNLOCK_PROMPT,
+  AUTO_LOCK_MS, COVER_LABEL, MAX_SHARE_ITEMS, MAX_SHARE_ITEM_BYTES, DEVICE_INSECURE_WARNING, PROTECTION_COPY, SCREENSHOT_NOTICE_MINE, screenshotNoticeTheirs, UNLOCK_PROMPT,
 } from './constants';

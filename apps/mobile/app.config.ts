@@ -100,9 +100,29 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // native-security (N1, N3): FLAG_SECURE on MainActivity; Android backup/transfer rules.
     './plugins/withSecureWindow.js',
     './plugins/withBackupRules.js',
-    // native-security (N6): App Group entitlement for the share flow; the hand-written Share Extension
-    // target is EXPERIMENTAL (never compiled here) and only added when ONEPEEK_SHARE_EXTENSION=1.
-    ['./plugins/withShareExtension.js', { appGroup: 'group.io.onepeek.app', extension: process.env.ONEPEEK_SHARE_EXTENSION === '1' }],
+    // native-security (N6b): App Group entitlement on the app target. Must stay BEFORE 'expo-share-intent'
+    // (it dedupes the group that plugin prepends); same id as `iosAppGroupIdentifier` below.
+    ['./plugins/withAppGroup.js', { appGroup: 'group.io.onepeek.app' }],
+    // native-security (N6b): iOS share sheet via expo-share-intent: Share Extension target "OnePeekShare"
+    // (display name "OnePeek Share", bundle id io.onepeek.app.share-extension), App Group, activation rules
+    // (text, 1 URL, up to 10 images / movies / files; no WebPage rule: no JS preprocessor in Safari pages).
+    // Android stays on modules/share-intent: disableAndroid skips the package's intent filters and launchMode,
+    // and security/shareIntent.ts disables its hook off iOS. Consumed by security/shareIntent.ts + iosShare.ts.
+    [
+      'expo-share-intent',
+      {
+        iosActivationRules: {
+          NSExtensionActivationSupportsText: true,
+          NSExtensionActivationSupportsWebURLWithMaxCount: 1,
+          NSExtensionActivationSupportsImageWithMaxCount: 10,
+          NSExtensionActivationSupportsMovieWithMaxCount: 10,
+          NSExtensionActivationSupportsFileWithMaxCount: 10,
+        },
+        iosAppGroupIdentifier: 'group.io.onepeek.app',
+        iosShareExtensionName: 'OnePeek Share',
+        disableAndroid: true,
+      },
+    ],
   ],
   experiments: { typedRoutes: true },
   extra: {

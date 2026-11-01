@@ -113,10 +113,15 @@ export function isInviteLink(url: string | null | undefined): boolean {
   return parseOnePeekLink(url)?.kind === 'invite';
 }
 
-/** The share-extension wake-up URL (iOS): onepeek://share, nothing else on it. */
+/**
+ * The URL expo-share-intent's Share Extension wakes the app with (iOS): `onepeek://dataUrl=<key>?nonce=…#<type>`
+ * (`<key>` is `onepeekShareKey`, the UserDefaults key in the App Group). No content is on it. `parseOnePeekLink`
+ * returns null for it (host `dataUrl=…` is not a known path); expo-router needs `app/+native-intent.tsx` to
+ * redirect it (README N6b).
+ */
 export function isShareWakeUrl(url: string | null | undefined): boolean {
   if (typeof url !== 'string') return false;
-  return /^onepeek:\/\/share\/?(?:[?#].*)?$/i.test(url.trim());
+  return /^onepeek:\/\/dataUrl=[A-Za-z0-9_-]+(?:[?#].*)?$/i.test(url.trim());
 }
 
 /**

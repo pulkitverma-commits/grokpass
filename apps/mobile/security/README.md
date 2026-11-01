@@ -28,17 +28,32 @@ softened or inflated: where a platform cannot do something, it says so.
 - `modules/screen-state` is a local Expo module: autolinked from `apps/mobile/modules` (the default
   `nativeModulesDir` of expo-modules-autolinking 58); needs a dev build, not Expo Go.
 - **N6 share intent (lead):** mount the bridge once, inside `<SecurityProvider>` next to `<AuthGate>` (it
-  needs the router and must not run while locked):
+  needs the router and must not run while locked). No `ShareIntentProvider` is needed: the bridge calls
+  `expo-share-intent`'s hook itself (once, iOS only), so this is the whole wiring:
 
   ```tsx
   import { useShareIntent } from '@/security';
   function ShareIntentBridge() { useShareIntent(); return null; }
   // …inside <SecurityProvider cover={<LockedScreen />}>: <AuthGate session={session} /><ShareIntentBridge />
   ```
+  Plus one route file, because the package's extension wakes the app with
+  `onepeek://dataUrl=onepeekShareKey?nonce=…#<type>` and expo-router would otherwise open an unmatched
+  route for the path `dataUrl=onepeekShareKey` (the bridge reads the share off that URL by itself):
+
+  ```tsx
+  // app/+native-intent.tsx  (expo-router: https://docs.expo.dev/router/advanced/native-intent/)
+  import { isShareWakeUrl } from '@/security';
+  export function redirectSystemPath({ path }: { path: string; initial: boolean }): string {
+    // expo-share-intent's wake-up carries no content; the bridge imports the share and pushes /share itself.
+    return isShareWakeUrl(path) ? '/' : path;
+  }
+  ```
   It pushes `/share` with `{ text?, uris? }` exactly once per share (mobile-ui's `app/share.tsx`), after
   asserting FLAG_SECURE. The share screen calls `useSecureScreen('share')` and, when done (sent or
   cancelled), `consumeShare()`. `modules/share-intent` is a second local Expo module (autolinked like
   `screen-state`; dev build, not Expo Go). `app.config.ts` additions are listed under N6.
+  Recommended (lead, `apps/mobile/package.json`): `"expo": { "autolinking": { "android": { "exclude":
+  ["expo-share-intent"] } } }` so the package's Android native half is not compiled at all (see N6b).
 
 ## API (`apps/mobile/security/index.ts`)
 
@@ -50,11 +65,12 @@ softened or inflated: where a platform cannot do something, it says so.
 | `useScreenshotAlert(roomId, ttl)` / `onScreenshot(cb)` | On a screenshot, `getChat().sendScreenshotAlert(roomId, ttl)`; never the server directly. |
 | `Watermark({ viewerName, deviceCode })` | Translucent diagonal overlay, web wording `<name> · <code> · <stamp>`. `shortDeviceCode(id)` = the web's `shortId`. |
 | `LockCover` | Plain full-screen cover (`testID="app.cover"`, accessibility label "OnePeek is hidden"). |
-| `parseOnePeekLink(url)` | `{ kind: 'secret', id, key } \| { kind: 'invite', token } \| { kind: 'verify', digits } \| { kind: 'auth' } \| null`. Strict: hosts `onepeek.io` / `www.onepeek.io` / scheme `onepeek`, 10-char secret id, 43-char key, 32–128-char token, 60 digits. For the viewer, the join screen, the scanner and the share screen. `isSecretLink`, `isInviteLink`, `isShareWakeUrl` are shorthands. |
+| `parseOnePeekLink(url)` | `{ kind: 'secret', id, key } \| { kind: 'invite', token } \| { kind: 'verify', digits } \| { kind: 'auth' } \| null`. Strict: hosts `onepeek.io` / `www.onepeek.io` / scheme `onepeek`, 10-char secret id, 43-char key, 32–128-char token, 60 digits. For the viewer, the join screen, the scanner and the share screen. `isSecretLink`, `isInviteLink` are shorthands; `isShareWakeUrl` is true for expo-share-intent's wake-up URL `onepeek://dataUrl=<key>…` (for `app/+native-intent.tsx`). |
 | `forgetLinkingURL()` | After a secret key / invite token has been consumed: clears expo-linking's cached initial URL and (Android) the activity Intent's data, so nothing in the process can read the fragment again. |
-| `useShareIntent()` | Root bridge (see Wiring). Sweeps `<cache>/share-intent/` on launch, reads the pending share (Android module / iOS App Group), asserts FLAG_SECURE, `router.push('/share', { text?, uris? })` once per share. |
-| `consumeShare()` | Share screen, when done: clears the native pending share and deletes `<cache>/share-intent/`. `sweepShareCache()` is the sweep alone. |
-| `readAppGroupShare()` | iOS: reads and wipes `<App Group>/share-intent/` (manifest + files), moving files into `<cache>/share-intent/`. `APP_GROUP = 'group.io.onepeek.app'`. |
+| `useShareIntent()` | Root bridge (see Wiring). Sweeps `<cache>/share-intent/` on launch, reads the pending share (Android: `modules/share-intent`; iOS: expo-share-intent's hook, called inside with `packageHookOptions()` = `{ disabled: OS !== 'ios', resetOnBackground: false, debug: false }`), asserts FLAG_SECURE, `router.push('/share', { text?, uris? })` once per share. |
+| `consumeShare()` | Share screen, when done: clears the Android pending share; on iOS also `resetPackageShare()` (the package's UserDefaults copy) and `sweepGroupContainer()`; deletes `<cache>/share-intent/`. `sweepShareCache()` is the sweep alone. |
+| `importShareIntent(intent)` | iOS: turns the package's `{ text, webUrl, files }` into `{ text?, uris?, dropped? }`, MOVING each file out of the App Group container into `<cache>/share-intent/<24 hex>.<ext>` (caps: `MAX_SHARE_ITEMS`, `MAX_SHARE_ITEM_BYTES`), then `sweepGroupContainer()` (every regular file at the container root). `APP_GROUP = 'group.io.onepeek.app'`. |
+| `MAX_SHARE_ITEMS` / `MAX_SHARE_ITEM_BYTES` | 10 items, 50 MB − 1 KB per item (P2-4), the same numbers in the Kotlin receiver, the JS binding and the iOS importer. |
 | `excludeChatDbFromBackup()` | iOS: marks the SQLite directory and `onepeek-chat.db(-wal/-shm/-journal)` as excluded from backup. Called by the provider on mount. |
 | Constants | `AUTO_LOCK_MS` (60 000), `SECURE_RETRY_MS` (500), `UNLOCK_PROMPT`, `DEVICE_INSECURE_WARNING`, `SCREENSHOT_NOTICE_MINE`, `screenshotNoticeTheirs(name)`, `PROTECTION_COPY`. |
 
@@ -149,8 +165,16 @@ the screen or an iOS screenshot shows who was looking and when. It does not prev
 `OnCreate` and later ones in `OnNewIntent` (MainActivity is `singleTask`): `EXTRA_TEXT`, `EXTRA_STREAM`
 (single `Uri` / `ArrayList<Uri>`, `ClipData` fallback). `getPendingShare()` (an `AsyncFunction`, so off the
 UI thread) copies each `content://` item through `ContentResolver.openInputStream` into
-`<cacheDir>/share-intent/<24 hex>.<ext>` and returns `{ text?, uris? }` with `file://` URIs, once; it then
-forgets the share. `clearPendingShare()` / `clearIntentData()` replace the activity's Intent with a bare
+`<cacheDir>/share-intent/<24 hex>.<ext>` and returns `{ text?, uris?, dropped? }` with `file://` URIs, once; it
+then forgets the share. **Caps (P2-4):** `content://` URIs only (a `file://` URI would be opened with our own
+permissions: a hostile sender could point `EXTRA_STREAM` at our `databases/` or `shared_prefs/`), never a URI
+whose authority starts with our package name (we export no provider), at most `MAX_SHARE_ITEMS` (10) items,
+at most `MAX_SHARE_ITEM_BYTES` per item (the copy is stopped and the partial file deleted; the other items
+still arrive); `dropped` counts the skipped items and is never a route param (`shareParams` copies `text` and
+`uris` only). The JS binding (`src/ShareIntentModule.ts#filterShareUris`) applies the same rules again: only
+`file://` URIs that are direct children of `<cache>/share-intent/`, at most 10, so a regression on the native
+side cannot deliver `file:///data/data/io.onepeek.app/databases/x.db` to the share screen (jest).
+`clearPendingShare()` / `clearIntentData()` replace the activity's Intent with a bare
 `ACTION_MAIN` so a process restore from Recents cannot re-deliver it and `Linking.getInitialURL()` cannot
 read a consumed link. **Guarantee:** the shared bytes exist as a plaintext copy in the app cache from
 `getPendingShare()` until `consumeShare()` or the next launch, whichever first; the cache is excluded from
@@ -159,46 +183,68 @@ of what was shared (the photo in Photos, the file in Files, the text in the send
 some OEMs); that is theirs, not ours. A share that arrives while the app is locked is delivered after unlock
 (the bridge is mounted inside the provider). Nothing is logged: no URI, name, size or text.
 
-### N6b Receiving shares: iOS
+### N6b Receiving shares: iOS (expo-share-intent 9.0.0)
 iOS has no share intent. An app receives from the share sheet only through a **Share Extension**: a second
-target in its own process that cannot talk to the app directly, only through an **App Group** container
-(`FileManager.containerURL(forSecurityApplicationGroupIdentifier:)`). Two honest options, both evaluated:
+target in its own process that cannot talk to the app directly, only through an **App Group** container. We
+use the maintained package `expo-share-intent@9.0.0` (peer `expo ^58`, `expo-linking`, `expo-constants`:
+satisfied; no `patch-package` since v6). The hand-written extension skeleton that used to live in
+`plugins/withShareExtension.js` (never compiled) is deleted: one iOS path.
 
-- **(b) Package — recommended for the first iOS build:** `expo-share-intent@9.0.0` (peer `expo ^58`,
-  `expo-linking >=58.0.13`, `expo-constants >=58.0.12`: all satisfied here; the README's table maps SDK 58 →
-  9.x). Its config plugin adds the extension target, App Group and activation rules, its hook
-  `useShareIntent()` returns `{ text, webUrl, files[{ path, mimeType, fileName, size }] }` and
-  `resetShareIntent()`. It needs no `patch-package` since v6. If the lead installs it, the iOS branch of
-  `security/shareIntent.ts#readPendingShare` should read from its hook/context instead of
-  `readAppGroupShare()` (the file paths it returns are copied the same way into `<cache>/share-intent/`), and
-  `plugins/withShareExtension.js` is left with the `extension: false` default (its App Group entitlement is
-  harmless; use the package's group id or ours, but one id in both places). Note from its docs: EAS builds
-  should have only one extension target, and the native call must be made from the root layout under
-  expo-router, which is where our bridge already lives.
-- **(a) Hand-written, no package — implemented as an EXPERIMENTAL skeleton:** `plugins/withShareExtension.js`.
-  Always on: the `com.apple.security.application-groups` entitlement (`group.io.onepeek.app`) on the app
-  target via `withEntitlementsPlist` (tested). Behind `ONEPEEK_SHARE_EXTENSION=1` only: a Swift
-  `ShareViewController` (UTType order fileURL/image/movie → url → plainText → data; `NSItemProvider
-  .loadFileRepresentation`; files to `<group>/share-intent/<24 hex>.<ext>` with
-  `completeUntilFirstUserAuthentication` protection; a `pending.json` manifest), `Info.plist`
-  (`NSExtensionActivationRule`: text, 1 URL, 10 images / movies / files), its entitlements, and the target
-  wired into the pbxproj with the `xcode` package (`addTarget('app_extension')`, three build phases, per-config
-  build settings). **It has never been compiled: this Mac has no Xcode and the first compile is an EAS build
-  (S27).** The receiving side is real and tested either way: `security/appGroup.ts` reads the container via
-  `Paths.appleSharedContainers['group.io.onepeek.app']` (expo-file-system 58; no native code in the app
-  target), validates the manifest (v1, ≤ 50 items, 64 KB, hex names only), moves files into
-  `<cache>/share-intent/`, wipes the group directory, and `useShareIntent()` runs it on mount, on every
-  `AppState` → `active`, and when `onepeek://share` arrives. Opening that URL from a share extension is not an
-  official API (only Today widgets get `NSExtensionContext.open`); the extension uses the responder-chain
-  call that community plugins use, and when it stops working the share is still picked up on the next
-  launch / foreground. **EAS:** the App Group capability must exist on the app identifier (EAS syncs it from
-  the entitlements with managed credentials) and, with the extension enabled, on `io.onepeek.app.share` plus
-  an `ios.appExtensions` entry in `app.config.ts` (lead) so the extension gets its own profile.
-  **Guarantee once an extension exists:** the plaintext copy lives in the App Group container between the
-  share and the next app foreground (seconds normally; until the next launch if the wake URL fails), then in
-  `<cache>/share-intent/` until `consumeShare()`. The group container is readable by both processes and is
-  included in **iCloud/Finder backups unless excluded**; the app wipes it on read, and the extension writes
-  it with `completeUntilFirstUserAuthentication` so it is at least encrypted at rest before first unlock.
+**What its config plugin adds natively** (read from `plugin/build`; `npx expo config --type prebuild` and
+`--type introspect` confirm the config-level parts):
+- a second Xcode target **`OnePeekShare`** (`iosShareExtensionName: 'OnePeek Share'`, so the share sheet
+  shows "OnePeek Share"; the sanitised name must not collide with the main target `OnePeek`, tested), bundle
+  id `io.onepeek.app.share-extension`, files under `ios/OnePeekShare/`: `ShareViewController.swift`,
+  `MainInterface.storyboard` (transparent, `iosHideView`), `OnePeekShare-Info.plist` (`NSExtension` →
+  `com.apple.share-services`, `NSExtensionActivationRule` = our `iosActivationRules`: text, 1 web URL, 10
+  images / movies / files; **no `WebPage` rule**, so its JS preprocessor never runs inside a shared Safari page),
+  `OnePeekShare.entitlements` (the App Group), `PrivacyInfo.xcprivacy` (UserDefaults, reason CA92.1),
+  `ShareExtensionPreprocessor.js` (unused without the WebPage rule);
+- on the **app target**: `com.apple.security.application-groups: ['group.io.onepeek.app']` (it prepends
+  without checking; `plugins/withAppGroup.js`, listed before it, dedupes and asserts the same id: introspect
+  shows exactly one entry) and the Info.plist key `AppGroupIdentifier = group.io.onepeek.app` (its native
+  module reads the group id from there);
+- `extra.eas.build.experimental.ios.appExtensions = [{ targetName: 'OnePeekShare', bundleIdentifier:
+  'io.onepeek.app.share-extension', entitlements: { application-groups: [group] } }]` — this is how EAS
+  provisions the extension's own profile; nothing to add by hand (its checker throws if that target appears
+  twice). The App Group capability must exist on BOTH identifiers in the developer portal (EAS syncs it from
+  the entitlements with managed credentials; verify on the first build, S27);
+- it requires `scheme` (`onepeek`) and throws at config time if `CFBundleURLTypes` is overridden without it.
+- Android: `disableAndroid: true` skips its intent filters and `launchMode` edit; `modules/share-intent`
+  stays the only Android receiver. Its Android **native module is still compiled** (autolinking) and its
+  `ReactActivityLifecycleListener.onCreate` keeps a reference to the launching Intent in a static when the
+  Intent has a MIME type; nothing ever reads it because the hook is `disabled` off iOS. If it were ever
+  enabled it would copy into `cacheDir` root as `IMG_<timestamp>.<ext>` and **log the original file name**
+  (`Log.i("FileDirectory", …)`), both against our rules — hence the autolinking exclude recommended in Wiring.
+
+**How a share flows:** the extension copies every file into the **root of the App Group container** as
+`<UUID>.<ext>` (plus a `<base64(originalName)>.jpg` thumbnail per video, so an original file name does touch
+disk inside the container), writes the item list as JSON into `UserDefaults(suiteName: group)` under
+`onepeekShareKey` (a plist in the container, included in iCloud/Finder backups, kept **until the app resets
+it**) and opens `onepeek://dataUrl=onepeekShareKey?nonce=…#<media|file|text|weburl>` (no content on the URL;
+the package's `NSLog("HandleUrl …")` writes that URL to the unified log). In the app, the package hook sees
+the URL (`useLinkingURL`; cold start: initial URL; warm start: URL event, AppState active) and exposes
+`{ text, webUrl, files[{ path, mimeType, fileName, size }] }`. Our bridge imports it
+(`security/iosShare.ts`): `text`, else `webUrl`, becomes `text`; each `file://` path is **moved** into
+`<cache>/share-intent/<24 hex>.<ext>` (random name; the original name never reaches the cache or a param;
+`MAX_SHARE_ITEMS`, `MAX_SHARE_ITEM_BYTES`), then every regular file left at the container root is deleted
+(thumbnails, leftovers; `Library/Preferences` is a directory and is left alone); then `resetShareIntent()`
+clears the UserDefaults entry (its `clearShareIntent` nils the key; **it never deletes the files**, which is
+why the import moves and sweeps). `consumeShare()` repeats the reset and the sweep. On launch the container
+is swept too, unless this launch IS the wake-up URL (the files are about to be read). `debug` stays off: every
+`console.debug` of shared content in the package is behind it. `+native-intent.tsx` (Wiring) keeps the router
+off the `dataUrl=` path; AuthGate may send a signed-out user to `/welcome` from it (harmless; the share still
+routes after sign-in only if the bridge is mounted then, which it is, inside the provider).
+
+**Guarantee:** the plaintext copy lives in the App Group container (files at the root, text in the
+UserDefaults plist) between the share and the next app foreground that carries the wake URL (seconds
+normally), then in `<cache>/share-intent/` until `consumeShare()` or the next launch. If the wake URL never
+arrives (iOS stops honouring the responder-chain `openURL` the extension uses), the package has no poll path:
+the share is not delivered, and the next launch / import / consume sweeps the files; the UserDefaults text
+stays until the next `consumeShare()` or share (nonce-keyed reads overwrite it). The container cannot be
+excluded from backup per key; the window is documented, not claimed away. **Limits:** the source app and the
+OS keep their copy; we never see the original name on iOS except inside the container (thumbnail) for that
+window. Nothing is logged by our code.
 
 ### N6c Universal Links / App Links: the fragment stays on the device
 Link shapes and the single parser are in `security/links.ts` (header comment). Audit (SDK 58 sources in
@@ -245,7 +291,10 @@ iOS: unchanged from N2 (no screenshot blocking; recording cover; watermark on he
 
 ## What is tested where
 - Jest (`cd apps/mobile && npx jest`): plugin transforms (Kotlin/Java, idempotent, rule XML and
-  manifest attributes), provider state machine (cold start, unlock success/failure, 59/61 s,
+  manifest attributes; App Group entitlement dedupe and the two N6b plugins' options/order in app.config.ts),
+  N6: the Android JS guard (`filterShareUris`: own-storage `file://` dropped, 11 → 10), the iOS importer
+  (move + random names + sweep + caps) and the bridge (once per share, FLAG_SECURE first, package disabled
+  off iOS, reset after import, consume resets the package), provider state machine (cold start, unlock success/failure, 59/61 s,
   panic, reload, lockNow, captured, insecure device, W1-4 app-key assert on mount / every active /
   retry after a throw / no loop, W1-7 stale unlock across a 61 s trip, under lockNow and under
   panic), `useSecureScreen` (mount asserts, unmount never calls allow, even after a rejected
@@ -256,11 +305,12 @@ iOS: unchanged from N2 (no screenshot blocking; recording cover; watermark on he
 
 ## Rules kept
 No `console.*`; no plaintext, keys, codes, room names or file names in prompts, events or errors;
-iOS is never described as blocking screenshots. N6: nothing hand-written in `ios/`; the Swift extension
-source is generated by the plugin and marked experimental until an EAS build has compiled it.
+iOS is never described as blocking screenshots. N6: nothing hand-written in `ios/`; the iOS share extension
+is `expo-share-intent`'s (generated at prebuild), first compiled by an EAS build (S27).
 
 ## `app.config.ts` lines owned by native-security (N6)
 - `android.intentFilters[1]`: `{ action: 'SEND', data: [{ mimeType: 'text/plain' }, { mimeType: 'image/*' }, { mimeType: '*/*' }], category: ['DEFAULT'] }`
 - `android.intentFilters[2]`: `{ action: 'SEND_MULTIPLE', data: [{ mimeType: 'image/*' }, { mimeType: '*/*' }], category: ['DEFAULT'] }`
-- `plugins[last]`: `['./plugins/withShareExtension.js', { appGroup: 'group.io.onepeek.app', extension: process.env.ONEPEEK_SHARE_EXTENSION === '1' }]`
-- `ios.infoPlist`: unchanged (the `onepeek` scheme already covers `onepeek://share`).
+- `plugins[12]`: `['./plugins/withAppGroup.js', { appGroup: 'group.io.onepeek.app' }]` (must stay before `expo-share-intent`; tested)
+- `plugins[13]`: `['expo-share-intent', { iosActivationRules: { NSExtensionActivationSupportsText: true, NSExtensionActivationSupportsWebURLWithMaxCount: 1, NSExtensionActivationSupportsImageWithMaxCount: 10, NSExtensionActivationSupportsMovieWithMaxCount: 10, NSExtensionActivationSupportsFileWithMaxCount: 10 }, iosAppGroupIdentifier: 'group.io.onepeek.app', iosShareExtensionName: 'OnePeek Share', disableAndroid: true }]`
+- `ios.infoPlist`: unchanged (the `onepeek` scheme covers the package's `onepeek://dataUrl=…` wake-up; the plugin itself adds `AppGroupIdentifier`). No `ios.appExtensions` by hand: the plugin fills `extra.eas.build.experimental.ios.appExtensions`.

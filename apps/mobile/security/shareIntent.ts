@@ -4,9 +4,13 @@
 // Sources:
 //   Android  modules/share-intent (ACTION_SEND / ACTION_SEND_MULTIPLE; cold start via getPendingShare on
 //            mount, warm start via the `onShare` signal). Items are plaintext copies in <cache>/share-intent/.
-//   iOS      the Share Extension writes to the App Group container and opens `onepeek://share`; the hook
-//            reads the container on mount, on every AppState → active and when that URL arrives
-//            (apps/mobile/security/appGroup.ts), moving the files into <cache>/share-intent/.
+//   iOS      expo-share-intent (config plugin: Share Extension target + App Group; hook: `useShareIntent`).
+//            Its extension copies the items into the App Group container and wakes the app with
+//            `onepeek://dataUrl=onepeekShareKey?nonce=…#<type>`; its hook reads them (cold start: initial URL,
+//            warm start: URL event / AppState active). `security/iosShare.ts` moves the files into
+//            <cache>/share-intent/ and sweeps the container; then `resetShareIntent()` clears the package.
+//            The package's hook is called here, once, with `disabled` on every other platform, so its Android
+//            native module (still compiled: autolinking) is never asked for anything: Android has one path.
 //
 // Contract with mobile-ui (app/share.tsx): params are `{ text?: string; uris?: string[] }`, exactly.
 // Text that is a OnePeek secret or invite link is passed through as `text` unchanged; the share
@@ -16,15 +20,18 @@
 // Plaintext lifetime: the copies exist from the share until `consumeShare()` (mobile-ui calls it when
 // the share has been encrypted and sent, or cancelled) or the next launch, whichever comes first:
 // `sweepShareCache()` runs on mount before anything is read, so a kill mid-share leaves nothing past
-// one launch. The OS and the source app keep their own copy of the shared content; that is theirs.
+// one launch. On iOS the App Group container root is swept too, on mount unless this launch IS the
+// package's wake-up (its files are read and moved a moment later), at every import and at consume. The OS
+// and the source app keep their own copy of the shared content; that is theirs.
 // Nothing here logs anything; no param ever carries a size, a name or the text to a log.
 import { Directory, Paths } from 'expo-file-system';
 import { useLinkingURL } from 'expo-linking';
 import { useRouter } from 'expo-router';
-import { useEffect, useRef } from 'react';
-import { AppState, Platform } from 'react-native';
+import { getShareExtensionKey, ShareIntentModule, useShareIntent as usePackageShareIntent, type ShareIntent } from 'expo-share-intent';
+import { useEffect, useMemo, useRef } from 'react';
+import { Platform } from 'react-native';
 import { addShareListener, clearPendingShare, getPendingShare, type PendingShare } from '@/modules/share-intent';
-import { readAppGroupShare, SHARE_DIR } from './appGroup';
+import { importShareIntent, SHARE_DIR, sweepGroupContainer } from './iosShare';
 import { isShareWakeUrl } from './links';
 import { secureScreenMount } from './secureScreen';
 
@@ -34,6 +41,15 @@ export type { PendingShare };
 export const SHARE_ROUTE = '/share';
 /** FLAG_SECURE key asserted before the share screen is pushed. */
 export const SHARE_SECURE_KEY = 'share';
+
+/**
+ * Options for expo-share-intent's hook: iOS only (Android is modules/share-intent); no reset when the app
+ * goes to the background (the import below may still be moving files; the key is cleared after it); no
+ * debug logging ever (it would print the shared text and file paths).
+ */
+export function packageHookOptions(os: string = Platform.OS) {
+  return { disabled: os !== 'ios', resetOnBackground: false, debug: false } as const;
+}
 
 let sweep: Promise<void> | null = null;
 
@@ -49,17 +65,31 @@ export function sweepShareCache(): Promise<void> {
   return run;
 }
 
+/**
+ * iOS: clears expo-share-intent's copy of the share (the JSON in the App Group's UserDefaults; the same
+ * thing its `resetShareIntent()` does natively) so it does not outlive the files. Never throws.
+ */
+export function resetPackageShare(): void {
+  try { ShareIntentModule?.clearShareIntent(getShareExtensionKey()); } catch { /* no native module (jest, web) */ }
+}
+
 /** mobile-ui calls this when the share screen is done with the items (sent or cancelled). */
 export function consumeShare(): Promise<void> {
   clearPendingShare();
+  if (Platform.OS === 'ios') {
+    resetPackageShare();
+    sweepGroupContainer();
+  }
   return sweepShareCache();
 }
 
-/** Reads whatever the platform holds, once. Android: the native module. iOS: the App Group container. */
+/**
+ * Reads whatever the Android module holds, once. On iOS shares do not sit anywhere the app can poll:
+ * they arrive through expo-share-intent's hook (see `useShareIntent`), so this resolves null there.
+ */
 export async function readPendingShare(os: string = Platform.OS): Promise<PendingShare | null> {
   if (sweep) await sweep.catch(() => {});
   if (os === 'android') return getPendingShare();
-  if (os === 'ios') return readAppGroupShare();
   return null;
 }
 
@@ -75,43 +105,58 @@ export function shareParams(p: PendingShare | null): { text?: string; uris?: str
 /**
  * Mount once, inside the router (root layout). Routes each incoming share to `/share` exactly once
  * and sweeps the share cache on launch. "Once" comes from the sources: the Android module hands a
- * share out a single time and the App Group reader wipes what it read, so a cold-start read followed
- * by the first `active` or the wake-up URL finds nothing the second time. A genuine second share of
- * the same content is delivered again (no content-based dedupe on purpose).
+ * share out a single time; on iOS the package's intent is imported (files moved out of the container)
+ * and reset, so the same state object is never delivered twice and a re-read after the reset finds
+ * nothing. A genuine second share of the same content is a new intent and is delivered again (no
+ * content-based dedupe on purpose). No provider is needed around this: the package's hook is called here.
  */
 export function useShareIntent(): void {
   const router = useRouter();
   const url = useLinkingURL();
+  const pkgOptions = useMemo(() => packageHookOptions(), []);
+  const pkg = usePackageShareIntent(pkgOptions);
   const busy = useRef(false);
+  const delivered = useRef<ShareIntent | null>(null);
 
-  const deliver = async () => {
+  const route = (p: PendingShare | null) => {
+    const params = shareParams(p);
+    if (!params) return;
+    secureScreenMount(SHARE_SECURE_KEY);
+    router.push({ pathname: SHARE_ROUTE, params });
+  };
+
+  const deliverAndroid = async () => {
     if (busy.current) return;
     busy.current = true;
     try {
-      const params = shareParams(await readPendingShare());
-      if (!params) return;
-      secureScreenMount(SHARE_SECURE_KEY);
-      router.push({ pathname: SHARE_ROUTE, params });
+      route(await readPendingShare());
     } finally {
       busy.current = false;
     }
   };
 
-  // Launch: sweep leftovers first, then look for a share that launched the app.
+  // Launch: sweep leftovers first, then look for a share that launched the app (Android). On iOS the
+  // container is swept now unless the package is about to read it (this launch is its wake-up URL).
   useEffect(() => {
     let alive = true;
-    sweepShareCache().then(() => { if (alive) void deliver(); });
-    const offShare = addShareListener(() => { if (alive) void deliver(); });
-    const sub = AppState.addEventListener('change', (s) => {
-      if (alive && s === 'active' && Platform.OS === 'ios') void deliver();
-    });
-    return () => { alive = false; offShare(); sub.remove(); };
+    if (Platform.OS === 'ios' && !isShareWakeUrl(url)) sweepGroupContainer();
+    sweepShareCache().then(() => { if (alive && Platform.OS === 'android') void deliverAndroid(); });
+    const offShare = addShareListener(() => { if (alive) void deliverAndroid(); });
+    return () => { alive = false; offShare(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // iOS wake-up from the extension (cold start: initial URL; warm start: onURLReceived).
+  // iOS: the package's state changed. Import (move files), reset the package, route.
+  const intent = pkg.hasShareIntent ? pkg.shareIntent : null;
   useEffect(() => {
-    if (isShareWakeUrl(url)) void deliver();
+    if (!intent || delivered.current === intent) return;
+    delivered.current = intent;
+    void (async () => {
+      if (sweep) await sweep.catch(() => {});
+      const p = await importShareIntent(intent);
+      pkg.resetShareIntent();
+      route(p);
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url]);
+  }, [intent]);
 }

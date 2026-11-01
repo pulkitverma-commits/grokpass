@@ -4,6 +4,10 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- **Human approved Gate 3 with the device matrix deferred** (2026-11-01). All four gates approved. Lead wrote the pull
+  request description (`docs/mobile/pr/mobile-integration-to-main.md`). Code work that needs no device is complete;
+  everything else waits on the human: accounts, migrations 008/009, Vercel env, Supabase auth settings, pushing the
+  branch (PAT lacks `workflow`), opening the PR, the sunset and `chat_send` decisions, then the device matrix.
 - F-2 fix merged after four security-review passes (`security-review/f2-tree-keys.md`): safety numbers, verification and
   "key changed" from the MLS tree keys (byte-identical when keys agree); invite links `#<token>.1<pin>` carry the owner's
   device id and key hash in the fragment (member-made invites carry the owner's pin); Welcome signer, every committer and

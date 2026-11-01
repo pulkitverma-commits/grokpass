@@ -2,8 +2,8 @@
 
 Date: 2026-11-01. Branch: `mobile/integration` (22 commits after Gate 2 approval, 78 files, +5k lines).
 
-Decision requested from the human: **approve Phase 3 as "complete except the device matrix"**, or hold the gate until
-a device build runs. The original prompt's Gate 3 text is gone from this Mac; plan §5 lists the Phase 3 work. Every
+Decision: **approved by the human on 2026-11-01 as "complete except the device matrix".** Device results are appended
+here once a build runs. The original prompt's Gate 3 text is gone from this Mac; plan §5 lists the Phase 3 work. Every
 remaining Gate 3 criterion needs a device build, which needs the accounts and free disk.
 
 Security verdict: **no open high or critical findings.** F-1 (sign-out kept the chat keys) is fixed. F-2 (safety

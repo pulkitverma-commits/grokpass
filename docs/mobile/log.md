@@ -4,6 +4,14 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- mobile-ui (U8 + carry-overs) merged: one-time secret composer (07: text / Wi-Fi / photo / file, views, expiry, viewer
+  timer, hold-to-view, copy/save flags; "in this chat" vs onepeek.io link with masked result, QR, copy, share, send
+  link in chat), secret viewer `app/s/[id]` (peek states, lock-email unlock, hold-to-view with watermark, timer,
+  content cleared on background/blur/unmount, geofenced links handed to the browser), share target `app/share`,
+  QR scanner `app/scan` (invite / secret / safety number / foreign), block member (local to the phone), report chat
+  (ids only). Carry-overs: PushRefresher re-registers after sign-in; root layout drives `auth.setForeground`. Secret
+  links never travel as route params (one-shot in-memory hand-off). Mobile 376 tests; iOS bundle 2601 modules.
+  Design 07's passcode option and camera capture are not built (no contract / Phase 3). New testIDs go to qa.
 - native-security (N6) merged: Android share receive (intent filters + local Kotlin module `modules/share-intent`
   copying shared items into `<cache>/share-intent/`, consumed once, swept), `useShareIntent()` routing to `/share`
   (lead wired `ShareIntentBridge` in the root layout), strict `parseOnePeekLink` (secret / invite / verify / auth),

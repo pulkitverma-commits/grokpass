@@ -8,8 +8,9 @@
 # Optional: MAESTRO_BIOMETRIC=sim (unlock in 09), MAESTRO_UNIVERSAL_LINKS=1 (physical devices),
 # MAESTRO_PUSH=1 (run 10, which needs a device that can mint a push token), KEEP_DEBUG=1 (keep
 # Maestro's debug logs; screenshots and recordings are always deleted).
-# The installed build must be the `e2e` EAS profile (EXPO_PUBLIC_E2E=1): 03 reads the full invite
-# link from `invite.link`, which every other build masks (W1-9).
+# The installed build must be the `e2e` EAS profile (`EAS_BUILD_PROFILE=e2e` sets `extra.e2e`; the
+# only producer, W3-2): 03 reads the full invite link from `invite.link`, which every other build
+# masks (W1-9). Setting EXPO_PUBLIC_E2E in a shell unmasks nothing.
 # Nothing in this script echoes a variable, and `set -x` is never enabled: the room link carries
 # the invite token.
 set -euo pipefail

@@ -76,7 +76,7 @@ one id per interactive element and per screen container.
 | `new.create` | New chat (08) | contract |
 | `new.error` | New chat (08), error notice | contract |
 | `invite.sheet` | Invite sheet container | contract |
-| `invite.link` | Invite sheet, the link text. **Masked** (`#••••••`, W1-9) unless the build sets `EXPO_PUBLIC_E2E=1`; see "Rendering requirements" | contract |
+| `invite.link` | Invite sheet, the link text. **Masked** (`#••••••`, W1-9) unless the build is the `e2e` EAS profile (`extra.e2e`, W3-2); see "Rendering requirements" | contract |
 | `invite.copy` | Invite sheet | contract |
 | `invite.share` | Invite sheet | contract |
 | `invite.done` | Invite sheet | contract |
@@ -231,12 +231,13 @@ Everything proposed on 2026-10-31 landed under a contract name (`signin.sent` �
 
 - `invite.link` is **masked** on screen (`maskLink`: `…#••••••`, one line, middle ellipsis) in every
   normal build, so a shoulder-surfer or a photo of the owner's screen never gets the bearer token
-  (security review W1-9). Only when the build sets `EXPO_PUBLIC_E2E=1` does it render the full link
-  in one `Text` (no `numberOfLines`, no ellipsis), which is what Maestro's `copyTextFrom` in flow 03
-  reads. **The E2E dev build profile must set it**: `eas.json` needs an `e2e` profile (`extends:
-  development`, `env: { EXPO_PUBLIC_E2E: "1" }`, iOS `simulator: true`); the `development`, `preview`
-  and `production` profiles must not. A flow run against a build without the flag fails at
-  `copyTextFrom` (the masked text is not a link), which is the intended failure, never a pass.
+  (security review W1-9). Only a build of the `e2e` EAS profile renders the full link in one `Text`
+  (no `numberOfLines`, no ellipsis), which is what Maestro's `copyTextFrom` in flow 03 reads.
+  **The `e2e` EAS profile is the only way to unmask** (W3-2): `app.config.ts` sets `extra.e2e` true
+  only when `EAS_BUILD_PROFILE=e2e`, and `InviteSheet` checks that value, not an env var; a shell
+  `EXPO_PUBLIC_E2E=1` unmasks nothing (and the config refuses to evaluate with it on `preview` or
+  `production`). A flow run against any other build fails at `copyTextFrom` (the masked text is not
+  a link), which is the intended failure, never a pass.
 - `chats.room` is the same id on every row. Flows select by `index`; the row's
   `accessibilityLabel` may carry the room name, never the `testID`.
 - `msg.<id>` is on the outer pressable of a bubble so `longPressOn` (hold-to-read) hits it. The

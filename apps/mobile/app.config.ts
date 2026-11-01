@@ -4,13 +4,20 @@ import type { ConfigContext, ExpoConfig } from 'expo/config';
 
 const BUNDLE_ID = 'io.onepeek.app';
 
-// EXPO_PUBLIC_E2E=1 makes the invite sheet render the full invite link (a bearer token) so Maestro
-// can read it. That must never reach a build people install from a store or a preview link
-// (security review W2-6), so the config refuses to evaluate for those EAS profiles.
-const E2E = process.env.EXPO_PUBLIC_E2E === '1';
-const PROFILE = process.env.EAS_BUILD_PROFILE ?? '';
-if (E2E && (PROFILE === 'preview' || PROFILE === 'production')) {
-  throw new Error(`EXPO_PUBLIC_E2E=1 is not allowed for the "${PROFILE}" build profile`);
+// `extra.e2e` makes the invite sheet render the full invite link (a bearer token) so Maestro can read
+// it. It is true only when EAS Build runs the `e2e` profile (`EAS_BUILD_PROFILE=e2e`): fail closed
+// (security review W2-6 / W3-2). `expo export` for `eas update`, `expo run:ios --configuration
+// Release` and a release archive from the generated projects evaluate this config with no profile
+// and therefore never unmask. `EXPO_PUBLIC_E2E` alone unmasks nothing any more; the throw below stays
+// as belt and braces so a stray flag on a preview/production build fails loudly instead of quietly.
+// Evaluated inside the export so `__tests__/app.config.test.ts` can run it under several environments.
+function e2eFlag(): boolean {
+  const flag = process.env.EXPO_PUBLIC_E2E === '1';
+  const profile = process.env.EAS_BUILD_PROFILE ?? '';
+  if (flag && (profile === 'preview' || profile === 'production')) {
+    throw new Error(`EXPO_PUBLIC_E2E=1 is not allowed for the "${profile}" build profile`);
+  }
+  return profile === 'e2e';
 }
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
@@ -89,5 +96,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // Fixed on purpose (security review S0b M2): invite links and the notify endpoint must never be
     // redirectable through an env var or OTA update. The core validates it again.
     siteUrl: 'https://onepeek.io',
+    // The only producer is the `e2e` EAS profile; InviteSheet checks `=== true`.
+    e2e: e2eFlag(),
   },
 });

@@ -320,7 +320,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     const out: RoomSummary[] = [];
     for (const r of rows) {
       const local = await roomLocal(r.id);
-      const pinned = !!(await storedOwnerPin(r.id, r.role));
+      const pinned = !!(await storedOwnerPin(r.id));
       out.push({ id: r.id, kind: r.kind, role: r.role, memberState: r.member_state, ttl: r.default_ttl_s, mode: r.expiry_mode, expiresAt: r.expires_at, name: local.name, ownerPinned: pinned });
     }
     return out;
@@ -329,14 +329,14 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
   /**
    * The room's owner pin from this device's sealed storage (F2-7, F2-10). `ownerPinned` and the
    * invite links depend on it alone, never on the server's word. A room this device created before
-   * pins existed gets its own pin written once, but only when this device really created the group:
-   * the server says it is the owner AND its own leaf is leaf 0 of its MLS state (createGroup puts
-   * the creator there; the owner is never removed, so nobody else can hold it).
+   * pins existed gets its own pin written once, when its own leaf is leaf 0 of its MLS state
+   * (createGroup puts the creator there and the owner is never removed, so nobody else can hold it).
+   * The server's role is not consulted (F2-13), so it can neither grant nor block the back-fill.
    */
-  async function storedOwnerPin(roomId: string, serverRole?: string): Promise<OwnerPin | null> {
+  async function storedOwnerPin(roomId: string): Promise<OwnerPin | null> {
     const stored = await ks.get<StoredPin>(roomKey(roomId, 'ownerPin'));
     if (stored?.pin) return stored.pin;
-    if (stored || serverRole !== 'owner') return null;   // a join from a link without a pin stays unpinned
+    if (stored) return null;   // a join from a link without a pin stays unpinned
     const state = await loadState(roomId);
     if (!state) return null;
     const dev = await ensureDevice();
@@ -360,7 +360,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     // F2-10: the ROOM's owner pin, never this device's own (in a quick room any member may invite):
     // the owner's own, or the one a member joined with. Without one the link is unpinned and says so
     // (`ownerPinned: false`): a member who joined with an older link can't vouch for the owner.
-    const pin = await storedOwnerPin(roomId, (await myRooms()).find(r => r.id === roomId)?.role);
+    const pin = await storedOwnerPin(roomId);
     const token = randomToken(32);
     const id = await rpc<string>('chat_create_invite', {
       p_room: roomId, p_token: token, p_expires_s: opts.expiresIn, p_max_uses: opts.maxUses, p_requires_approval: opts.approval,
@@ -837,6 +837,15 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
           // group must be that key. An honest owner always signs its own Welcomes.
           if (!(await isOwner(r.signer.deviceId, r.signer.signaturePublicKey))) {
             throw new mls.KeyMismatchError([r.signer.deviceId], 'signer', [r.signer.signaturePublicKey]);
+          }
+          // F2-12: the joiner can read the listing now. In a pinned room the pinned device must also
+          // be the device the server lists as owner; a link pinning anyone else (a member, a mistake)
+          // is refused like a wrong signer. Both have to agree; neither alone is trusted.
+          if (pin) {
+            const listed = await listedOwner();
+            if (listed && listed.device_id !== pin.deviceId) {
+              throw new mls.KeyMismatchError([r.signer.deviceId], 'signer', [r.signer.signaturePublicKey]);
+            }
           }
           const ownerLeaves = mls.memberLeaves(joined).filter(l => l.deviceId === r.signer.deviceId);
           if (ownerLeaves.some(l => !mls.sameKey(l.signaturePublicKey, r.signer.signaturePublicKey))) {

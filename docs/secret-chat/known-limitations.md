@@ -73,7 +73,14 @@ Plain statements of what Secret Chat does not do. The public page (/secret-chat)
    whose key changes on the server afterwards is shown as a key mismatch and can't be marked verified.
    Every device in the encrypted group is in the member list, and the verify screen says how many
    devices can read the chat: check that both screens show the same devices.
+   When the Welcome arrives, the pinned device must also be the device the server lists as the
+   owner; a link that pins anyone else is refused ("We couldn’t confirm this chat: the device letting
+   you in isn’t the owner your invite named. …").
    What remains open:
+   - **Who may send a Welcome or commit, server side.** The server accepts a Welcome or commit row
+     from any active member (`chat_send`); only the apps refuse ones not from the owner. Recommended
+     (a human decision, no migration in this change): restrict `p_kind in ('welcome','commit')` in
+     `chat_send` to the room's owner device, except the member removals it already allows.
    - **Invite links made before the owner pin.** They still work. A room joined with one learns who
      the owner is from the server's listing, so a malicious server could run a second group posing as
      the owner. Such a room says "This invite didn’t carry the owner’s key, so the app can’t confirm

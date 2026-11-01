@@ -292,7 +292,7 @@ describe('Secret Chat end to end (two browsers)', () => {
     expect(made.ownerPinned).toBe(true);
     expect(b.c.parseInviteFragment(tokenOf(made.link))!.pin!.deviceId).toBe((await on(a, c => c.ensureDevice())).id);
     expect(fmt.INVITE_UNPINNED_NOTE).toBe('This invite can’t carry the owner’s key because you joined with an older link.');
-    expect(fmt.friendlyError('invite_owner_mismatch')).toBe('The person who invited you isn’t the one letting you in. Ask them for a new invite.');
+    expect(fmt.friendlyError('invite_owner_mismatch')).toBe('We couldn’t confirm this chat: the device letting you in isn’t the owner your invite named. Don’t trust this chat. Check with the person who invited you, and ask the owner for a new invite.');
     expect(fmt.KEY_SYNC_CODES).toEqual(['member_key_mismatch', 'invite_owner_mismatch']);
   });
 

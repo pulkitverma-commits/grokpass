@@ -584,7 +584,7 @@ describe('accessibility (qa A1, A2, §12 key-changed row)', () => {
     chat.sync.mockRejectedValue(Object.assign(new Error('invite_owner_mismatch'), { code: 'invite_owner_mismatch' }));
     chat.members.mockResolvedValue([{ ...MEMBERS[0]!, changedGroup: true }, MEMBERS[1]!] as never);
     await open([]);
-    expect(await screen.findByText('The person who invited you isn’t the one letting you in. Ask them for a new invite.')).toBeTruthy();
+    expect(await screen.findByText('We couldn’t confirm this chat: the device letting you in isn’t the owner your invite named. Don’t trust this chat. Check with the person who invited you, and ask the owner for a new invite.')).toBeTruthy();
     expect(screen.getByTestId('room.ownerUnrecognised')).toBeTruthy();
     expect(screen.getByText('Your copy of this chat no longer recognises its owner. Don’t trust it until you’ve checked with them.')).toBeTruthy();
   });

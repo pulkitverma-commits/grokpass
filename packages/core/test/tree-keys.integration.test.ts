@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { toBytea, fromBytea, keyChanged, ChatError } from '../src/chat/client';
 import * as mls from '../src/chat/mls';
-import { parseInviteFragment } from '../src/chat/invite';
+import { encodePin, ownerPin, parseInviteFragment } from '../src/chat/invite';
 import { bootDb, type Harness } from './harness';
 import { makeDevice, pairUp, tokenOf, type Device } from './devices';
 
@@ -485,11 +485,37 @@ describe('F-2: member keys come from the MLS tree', () => {
   it('(f) ownerPinned comes from the stored pin: an owner of an older room writes its own pin once; a member the server calls "owner" does not', async () => {
     const { owner, bob, roomId, b } = await quickRoom();
     await owner.run(c => c.keystore.del(`room:${roomId}:ownerPin`));     // a room created before pins existed
+    // F2-13: the back-fill rests on leaf 0 alone, so a server that demotes the owner can't block it.
+    const o = await devId(owner);
+    await h.db.query(`update public.chat_members set role = 'member' where device_id = $1`, [o]);
     expect((await owner.run(c => c.myRooms())).find(r => r.id === roomId)!.ownerPinned).toBe(true);
+    await h.db.query(`update public.chat_members set role = 'owner' where device_id = $1`, [o]);
     expect(await owner.run(c => c.keystore.get(`room:${roomId}:ownerPin`))).toBeTruthy();
     await bob.run(c => c.keystore.del(`room:${roomId}:ownerPin`));
     await h.db.query(`update public.chat_members set role = 'owner' where device_id = $1`, [b]);   // the server lies
     expect((await bob.run(c => c.myRooms())).find(r => r.id === roomId)!.ownerPinned).toBe(false);
     expect(await bob.run(c => c.keystore.get(`room:${roomId}:ownerPin`))).toBeFalsy();
+  }, TIMEOUT);
+
+  it('F2-12: a link pinning a member (not the owner) is refused at join, even when that member signs the Welcome, because the honest listing names the real owner', async () => {
+    const { bob: m, roomId, b } = await quickRoom();
+    const { link } = await m.run(c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    const token = tokenOf(link).split('.')[0];
+    const mDev = await m.run(c => c.ensureDevice());
+    const memberPinned = `${token}.${encodePin(await ownerPin(b, mDev.signing.publicKey))}`;   // a link pinning M
+    const dana = await makeDevice(h, 'web', 'dana', true);
+    await dana.run(c => c.redeemInvite(memberPinned, 'Dana'));
+    const d = await devId(dana);
+    const rows = (await m.fake.rpc('chat_room_members', { p_room: roomId })).data as { device_id: string; key_package: string }[];
+    const added = await mls.addMembers((await stateOf(m, roomId))!, [fromBytea(rows.find(r => r.device_id === d)!.key_package)]);
+    await h.db.query(`update public.chat_members set state = 'active', key_package = null where device_id = $1`, [d]);
+    const r = await m.fake.rpc('chat_send', {
+      p_room: roomId, p_device: b, p_id: crypto.randomUUID(), p_kind: 'welcome', p_epoch: Number(mls.epoch(added.state)),
+      p_ciphertext: toBytea(added.welcome!), p_to_device: d,
+    });
+    expect(r.error).toBeNull();
+    expect(await codeOf(dana.run(c => c.sync(roomId)))).toBe('invite_owner_mismatch');   // M is the pin, but not the listed owner
+    expect(await stateOf(dana, roomId)).toBeNull();
+    expect(await codeOf(dana.run(c => c.sync(roomId)))).toBe('invite_owner_mismatch');
   }, TIMEOUT);
 });

@@ -19,7 +19,7 @@ jest.mock('expo-splash-screen', () => ({ preventAutoHideAsync: jest.fn(async () 
 jest.mock('expo-status-bar', () => ({ StatusBar: () => null }));
 jest.mock('expo-notifications', () => ({ getPermissionsAsync: async () => ({ granted: false }), getDevicePushTokenAsync: jest.fn(), addPushTokenListener: () => ({ remove() {} }) }));
 jest.mock('@onepeek/core/src/rn', () => ({ installRnCrypto: jest.fn() }));
-jest.mock('@/security', () => ({ SecurityProvider: ({ children }: { children: React.ReactNode }) => children }));
+jest.mock('@/security', () => ({ SecurityProvider: ({ children }: { children: React.ReactNode }) => children, useShareIntent: () => {} }));
 jest.mock('../../components/LockedScreen', () => ({ LockedScreen: () => null }));
 
 /** The `auth.onChange` callback the layout registered, so a test can report a session change. */

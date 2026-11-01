@@ -6,7 +6,7 @@ import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { SecurityProvider } from '@/security';
+import { SecurityProvider, useShareIntent } from '@/security';
 import { useEffect, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -69,6 +69,12 @@ function AuthGate({ session }: { session: AuthSession | null }) {
   return null;
 }
 
+/** Routes a share-sheet delivery (text or files) to the share screen exactly once (native-security N6). */
+function ShareIntentBridge() {
+  useShareIntent();
+  return null;
+}
+
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts(fontAssets);
   const session = useSession();
@@ -78,7 +84,9 @@ export default function RootLayout() {
   }, [ready]);
   // Plaintext left in the cache by a kill mid-send or mid-view (picker copies, viewer temp files) goes
   // on every launch (reviews W2-2, W2-3).
-  useEffect(() => { clearPickerCaches().catch(() => {}); }, []);
+  useEffect(() => {
+    clearPickerCaches().catch(() => {});
+  }, []);
   if (!ready) return null;
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -88,6 +96,7 @@ export default function RootLayout() {
           <SecurityProvider cover={<LockedScreen />}>
             <StatusBar style="light" />
             <AuthGate session={session} />
+            <ShareIntentBridge />
             <Stack
               screenOptions={{
                 headerShown: false,

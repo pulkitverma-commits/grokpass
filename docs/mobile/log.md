@@ -4,6 +4,17 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- qa (Q5 + W3-3) merged: `packages/core/test/secrets.interop.test.ts` (17 scenarios on PGlite with migrations 002–009:
+  web path, app → web and web → app text/Wi-Fi/file, multi-view, expiry, wrong key, `/api/open` modelled from
+  `route.ts` with a source-contract test; sweep of key/body/file name/password in four encodings), sink lint extended
+  (Sharing, Notifications content, MediaLibrary, file writes, `Paths.document`, remote `Image` sources), flows 12–16
+  (secret link in app / from browser, share from Photos / Files, QR kinds), TESTIDS "Phase 2 proposed" (59 ids), test
+  plan v1.3 with a Gate 2 map (§9) and device checks P1–P10. Core 322. Decisions: `/api/open` handler stays modelled
+  (no `@` alias in the core vitest config); the Gate 2 criteria are reconstructed in `gates/phase-2.md` because the
+  build prompt file is no longer on this Mac (human confirms them at the gate).
+- Lead: installed `expo-share-intent@9.0.0` (peers satisfied: expo ^58, expo-linking, expo-constants); native-security
+  wires its iOS hook into `security/shareIntent.ts` next. Disk dropped to 0.4 GB during the Phase 2 runs (jest and
+  Metro caches); cleared tooling caches only, 1.1 GB free. All Phase 2 branches merged: web 142, core 322, mobile 376.
 - mobile-ui (U8 + carry-overs) merged: one-time secret composer (07: text / Wi-Fi / photo / file, views, expiry, viewer
   timer, hold-to-view, copy/save flags; "in this chat" vs onepeek.io link with masked result, QR, copy, share, send
   link in chat), secret viewer `app/s/[id]` (peek states, lock-email unlock, hold-to-view with watermark, timer,

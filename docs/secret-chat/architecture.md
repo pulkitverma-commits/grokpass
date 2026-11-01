@@ -54,7 +54,7 @@ How the pieces map:
 - **KeyPackages**: device-uploaded public bundles (the MLS equivalent of prekeys), consumed once.
 - **Room access code**: an extra gate. 128-bit random by default, or a 6–8 digit human code. Stored as an Argon2id hash, rate-limited. Never key material.
 - **Invite token**: 256-bit random. Only its SHA-256 is stored. It sits in the URL fragment so it never reaches logs or referrers, and is POSTed to the server once.
-- **Safety number**: a hash of both members' signature public keys, shown as 60 digits and a QR code. Changes trigger a warning.
+- **Safety number**: a hash of both members' signature public keys as the encrypted MLS group holds them (each leaf's key, not the server's `chat_devices.signature_pub`), shown as 60 digits and a QR code. Changes trigger a warning; a member whose key in the group and on the server disagree is shown as a key mismatch and can't be verified (F-2, `packages/core/src/chat/client.ts` header).
 - **Attachments**: a random AES-256-GCM file key per file. The ciphertext goes to a private bucket. The key, name and MIME type travel only inside an MLS application message.
 
 Guests: an invite creates an anonymous Supabase session (`signInAnonymously`) plus a fresh device credential. The guest is a real MLS member, scoped to that one room by RLS.

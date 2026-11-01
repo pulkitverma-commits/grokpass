@@ -1,0 +1,75 @@
+# 10 Settings → Notifications on → OS permission prompt handled → the switch is on → off again.
+# One device, signed in as a guest (01). The token is never rendered, copied or asserted: the only
+# observable is the switch state, plus the absence of `settings.notifyError`. `launchApp` grants
+# the notification permission up front; the fallback taps the system "Allow" if a prompt still
+# shows (Android 13+, iOS). Needs an environment that can mint a device push token: a physical
+# phone, an Android emulator with a Google Play image, or an iOS simulator on Apple Silicon with
+# Xcode 14+. Elsewhere the switch stays off and `settings.notifyError` shows, which is a reported
+# failure of the environment, never a pass (run-two-device.sh runs this only with MAESTRO_PUSH=1).
+appId: io.onepeek.app
+name: 10-settings-notifications
+tags:
+  - ios
+  - android
+  - single
+  - push
+  - device-a
+---
+- launchApp:
+    permissions:
+      notifications: allow
+- extendedWaitUntil:
+    visible:
+      id: "(room|chats|settings)\\.screen"
+    timeout: 15000
+- runFlow: _common/back-to-chats.yaml
+- tapOn:
+    id: "chats.settings"
+- extendedWaitUntil:
+    visible:
+      id: "settings.screen"
+    timeout: 10000
+- assertVisible:
+    id: "settings.notifications"
+- assertVisible:
+    id: "settings.notify"
+    checked: false
+- tapOn:
+    id: "settings.notify"
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn: "Allow"
+- extendedWaitUntil:
+    visible:
+      id: "settings.notify"
+      checked: true
+    timeout: 20000
+- assertNotVisible:
+    id: "settings.notifyError"
+# Relaunch: the registered state is read back from the sealed store, not from memory.
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: "(room|chats|settings)\\.screen"
+    timeout: 15000
+- runFlow: _common/back-to-chats.yaml
+- tapOn:
+    id: "chats.settings"
+- extendedWaitUntil:
+    visible:
+      id: "settings.notify"
+      checked: true
+    timeout: 10000
+# Off again: unregister_push_device; the throwaway guest leaves no token behind.
+- tapOn:
+    id: "settings.notify"
+- extendedWaitUntil:
+    visible:
+      id: "settings.notify"
+      checked: false
+    timeout: 15000
+- assertNotVisible:
+    id: "settings.notifyError"

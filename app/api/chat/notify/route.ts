@@ -1,14 +1,15 @@
 import { NextResponse } from 'next/server';
 import { adminClient, sessionUserFromRequest } from '@/lib/server';
-import { pushConfigured, pushTo } from '@/lib/alerts';
+import { pushConfigured, pushTo, nativePushConfigured, pushToNative } from '@/lib/alerts';
 
 export const dynamic = 'force-dynamic';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Secret Chat: after sending, a member's browser asks us to nudge the other members.
+// Secret Chat: after sending, a member's browser or app asks us to nudge the other members.
 // The push says only that there is a new message. No sender, no text, no file name:
-// the server never has any of those.
+// the server never has any of those. Web push (browsers) and native push (the mobile app's
+// push_devices) go out side by side; the room id is the only identifier either carries.
 export async function POST(req: Request) {
   const user = await sessionUserFromRequest(req);
   if (!user) return NextResponse.json({ error: 'not_signed_in' }, { status: 401 });
@@ -17,7 +18,7 @@ export async function POST(req: Request) {
   if (!UUID.test(room)) return NextResponse.json({ error: 'bad_room' }, { status: 400 });
 
   const admin = adminClient();
-  if (!admin || !pushConfigured()) return NextResponse.json({ ok: true, sent: 0 });
+  if (!admin || (!pushConfigured() && !nativePushConfigured())) return NextResponse.json({ ok: true, sent: 0 });
 
   const { data: r } = await admin.from('chat_rooms').select('state, expires_at').eq('id', room).maybeSingle();
   if (!r || r.state !== 'active' || new Date(r.expires_at) <= new Date()) return NextResponse.json({ ok: true, sent: 0 });
@@ -37,7 +38,11 @@ export async function POST(req: Request) {
   const off = new Set((prefs || []).filter(p => p.push_on === false).map(p => p.owner as string));
   let sent = 0;
   await Promise.allSettled(recipients.filter(id => !off.has(id)).map(async id => {
-    sent += await pushTo(admin, id, { title: 'OnePeek', body: 'You have a new message in a private chat.', url: `/chat/r/${room}`, tag: `chat-${room}` });
+    const [web, native] = await Promise.all([
+      pushTo(admin, id, { title: 'OnePeek', body: 'You have a new message in a private chat.', url: `/chat/r/${room}`, tag: `chat-${room}` }),
+      pushToNative(admin, id, room),
+    ]);
+    sent += web + native;
   }));
   return NextResponse.json({ ok: true, sent });
 }

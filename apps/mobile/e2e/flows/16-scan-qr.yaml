@@ -1,0 +1,115 @@
+# 16 One device with a camera pointed at a QR shown on a second device (or an emulator with a virtual
+# scene poster, README "Cameras"): Chats → Scan a code → camera permission → the code is recognised and
+# routed. Run four times with MAESTRO_QR_KIND = invite | secret | verify | foreign; the second device (or
+# the poster) shows the matching code: the invite sheet's `invite.qr` (03), a secret's `secret.qr` (13),
+# the safety number's `verify.qr` (11), or any non-OnePeek QR (a Wi-Fi or URL code) for `foreign`.
+# Expected routes: invite → Join (09) with the code field; secret → the viewer's peek state; verify →
+# Verify people with the scanned number compared ("They match"); foreign → `scan.foreign`, the scanner
+# stays open and never shows the payload. Nothing scanned is asserted as text.
+#
+# DEVICE/EMULATOR steps: the OS camera-permission prompt is answered with `launchApp permissions`
+# (camera: allow) plus a fallback tap on the system "Allow" button; iOS simulators have no camera at
+# all, so on iOS this flow runs on a physical device only. Android emulators: start with
+# `-camera-back virtualscene` and set the poster to the QR image (README).
+appId: io.onepeek.app
+name: 16-scan-qr
+tags:
+  - ios
+  - android
+  - single
+  - phase-2
+  - camera
+env:
+  MAESTRO_QR_KIND: foreign
+---
+- runFlow: _common/guest-home.yaml
+- launchApp:
+    appId: io.onepeek.app
+    permissions:
+      camera: allow
+- assertVisible:
+    id: "chats.screen"
+- tapOn:
+    id: "chats.scan"
+- extendedWaitUntil:
+    visible:
+      id: "scan.screen"
+    timeout: 10000
+# Permission still pending on some OS versions: tap the system prompt's Allow, or our own button.
+- runFlow:
+    when:
+      visible:
+        id: "scan.permission"
+    commands:
+      - tapOn:
+          id: "scan.allow"
+      - tapOn:
+          text: "Allow|While using the app|Only this time"
+          optional: true
+- assertVisible:
+    id: "scan.camera"
+- assertVisible:
+    id: "scan.paste"
+# The camera sees the code now (held up by the other device / the virtual scene poster).
+- runFlow:
+    when:
+      true: ${MAESTRO_QR_KIND == 'invite'}
+    commands:
+      - extendedWaitUntil:
+          visible:
+            id: "join.screen"
+          timeout: 30000
+      - assertVisible:
+          id: "join.code"
+      - assertNotVisible:
+          id: "scan.screen"
+- runFlow:
+    when:
+      true: ${MAESTRO_QR_KIND == 'secret'}
+    commands:
+      - extendedWaitUntil:
+          visible:
+            id: "viewer.screen"
+          timeout: 30000
+      - assertVisible:
+          id: "viewer.peek"
+      - assertNotVisible:
+          id: "viewer.revealed"
+      - assertNotVisible:
+          id: "scan.screen"
+- runFlow:
+    when:
+      true: ${MAESTRO_QR_KIND == 'verify'}
+    commands:
+      - extendedWaitUntil:
+          visible:
+            id: "verify.number"
+          timeout: 30000
+      - assertVisible:
+          id: "verify.mark"
+      - assertVisible:
+          text: "They match.*"
+      - assertNotVisible:
+          id: "scan.screen"
+- runFlow:
+    when:
+      true: ${MAESTRO_QR_KIND == 'foreign'}
+    commands:
+      - extendedWaitUntil:
+          visible:
+            id: "scan.foreign"
+          timeout: 30000
+      - assertVisible:
+          id: "scan.screen"
+      - assertVisible:
+          id: "scan.camera"
+      - assertNotVisible:
+          id: "join.screen"
+      - assertNotVisible:
+          id: "viewer.screen"
+      - assertNotVisible:
+          text: "WIFI:.*|http.*"
+      - tapOn:
+          id: "scan.close"
+      - assertVisible:
+          id: "chats.screen"

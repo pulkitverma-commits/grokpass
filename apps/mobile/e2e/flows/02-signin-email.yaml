@@ -1,0 +1,34 @@
+# 02 Welcome → Sign in → email → "check your inbox". The magic link lands in a mailbox and cannot
+# be clicked from CI: the flow stops at the sent state. Manual step (test-plan §4 M1): open the
+# link on the same device and assert Chats home. MAESTRO_EMAIL must be an inbox the team controls;
+# production sends a real email.
+appId: io.onepeek.app
+name: 02-signin-email
+tags:
+  - ios
+  - android
+  - single
+env:
+  MAESTRO_EMAIL: qa-maestro@onepeek.io
+---
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: "welcome.signIn"
+- tapOn:
+    id: "welcome.signIn"
+- assertVisible:
+    id: "signin.email"
+- tapOn:
+    id: "signin.email"
+- inputText: ${MAESTRO_EMAIL}
+- hideKeyboard
+- tapOn:
+    id: "signin.sendLink"
+# The sent state replaces the form. TODO(testid): assert `signin.sent` once it exists.
+- extendedWaitUntil:
+    notVisible:
+      id: "signin.sendLink"
+    timeout: 15000
+- assertNotVisible:
+    id: "chats.screen"

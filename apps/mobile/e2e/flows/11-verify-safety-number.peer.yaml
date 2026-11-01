@@ -1,0 +1,41 @@
+# 11 (peer) Device B: the same safety number must show here, digit for digit. B reads A's number
+# from the relay, compares it with its own (digits only, groups and spacing ignored), then marks
+# verified too. A mismatch is the whole point of the screen, so it fails the flow.
+appId: io.onepeek.app
+name: 11-verify-safety-number.peer
+tags:
+  - ios
+  - android
+  - two-device
+  - device-b
+env:
+  MAESTRO_RELAY: http://127.0.0.1:4311
+---
+- runFlow: _common/open-room.yaml
+- tapOn:
+    id: "room.menu"
+- tapOn:
+    id: "room.menu.verify"
+- extendedWaitUntil:
+    visible:
+      id: "verify.number"
+    timeout: 30000
+- copyTextFrom:
+    id: "verify.number"
+- evalScript: ${output.mine = maestro.copiedText.replace(/[^0-9]/g, '')}
+- runScript:
+    file: ../scripts/relay-value.js
+    env:
+      RELAY_KEY: safety_number
+- assertTrue: ${output.mine.length == 60 && output.mine == output.value}
+- tapOn:
+    id: "verify.mark"
+- extendedWaitUntil:
+    visible:
+      id: "verify.member"
+    timeout: 15000
+- assertVisible: "Verified"
+- tapOn:
+    id: "sheet.handle"
+- assertNotVisible:
+    id: "room.menuSheet"

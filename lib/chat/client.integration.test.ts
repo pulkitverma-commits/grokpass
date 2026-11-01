@@ -81,7 +81,7 @@ function fakeSupabase(user: { id: string; is_anonymous?: boolean }) {
 }
 
 type Client = typeof import('./client');
-type Browser = { name: string; idb: IDBFactory; c: Client };
+type Browser = { name: string; idb: IDBFactory; c: Client; fake: ReturnType<typeof fakeSupabase> };
 
 async function browser(name: string, userId: string, anonymous = false): Promise<Browser> {
   await db.query(`insert into auth.users(id, is_anonymous) values ($1, $2) on conflict do nothing`, [userId, anonymous]);
@@ -91,7 +91,7 @@ async function browser(name: string, userId: string, anonymous = false): Promise
   const idb = new IDBFactory();
   (globalThis as any).indexedDB = idb;
   const c = await import('./client');
-  return { name, idb, c };
+  return { name, idb, c, fake };
 }
 
 /** Runs one browser's code with its own IndexedDB in place. */
@@ -117,7 +117,8 @@ describe('Secret Chat end to end (two browsers)', () => {
 
     const roomId = await on(alice, c => c.createRoom({ kind: 'secret', ttl: 30, mode: 'on_open', lifetime: 3600, accessCode: 'blue-river-42', name: 'Launch' }));
     const { link } = await on(alice, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
-    expect(link).toMatch(/^https:\/\/onepeek\.test\/chat\/join#[A-Za-z0-9_-]{40,}$/);
+    // F2-7: the owner pin rides in the fragment after the token.
+    expect(link).toMatch(/^https:\/\/onepeek\.test\/chat\/join#[A-Za-z0-9_-]{40,}\.1[A-Za-z0-9_-]{64}$/);
 
     // The invite token never appears in a server-side lookup other than as an argument to be hashed.
     expect(await on(guest, c => c.peekInvite(tokenOf(link)))).toEqual({ needs_code: true, kind: 'secret' });
@@ -185,6 +186,114 @@ describe('Secret Chat end to end (two browsers)', () => {
     await db.query(`update public.chat_devices set signature_pub = decode(repeat('ee', 32), 'hex') where id = $1`, [bDev]);
     mb = (await on(a, c => c.members(roomId))).find(m => m.deviceId === bDev)!;
     expect(a.c.keyChanged(mb)).toBe(true);
+  });
+
+  it('F-2: honest room — the safety number from the MLS tree is the same digits the page showed before (listing-based)', async () => {
+    const mls = await import('./mls');
+    const a = await browser('a2', '31000000-0000-4000-8000-000000000031');
+    const b = await browser('b2', '41000000-0000-4000-8000-000000000041');
+    const roomId = await on(a, c => c.createRoom({ kind: 'secret', ttl: 300, mode: 'on_open', lifetime: 3600 }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    await on(b, c => c.redeemInvite(tokenOf(link), 'Bo'));
+    await on(a, c => c.admitPending(roomId));
+    await on(b, c => c.sync(roomId));
+    const aDev = await on(a, c => c.ensureDevice());
+    const bDev = await on(b, c => c.ensureDevice());
+    const listed = async (id: string) => ((await db.query<any>(`select signature_pub k from public.chat_devices where id = $1`, [id])).rows[0].k) as Uint8Array;
+    const before = await mls.safetyNumber({ key: aDev.signing.publicKey, id: aDev.id }, { key: await listed(bDev.id), id: bDev.id });
+    expect(await on(a, c => c.safetyNumberWith(roomId, bDev.id))).toBe(before);
+    expect(await on(b, c => c.safetyNumberWith(roomId, aDev.id))).toBe(before);
+    const ms = await on(a, c => c.members(roomId));
+    expect(ms.map(m => m.keyMismatch)).toEqual([false, false]);
+    expect(ms.filter(a.c.keyChanged)).toEqual([]);   // no warning on the page
+  });
+
+  it('F-2: a key package the server substituted is not admitted; the page warns and shows the mismatch message instead of a number', async () => {
+    const mls = await import('./mls');
+    const { friendlyError } = await import('../../app/chat/format');
+    const a = await browser('a3', '32000000-0000-4000-8000-000000000032');
+    const b = await browser('b3', '42000000-0000-4000-8000-000000000042');
+    const roomId = await on(a, c => c.createRoom({ kind: 'business', ttl: 3600, mode: 'on_send', lifetime: 3600 }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: true }));
+    await on(b, c => c.redeemInvite(tokenOf(link), 'Bo'));
+    const bDev = (await on(b, c => c.ensureDevice())).id;
+    const forged = await mls.newKeyPackage(bDev);
+    await db.query(`update public.chat_members set key_package = $1 where device_id = $2`, [forged.publicBytes, bDev]);
+    expect(await on(a, c => c.admitPending(roomId, [bDev]))).toBe(0);
+    const mb = (await on(a, c => c.members(roomId))).find(m => m.deviceId === bDev)!;
+    expect(mb.keyMismatch).toBe(true);
+    expect(a.c.keyChanged(mb)).toBe(true);   // the page's warning list
+    await expect(on(a, c => c.safetyNumberWith(roomId, bDev))).rejects.toMatchObject({ code: 'member_key_mismatch' });
+    await expect(on(a, c => c.markVerified(roomId, bDev))).rejects.toMatchObject({ code: 'member_key_mismatch' });
+    expect(friendlyError('member_key_mismatch')).toBe('This member’s key doesn’t match the chat. Don’t trust this chat until you’ve checked with them.');
+    expect((await on(b, c => c.sync(roomId))).joined).toBe(false);
+  });
+
+  it('F2-1: a device in the chat that the server stops listing still shows on the page (unlisted, warned), the device count includes it, and the copy says what a match proves', async () => {
+    const fmt = await import('../../app/chat/format');
+    const a = await browser('a4', '33000000-0000-4000-8000-000000000033');
+    const b = await browser('b4', '43000000-0000-4000-8000-000000000043');
+    const roomId = await on(a, c => c.createRoom({ kind: 'secret', ttl: 300, mode: 'on_open', lifetime: 3600 }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    await on(b, c => c.redeemInvite(tokenOf(link), 'Bo'));
+    await on(a, c => c.admitPending(roomId));
+    await on(b, c => c.sync(roomId));
+    const bDev = (await on(b, c => c.ensureDevice())).id;
+    let ms = await on(a, c => c.members(roomId));
+    expect(ms.filter(m => m.inGroup)).toHaveLength(2);
+    expect(fmt.readersLine(ms.filter(m => m.inGroup).length)).toBe('2 devices can read this chat');
+    await db.query(`delete from public.chat_members where device_id = $1`, [bDev]);   // the server hides b
+    ms = await on(a, c => c.members(roomId));
+    const hidden = ms.find(m => m.deviceId === bDev)!;
+    expect(hidden).toMatchObject({ unlisted: true, inGroup: true, state: 'active' });
+    expect(ms.filter(a.c.keyChanged).map(m => m.deviceId)).toEqual([bDev]);   // the page's warning list
+    expect(ms.filter(m => m.inGroup)).toHaveLength(2);
+    expect(fmt.UNLISTED_NOTE).toBe('Not listed by the server: this device can still read the chat');
+    expect(fmt.verifyLine('Bo')).toBe('Compare these numbers in person or on a call. If they match on both screens, your messages reach Bo’s real device. Everyone who can read this chat is in the member list: check that both screens show the same devices, and verify each one you don’t recognise.');
+    expect(fmt.KEY_HISTORY_NOTE).toBe('The server once showed a different key for them; compare again.');
+  });
+
+  it('F2-7: a link made before the owner pin (token only) still joins on the web; the room is marked unpinned and the page shows the notice', async () => {
+    const fmt = await import('../../app/chat/format');
+    const a = await browser('a5', '34000000-0000-4000-8000-000000000034');
+    const b = await browser('b5', '44000000-0000-4000-8000-000000000044');
+    const roomId = await on(a, c => c.createRoom({ kind: 'secret', ttl: 300, mode: 'on_open', lifetime: 3600 }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    const fragment = tokenOf(link);
+    const bare = fragment.split('.')[0];
+    expect(a.c.parseInviteFragment(fragment)!.pin).not.toBeNull();
+    expect(a.c.parseInviteFragment(bare)).toEqual({ token: bare, pin: null });   // the join page's check
+    lastSql = [];
+    await on(b, c => c.redeemInvite(bare, 'Old'));
+    await on(a, c => c.admitPending(roomId));
+    expect((await on(b, c => c.sync(roomId))).joined).toBe(true);
+    expect((await on(b, c => c.myRooms())).find(r => r.id === roomId)!.ownerPinned).toBe(false);
+    expect((await on(a, c => c.myRooms())).find(r => r.id === roomId)!.ownerPinned).toBe(true);
+    expect(fmt.UNPINNED_NOTICE).toBe('This invite didn’t carry the owner’s key, so the app can’t confirm who runs this chat. Ask for a new invite.');
+    // A pinned link: the pin never reaches the server.
+    const { link: pinned } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    const c3 = await browser('c5', '45000000-0000-4000-8000-000000000045');
+    lastSql = [];
+    await on(c3, c => c.redeemInvite(tokenOf(pinned), 'New'));
+    expect(JSON.stringify(lastSql)).not.toContain(tokenOf(pinned).split('.')[1]);
+    expect(lastSql.find(x => x.fn === 'chat_redeem_invite')!.args.p_token).toBe(tokenOf(pinned).split('.')[0]);
+  });
+
+  it('F2-10: on the web, a quick-room member\'s invite pins the owner (not the member); the copy for unpinned invites and refused Welcomes', async () => {
+    const fmt = await import('../../app/chat/format');
+    const a = await browser('a6', '35000000-0000-4000-8000-000000000035');
+    const b = await browser('b6', '46000000-0000-4000-8000-000000000046');
+    const roomId = await on(a, c => c.createRoom({ kind: 'quick', ttl: 300, mode: 'on_open', lifetime: 3600 }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 5, approval: false }));
+    await on(b, c => c.redeemInvite(tokenOf(link), 'Bo'));
+    await on(a, c => c.admitPending(roomId));
+    await on(b, c => c.sync(roomId));
+    const made = await on(b, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    expect(made.ownerPinned).toBe(true);
+    expect(b.c.parseInviteFragment(tokenOf(made.link))!.pin!.deviceId).toBe((await on(a, c => c.ensureDevice())).id);
+    expect(fmt.INVITE_UNPINNED_NOTE).toBe('This invite can’t carry the owner’s key because you joined with an older link.');
+    expect(fmt.friendlyError('invite_owner_mismatch')).toBe('We couldn’t confirm this chat: the device letting you in isn’t the owner your invite named. Don’t trust this chat. Check with the person who invited you, and ask the owner for a new invite.');
+    expect(fmt.KEY_SYNC_CODES).toEqual(['member_key_mismatch', 'invite_owner_mismatch']);
   });
 
   it('removed members are locked out; Burn Chat wipes server and local state', async () => {
@@ -301,7 +410,10 @@ describe('Secret Chat end to end (two browsers)', () => {
     const sent = await on(b, c => c.sendScreenshotAlert(roomId, 30));
     expect(sent.alert).toBe('screenshot');
     expect(JSON.stringify(lastSql)).not.toContain('screenshot');   // the server only sees ciphertext
-    await on(a, c => c.sync(roomId));
+    const r = await on(a, c => c.sync(roomId));
+    // The room page refreshes its list on newMessages || newAlerts; an unread count built on
+    // newMessages alone must not count the notice.
+    expect(r).toMatchObject({ newMessages: 0, newAlerts: 1, joined: false, removed: false });
     const got = (await on(a, c => c.messages(roomId))).find(m => m.id === sent.id)!;
     expect(got).toMatchObject({ alert: 'screenshot', mine: false, body: '' });
     expect(got.expiresAt).not.toBeNull();   // it disappears on the room timer without being opened
@@ -332,5 +444,96 @@ describe('Secret Chat end to end (two browsers)', () => {
     await on(a, c => c.unlock());
     expect(a.c.isLocked()).toBe(false);
     expect((await on(a, c => c.myRooms())).map(r => r.id)).toContain(roomId);
+  });
+
+  // Phase 3 hardening (docs/mobile/test-plan.md §11.4): what the room page (app/chat/r/[id]/page.tsx)
+  // can observe from the shared core.
+  async function pair(tag: string) {
+    const a = await browser(`${tag}-a`, crypto.randomUUID());
+    const b = await browser(`${tag}-b`, crypto.randomUUID(), true);
+    const roomId = await on(a, c => c.createRoom({ kind: 'secret', ttl: 300, mode: 'on_open', lifetime: 3600 }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    await on(b, c => c.redeemInvite(tokenOf(link), 'Bee'));
+    await on(a, c => c.admitPending(roomId));
+    expect((await on(b, c => c.sync(roomId))).joined).toBe(true);
+    return { a, b, roomId };
+  }
+
+  it('P3-Q2: one sync (one pull on the page) drains a backlog bigger than a chat_fetch page', async () => {
+    const { a, b, roomId } = await pair('pages');
+    const N = 230;
+    for (let i = 0; i < N; i++) {
+      if (i > 0 && i % 100 === 0) await db.query(`delete from public.chat_rate_limits where bucket = 'send'`);
+      await on(a, c => c.send(roomId, `p${i}`, 300));
+    }
+    lastSql = [];
+    const r = await on(b, c => c.sync(roomId));
+    expect(r).toEqual({ joined: false, removed: false, newMessages: N, newAlerts: 0 });
+    expect(lastSql.filter(x => x.fn === 'chat_fetch')).toHaveLength(2);
+    expect((await on(b, c => c.messages(roomId))).map(m => m.body)).toEqual(Array.from({ length: N }, (_, i) => `p${i}`));
+  });
+
+  it('P3-Q4: a network failure reaches the page as ChatError code "network" (the message it shows is unchanged)', async () => {
+    const { b, roomId } = await pair('net');
+    const { friendlyError } = await import('../../app/chat/format');
+    const real = b.fake.rpc;
+    try {
+      b.fake.rpc = async () => ({ data: null, error: { message: 'TypeError: Failed to fetch' } });
+      await expect(on(b, c => c.send(roomId, 'x', 300))).rejects.toMatchObject({ code: 'network' });
+      b.fake.rpc = async () => { throw new TypeError('Failed to fetch'); };
+      const err = await on(b, c => c.sync(roomId)).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(b.c.ChatError);
+      expect((err as { code: string }).code).toBe('network');
+      // Before: 'fetch' (returned error) or a plain TypeError (''); all three fall to the same text.
+      expect(friendlyError('network')).toBe(friendlyError('fetch'));
+      expect(friendlyError('network')).toBe(friendlyError(''));
+    } finally {
+      b.fake.rpc = real;
+    }
+    // Server errors keep their codes: the page still redirects on not_signed_in, shows invite errors, etc.
+    await expect(on(b, c => c.redeemInvite('no-such-token', 'x'))).rejects.toMatchObject({ code: 'invite_invalid' });
+  });
+
+  it('P3-Q3: after CHANNEL_ERROR the room channel is re-opened (setAuth again) and the page hears "subscribed" again; no new event kinds by default', async () => {
+    const b = await browser('rt', crypto.randomUUID());
+    type Ch = { cb: ((s: string) => void) | null; handlers: ((m: { event: string; payload: unknown }) => void)[] };
+    const chans: Ch[] = [];
+    const removed: Ch[] = [];
+    const auth: string[] = [];
+    type FakeCh = Ch & { on(t: string, f: unknown, h: Ch['handlers'][number]): FakeCh; subscribe(cb: (s: string) => void): FakeCh };
+    // Swapped in on this browser's Supabase stand-in (the client reads these at call time).
+    const rt = b.fake as unknown as { channel: () => FakeCh; removeChannel: (ch: Ch) => void; realtime: { setAuth: (t: string) => Promise<void> } };
+    rt.channel = () => {
+      const ch: FakeCh = {
+        cb: null, handlers: [],
+        on(_t, _f, h) { ch.handlers.push(h); return ch; },
+        subscribe(cb) { ch.cb = cb; return ch; },
+      };
+      chans.push(ch);
+      return ch;
+    };
+    rt.removeChannel = (ch) => { removed.push(ch); };
+    rt.realtime.setAuth = async (t) => { auth.push(t); };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const events: string[] = [];
+      // Exactly the page's callback shape: (event) => ..., 'msg' pulls, anything else refreshes.
+      const off = b.c.subscribe('00000000-0000-4000-8000-0000000000aa', (event: string) => { events.push(event); });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(chans).toHaveLength(1);
+      chans[0].cb!('SUBSCRIBED');
+      chans[0].cb!('CHANNEL_ERROR');
+      expect(removed).toEqual([chans[0]]);
+      await vi.advanceTimersByTimeAsync(b.c.RESUBSCRIBE_DELAYS_MS[0]);
+      expect(chans).toHaveLength(2);
+      expect(auth).toEqual(['t', 't']);
+      chans[1].cb!('SUBSCRIBED');
+      chans[1].handlers.forEach(h => h({ event: 'msg', payload: {} }));
+      expect(events).toEqual(['subscribed', 'subscribed', 'msg']);
+      off();
+      expect(removed).toEqual([chans[0], chans[1]]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

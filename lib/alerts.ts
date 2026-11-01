@@ -1,5 +1,8 @@
 // "Your secret was opened" and "Your request was answered" alerts: email + browser push.
+// Plus native push (APNs / FCM) for the mobile app, further down.
 import webpush from 'web-push';
+import http2 from 'node:http2';
+import { createPrivateKey, sign as cryptoSign, type KeyObject } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendEmail, layout } from './email';
 import { escapeHtml } from './server';
@@ -101,4 +104,288 @@ export async function notifyAnswered(admin: SupabaseClient, requestId: string, o
     }) : null));
   }
   await Promise.allSettled(jobs);
+}
+
+// ---------------------------------------------------------------------------------------
+// Native push (OnePeek mobile app): APNs (token-based auth, HTTP/2) and FCM HTTP v1.
+//
+// The server sends directly; the .p8 key and the FCM service account live in Vercel env only.
+// Payloads are fixed strings plus the room id as an opaque routing key. Never the sender, text,
+// room name, nickname, file names or anything from secret_log. Transports are injectable so
+// tests capture what would be sent. Without APNS_*/FCM_* env the senders are no-ops returning 0.
+// ---------------------------------------------------------------------------------------
+export const NATIVE_TITLE = 'OnePeek';
+export const NATIVE_BODY = 'You have a new message in a private chat.';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The only thing a native push carries besides fixed strings: the room id. */
+export type NativePayload = { room: string };
+
+export type Http2Response = { status: number; body: string };
+export type Http2Request = (req: { authority: string; path: string; headers: Record<string, string>; body: string }) => Promise<Http2Response>;
+export type NativeTransports = { fetch: typeof fetch; http2Request: Http2Request; now: () => number };
+export type NativeResult = { sent: number; dead: string[] };
+
+const defaultTransports: NativeTransports = { fetch: (...a) => fetch(...a), http2Request: nodeHttp2Request, now: () => Date.now() };
+let overrides: Partial<NativeTransports> = {};
+/** Tests only: replace fetch / http2 / clock for every native sender in this process. */
+export function configureNativeTransports(t: Partial<NativeTransports> | null) {
+  overrides = t || {};
+  apnsJwtCache.clear();
+  fcmTokenCache.clear();
+}
+const transports = (t?: Partial<NativeTransports>): NativeTransports => ({ ...defaultTransports, ...overrides, ...t });
+
+/** Takes the room id out of whatever it is given and refuses anything that is not a uuid. */
+function roomOf(p: NativePayload): string {
+  const room = typeof p?.room === 'string' ? p.room : '';
+  if (!UUID_RE.test(room)) throw new Error('bad_room');
+  return room.toLowerCase();
+}
+
+/** APNs body. Fixed strings; `thread-id` groups per room; `room` is the app's routing key. */
+export function apnsPayload(p: NativePayload) {
+  const room = roomOf(p);
+  return { aps: { alert: { title: NATIVE_TITLE, body: NATIVE_BODY }, sound: 'default', 'thread-id': room }, room };
+}
+
+/** FCM v1 message for one token. No `apns` block: iOS goes through APNs directly. */
+export function fcmMessage(token: string, p: NativePayload) {
+  const room = roomOf(p);
+  return {
+    message: {
+      token,
+      notification: { title: NATIVE_TITLE, body: NATIVE_BODY },
+      data: { room },
+      android: { priority: 'high', notification: { tag: `chat-${room}` } },
+    },
+  };
+}
+
+const b64url = (b: Buffer | string) => Buffer.from(b).toString('base64url');
+const jwtPart = (o: object) => b64url(JSON.stringify(o));
+const pem = (s: string) => s.replace(/\\n/g, '\n');
+
+// ---- APNs ----------------------------------------------------------------------------
+
+type ApnsConfig = { keyId: string; teamId: string; key: KeyObject; topic: string; host: string };
+
+function apnsConfig(): ApnsConfig | null {
+  const keyId = process.env.APNS_KEY_ID, teamId = process.env.APNS_TEAM_ID, raw = process.env.APNS_PRIVATE_KEY;
+  if (!keyId || !teamId || !raw) return null;
+  try {
+    return {
+      keyId, teamId, key: createPrivateKey(pem(raw)),
+      topic: process.env.APNS_BUNDLE_ID || 'io.onepeek.app',
+      host: process.env.APNS_USE_SANDBOX === '1' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com',
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function apnsConfigured() { return apnsConfig() !== null; }
+
+const APNS_JWT_TTL_MS = 50 * 60 * 1000;
+const apnsJwtCache = new Map<string, { jwt: string; madeAt: number }>();
+
+/** ES256 provider token: header {alg, kid}, claims {iss, iat}. Cached 50 minutes (Apple allows 60). */
+function apnsJwt(c: ApnsConfig, now: number) {
+  const k = `${c.teamId}:${c.keyId}`;
+  const hit = apnsJwtCache.get(k);
+  if (hit && now - hit.madeAt < APNS_JWT_TTL_MS) return hit.jwt;
+  const unsigned = `${jwtPart({ alg: 'ES256', kid: c.keyId })}.${jwtPart({ iss: c.teamId, iat: Math.floor(now / 1000) })}`;
+  const sig = cryptoSign('sha256', Buffer.from(unsigned), { key: c.key, dsaEncoding: 'ieee-p1363' });
+  const jwt = `${unsigned}.${b64url(sig)}`;
+  apnsJwtCache.set(k, { jwt, madeAt: now });
+  return jwt;
+}
+
+/** Idle timeout on the HTTP/2 session and stream, and the hard deadline for one request. */
+export const HTTP2_IDLE_MS = 10_000;
+export const HTTP2_DEADLINE_MS = 15_000;
+
+/** The subset of http2.connect / ClientHttp2Session this file uses; injectable so tests can fake it. */
+export type Http2Connect = (authority: string) => http2.ClientHttp2Session;
+export type Http2Options = { connect?: Http2Connect; deadlineMs?: number; idleMs?: number };
+
+/**
+ * One POST over a fresh HTTP/2 session. Always settles (security review W1-5): 'end' resolves;
+ * 'error', 'close' without a response, 'timeout' on the stream or the session, and a hard deadline
+ * all reject; whichever comes first wins and the session is destroyed either way.
+ */
+export function nodeHttp2Request(req: { authority: string; path: string; headers: Record<string, string>; body: string }, opts: Http2Options = {}): Promise<Http2Response> {
+  const connect: Http2Connect = opts.connect ?? (authority => http2.connect(authority));
+  const deadlineMs = opts.deadlineMs ?? HTTP2_DEADLINE_MS;
+  const idleMs = opts.idleMs ?? HTTP2_IDLE_MS;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let session: http2.ClientHttp2Session | undefined;
+    const timer = setTimeout(() => fail('http2_deadline'), deadlineMs);
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { session?.destroy(); } catch { /* already gone */ }
+      fn();
+    };
+    const fail = (why: string) => settle(() => reject(new Error(why)));
+    try {
+      session = connect(`https://${req.authority}`);
+      session.on('error', e => settle(() => reject(e)));
+      session.on('close', () => fail('http2_session_closed'));
+      session.on('timeout', () => fail('http2_session_timeout'));
+      session.setTimeout(idleMs);
+      const stream = session.request({ ':method': 'POST', ':path': req.path, ...req.headers });
+      const chunks: Buffer[] = [];
+      let status = 0;
+      stream.on('response', h => { status = Number(h[':status'] || 0); });
+      stream.on('data', (c: Buffer) => chunks.push(c));
+      stream.on('end', () => settle(() => resolve({ status, body: Buffer.concat(chunks).toString('utf8') })));
+      stream.on('error', e => settle(() => reject(e)));
+      // 'close' without 'end': resolve with the status we saw (the body may be short) or reject.
+      stream.on('close', () => status ? settle(() => resolve({ status, body: Buffer.concat(chunks).toString('utf8') })) : fail('http2_stream_closed'));
+      stream.on('timeout', () => fail('http2_stream_timeout'));
+      stream.setTimeout(idleMs);
+      stream.end(req.body);
+    } catch (e) {
+      settle(() => reject(e));
+    }
+  });
+}
+
+/** How many tokens an owner can hold (migration 008 trims to this) and how many requests are in flight at once. */
+export const MAX_TOKENS_PER_OWNER = 10;
+export const SEND_CONCURRENCY = 10;
+
+/** Runs fn over items in groups of `size`; each group finishes before the next starts, so at most `size` are in flight. */
+async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<void>) {
+  for (let i = 0; i < items.length; i += size) await Promise.all(items.slice(i, i + size).map(fn));
+}
+
+const APNS_DEAD_REASONS = new Set(['BadDeviceToken', 'Unregistered', 'DeviceTokenNotForTopic', 'ExpiredToken']);
+
+/** Sends the fixed alert to each iOS token. Returns tokens APNs says are gone so the caller can forget them. */
+export async function sendApns(tokens: string[], payload: NativePayload, t?: Partial<NativeTransports>): Promise<NativeResult> {
+  const c = apnsConfig();
+  if (!c || !tokens.length) return { sent: 0, dead: [] };
+  const tr = transports(t);
+  const body = JSON.stringify(apnsPayload(payload));
+  const room = roomOf(payload);
+  const result: NativeResult = { sent: 0, dead: [] };
+  await inChunks(tokens, SEND_CONCURRENCY, async token => {
+    try {
+      const res = await tr.http2Request({
+        authority: c.host, path: `/3/device/${encodeURIComponent(token)}`,
+        headers: {
+          authorization: `bearer ${apnsJwt(c, tr.now())}`,
+          'apns-topic': c.topic, 'apns-push-type': 'alert', 'apns-priority': '10', 'apns-expiration': '0',
+          'apns-collapse-id': `chat-${room}`, 'content-type': 'application/json',
+        },
+        body,
+      });
+      if (res.status >= 200 && res.status < 300) { result.sent++; return; }
+      let reason = '';
+      try { reason = String(JSON.parse(res.body)?.reason || ''); } catch { /* not json */ }
+      if (res.status === 410 || APNS_DEAD_REASONS.has(reason)) result.dead.push(token);
+    } catch { /* network error or deadline: try again next time */ }
+  });
+  return result;
+}
+
+// ---- FCM HTTP v1 ----------------------------------------------------------------------
+
+type FcmAccount = { project_id: string; client_email: string; private_key: string };
+const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
+const FCM_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+
+function fcmAccount(): FcmAccount | null {
+  const raw = process.env.FCM_SERVICE_ACCOUNT_JSON;
+  if (!raw) return null;
+  try {
+    const a = JSON.parse(raw) as Partial<FcmAccount>;
+    return a.project_id && a.client_email && a.private_key ? { project_id: a.project_id, client_email: a.client_email, private_key: a.private_key } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function fcmConfigured() { return fcmAccount() !== null; }
+
+const fcmTokenCache = new Map<string, { token: string; expiresAt: number }>();
+
+/** OAuth2 access token via the JWT bearer grant (RS256). Cached until a minute before it expires. */
+async function fcmAccessToken(a: FcmAccount, tr: NativeTransports): Promise<string | null> {
+  const now = tr.now();
+  const hit = fcmTokenCache.get(a.client_email);
+  if (hit && hit.expiresAt > now) return hit.token;
+  const iat = Math.floor(now / 1000);
+  const unsigned = `${jwtPart({ alg: 'RS256', typ: 'JWT' })}.${jwtPart({ iss: a.client_email, scope: FCM_SCOPE, aud: FCM_TOKEN_URL, iat, exp: iat + 3600 })}`;
+  const sig = cryptoSign('sha256', Buffer.from(unsigned), createPrivateKey(pem(a.private_key)));
+  const assertion = `${unsigned}.${b64url(sig)}`;
+  const res = await tr.fetch(FCM_TOKEN_URL, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }).toString(),
+  }).catch(() => null);
+  if (!res || !res.ok) return null;
+  const data = await res.json().catch(() => null) as { access_token?: string; expires_in?: number } | null;
+  if (!data?.access_token) return null;
+  fcmTokenCache.set(a.client_email, { token: data.access_token, expiresAt: now + (Math.max(120, data.expires_in || 3600) - 60) * 1000 });
+  return data.access_token;
+}
+
+function fcmDead(status: number, body: string) {
+  if (status === 404) return true;
+  try {
+    const err = JSON.parse(body)?.error;
+    if (err?.status === 'NOT_FOUND') return true;
+    for (const d of err?.details || []) if (d?.errorCode === 'UNREGISTERED') return true;
+  } catch { /* not json */ }
+  return false;
+}
+
+/** Sends the fixed message to each Android token. Returns tokens FCM says are gone. */
+export async function sendFcm(tokens: string[], payload: NativePayload, t?: Partial<NativeTransports>): Promise<NativeResult> {
+  const a = fcmAccount();
+  if (!a || !tokens.length) return { sent: 0, dead: [] };
+  const tr = transports(t);
+  const room = roomOf(payload);
+  const result: NativeResult = { sent: 0, dead: [] };
+  const access = await fcmAccessToken(a, tr);
+  if (!access) return result;
+  await inChunks(tokens, SEND_CONCURRENCY, async token => {
+    try {
+      const res = await tr.fetch(`https://fcm.googleapis.com/v1/projects/${encodeURIComponent(a.project_id)}/messages:send`, {
+        method: 'POST', headers: { authorization: `Bearer ${access}`, 'content-type': 'application/json' },
+        body: JSON.stringify(fcmMessage(token, { room })),
+      });
+      if (res.ok) { result.sent++; return; }
+      if (fcmDead(res.status, await res.text().catch(() => ''))) result.dead.push(token);
+    } catch { /* network error: try again next time */ }
+  });
+  return result;
+}
+
+// ---- fan-out --------------------------------------------------------------------------
+
+export function nativePushConfigured() { return apnsConfigured() || fcmConfigured(); }
+
+/**
+ * Pushes "new activity" to the owner's native devices, forgetting dead tokens. Reads at most the
+ * MAX_TOKENS_PER_OWNER most recently seen rows (the migration keeps the table at that too), and the
+ * senders go SEND_CONCURRENCY requests at a time, so one owner can never fan out without bound (W1-3).
+ */
+export async function pushToNative(admin: SupabaseClient, owner: string, roomId: string, t?: Partial<NativeTransports>) {
+  if (!nativePushConfigured()) return 0;
+  const payload: NativePayload = { room: roomId };
+  const { data } = await admin.from('push_devices').select('platform, token').eq('owner', owner)
+    .order('last_seen', { ascending: false }).limit(MAX_TOKENS_PER_OWNER);
+  const devices = ((data || []) as { platform: string; token: string }[]).slice(0, MAX_TOKENS_PER_OWNER);
+  const ios = devices.filter(d => d.platform === 'ios').map(d => d.token);
+  const android = devices.filter(d => d.platform === 'android').map(d => d.token);
+  const [a, f] = await Promise.all([sendApns(ios, payload, t), sendFcm(android, payload, t)]);
+  const dead = [...a.dead, ...f.dead];
+  if (dead.length) await admin.from('push_devices').delete().eq('owner', owner).in('token', dead);
+  return a.sent + f.sent;
 }

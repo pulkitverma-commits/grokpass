@@ -29,3 +29,83 @@ Plain statements of what Secret Chat does not do. The public page (/secret-chat)
 8. **Encrypted files are deleted by a daily job.** Expired or burned files become unreadable immediately
    (their database rows are removed, so storage access is refused), and the encrypted objects are deleted
    by `/api/chat/cleanup` once a day.
+9. **The local expiry stamp is not authenticated.** Each copy kept on a device (browser IndexedDB, the
+   phone's SQLite file) is sealed with AES-GCM and bound to its record key, but its `expires_at` sits
+   beside the ciphertext and is not part of the authenticated data (format v1). Someone with write
+   access to that local store could extend or shorten a record's lifetime on that device without
+   touching the ciphertext (they still cannot read, forge or move it). Accepted for now because the
+   server enforces its own expiry independently and such an attacker already controls the device; a
+   v2 format would bind the stamp as well (`packages/core/src/chat/keystore.ts`).
+10. **Photos keep their embedded details.** The phone app sends a picked photo as the photo library hands
+   it over (re-encoded by the picker, but with its EXIF metadata, including GPS location and camera
+   model, wherever the phone keeps it). OnePeek does not strip it in this build; the attach sheet says
+   so. Use the phone's own "remove location" option when sharing from the library, or send a screenshot
+   of the photo, if the location matters more than the image quality.
+11. **Keyboards.** In Secret rooms the phone app's composer turns off autocorrect, spell check,
+   auto-capitalisation and autofill so a draft is not offered to the keyboard's personal dictionary.
+   A third-party keyboard still sees every keystroke; the app cannot change that. Use the system
+   keyboard for Secret rooms if that matters.
+12. **Sent and opened files on the sender's phone.** The phone app deletes the picker's plaintext copy of a
+   sent file once the send has settled, and sweeps the picker and viewer cache folders on every launch
+   and on "Reset chats on this phone". The original photo stays in the phone's photo library, and a
+   document picked from Files/iCloud Drive stays where it was; both are the user's, not OnePeek's.
+13. **The phone app's free-quota id.** One-time links made from the phone app carry an anonymous per-install
+   id (`p_client_id`, the same role as the website's `localStorage` entry) so the free quota can be counted.
+   It is kept in the phone's keychain, this device only. Signing out and "Reset chats on this phone" wipe it
+   (the quota then starts over); otherwise it persists, including across accounts used on the same phone
+   and, on iOS, across deleting and reinstalling the app as long as the keychain keeps the entry. OnePeek
+   can therefore tell that secrets created between two of those wipes came from the same phone; it never
+   learns their content or keys.
+14. **A failed send still uses up a ratchet step.** The MLS state is advanced and saved before a message is
+   sent (forward secrecy: a key is never reused, even after a crash or retry), so a send that then fails, for
+   example offline, consumes a ratchet generation that no one ever receives, and recipients simply skip it
+   when they decrypt the next message; this is by design, not a bug to fix.
+15. **What a matching safety number proves, and what it doesn't.** Safety numbers are computed from the
+   signing keys inside the encrypted group (the MLS tree), so a server that swaps a member's key can no
+   longer make two screens show the same number. The apps also compare each member's key in the group
+   with the key the server lists for that device, and invite links pin the owner: a link carries,
+   after the token in its `#` fragment (which never reaches a server), the owner's device id and a
+   hash of its signing key. The joiner accepts a Welcome only if that pinned device signed it with
+   that key, whatever the server says about who the owner is. The owner won't admit a key package that
+   doesn't match its listing; a member refuses a Welcome or an owner's commit that brings in a key
+   that doesn't match (the chat then stops updating for that member and says so); a commit or proposal
+   from anyone but the owner's device is skipped and recorded, and the chat carries on; and a member
+   whose key changes on the server afterwards is shown as a key mismatch and can't be marked verified.
+   Every device in the encrypted group is in the member list, and the verify screen says how many
+   devices can read the chat: check that both screens show the same devices.
+   When the Welcome arrives, the pinned device must also be the device the server lists as the
+   owner; a link that pins anyone else is refused ("We couldn’t confirm this chat: the device letting
+   you in isn’t the owner your invite named. …").
+   What remains open:
+   - **Who may send a Welcome or commit, server side.** The server accepts a Welcome or commit row
+     from any active member (`chat_send`); only the apps refuse ones not from the owner. Recommended
+     (a human decision, no migration in this change): restrict `p_kind in ('welcome','commit')` in
+     `chat_send` to the room's owner device, except the member removals it already allows.
+   - **Invite links made before the owner pin.** They still work. A room joined with one learns who
+     the owner is from the server's listing, so a malicious server could run a second group posing as
+     the owner. Such a room says "This invite didn’t carry the owner’s key, so the app can’t confirm
+     who runs this chat. Ask for a new invite." Comparing the member lists on both screens (and
+     verifying each device you don't recognise) is then the only check. A new invite from the owner,
+     or from a member whose own room shows no such notice, fixes it: every invite carries the room
+     owner's pin (never the pin of the member who made it), and a member who joined with an older
+     link makes unpinned invites and is told so ("This invite can’t carry the owner’s key because you
+     joined with an older link."). A link whose pin is damaged is refused as invalid, not joined
+     unpinned. **Sunset:** links with the token alone are accepted until 2027-02-01 (proposed; three
+     months after pinned links shipped), after which the apps will refuse them as invalid.
+   - **Before admission.** A person who has used an invite but isn't let in yet has no key in the group,
+     so there is no safety number to compare until the owner admits them; until then their key is only
+     the one the server lists.
+   - **Devices the server doesn't list.** A device that is still in the encrypted group but that the
+     server doesn't list (one that left or was revoked before the owner's app removed it, or one a
+     malicious server hides) is shown in the member list as "Not listed by the server: this device can
+     still read the chat", and it can read the chat until it is removed. Its key is checked by format
+     only; compare its safety number, or have the owner remove it.
+   - **Who sent a message.** Which member a message or nickname is shown under is still the server's
+     word (security review F-3): the encryption proves a current member wrote it and nobody changed it,
+     not which member.
+   - **A refused key stops the chat for that member.** When a Welcome or an owner's commit is refused, that device
+     stays at the last state it trusted and the chat can't continue there until the server delivers it
+     with a listing that agrees. The warning is a record, not a permanent block: it clears when the
+     refused change later applies with an agreeing listing, when that device leaves the group, or when
+     the member is verified again on a key that agrees; until then a member whose key agrees again shows
+     "The server once showed a different key for them; compare again."

@@ -1,0 +1,16 @@
+# Sub-flow: make sure the conversation is on screen. If the app is on Chats home, open the first
+# (only) room; the two-device runs never create more than one.
+appId: io.onepeek.app
+---
+- runFlow:
+    when:
+      visible:
+        id: "chats.screen"
+    commands:
+      - tapOn:
+          id: "chats.room"
+          index: 0
+- extendedWaitUntil:
+    visible:
+      id: "room.screen"
+    timeout: 10000

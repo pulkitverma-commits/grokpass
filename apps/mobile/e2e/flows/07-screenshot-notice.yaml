@@ -1,0 +1,21 @@
+# 07 Device A: the screenshot notice from device B appears in the room, as a notice row
+# (`room.notice`) and not as a message bubble: the bubble count does not change.
+appId: io.onepeek.app
+name: 07-screenshot-notice
+tags:
+  - ios
+  - android
+  - two-device
+  - device-a
+---
+- runFlow: _common/open-room.yaml
+- extendedWaitUntil:
+    visible:
+      id: "room.notice"
+    timeout: 30000
+- assertVisible:
+    id: "room.screen"
+- assertVisible: "may have taken a screenshot"
+- assertNotVisible:
+    id: "msg\\..+"
+    index: 3

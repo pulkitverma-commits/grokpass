@@ -3,11 +3,13 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import Icon from '../../components/Icon';
-import { ChatError, peekInvite, redeemInvite, type RoomKind } from '@/lib/chat/client';
+import { ChatError, parseInviteFragment, peekInvite, redeemInvite, type RoomKind } from '@/lib/chat/client';
 import { KIND_NAME, friendlyError } from '../format';
 
-// The invite token arrives in the #fragment, which browsers never send to a server.
-// It is read once, then removed from the address bar and history.
+// The invite token arrives in the #fragment, which browsers never send to a server, followed (in
+// links made since F2-7) by `.1<owner pin>`; links with the token alone still work. The whole
+// fragment is handed to the client, which sends only the token. It is read once, then removed from
+// the address bar and history.
 export default function JoinPage() {
   const router = useRouter();
   const [token, setToken] = useState<string | null>(null);
@@ -20,7 +22,7 @@ export default function JoinPage() {
   useEffect(() => {
     const t = window.location.hash.slice(1);
     history.replaceState(null, '', '/chat/join');
-    if (!/^[A-Za-z0-9_-]{32,128}$/.test(t)) { setInfo(null); return; }
+    if (!parseInviteFragment(t)) { setInfo(null); return; }
     setToken(t);
     peekInvite(t).then(setInfo).catch(() => setInfo(null));
   }, []);

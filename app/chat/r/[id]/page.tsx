@@ -8,7 +8,7 @@ import QrCode from '../../../components/QrCode';
 import { SHOT_EVENT, panicExit } from '../../ChatShell';
 import * as chat from '@/lib/chat/client';
 import type { LocalMessage, RoomSummary } from '@/lib/chat/client';
-import { KIND_NAME, TIMERS, countdown, friendlyError, shortId, ttlLabel } from '../../format';
+import { INVITE_UNPINNED_NOTE, KEY_HISTORY_NOTE, KEY_SYNC_CODES, KIND_NAME, OWNER_UNRECOGNISED_NOTICE, TIMERS, UNLISTED_NOTE, UNPINNED_NOTICE, countdown, friendlyError, readersLine, shortId, ttlLabel, verifyLine } from '../../format';
 
 type Member = Awaited<ReturnType<typeof chat.members>>[number];
 type Sheet = null | 'menu' | 'invite' | 'timer' | 'members' | 'verify' | 'burn' | 'leave' | 'file';
@@ -69,18 +69,23 @@ export default function ConversationPage() {
     try {
       const r = await chat.sync(roomId);
       if (r.removed) { setEnded(e => e ?? 'This chat has ended, or you were removed.'); return; }
-      if (r.newMessages || r.joined) await showStored();
+      if (r.newMessages || r.newAlerts || r.joined) await showStored();
       if (r.joined) void refresh();
     } catch (e) {
       if (e instanceof chat.ChatError && e.code === 'not_signed_in') router.replace('/chat');
+      if (e instanceof chat.ChatError && KEY_SYNC_CODES.includes(e.code)) setErr(friendlyError(e.code));
     }
   }, [roomId, router, showStored]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Full refresh: room details, members, and the owner's admit/remove duties. */
   const refreshOnce = useCallback(async () => {
     try {
-      const r = await chat.sync(roomId);
-      if (r.removed) { setEnded(e => e ?? 'This chat has ended, or you were removed.'); return; }
+      // A sync refused for a key mismatch (F-2) still loads the room and its members, so the page can
+      // say so and name the member.
+      let r: Awaited<ReturnType<typeof chat.sync>> | null = null;
+      try { r = await chat.sync(roomId); }
+      catch (e) { if (!(e instanceof chat.ChatError && KEY_SYNC_CODES.includes(e.code))) throw e; setErr(friendlyError(e.code)); }
+      if (r?.removed) { setEnded(e => e ?? 'This chat has ended, or you were removed.'); return; }
       const rooms = await chat.myRooms();
       const current = rooms.find(x => x.id === roomId) ?? null;
       if (!current) { setEnded(e => e ?? 'This chat has ended.'); await chat.forgetRoom(roomId); return; }
@@ -311,9 +316,11 @@ export default function ConversationPage() {
         <p className="c-notice">{secret
           ? 'Press and hold a message to read it. Screenshot shortcuts blur the chat and everyone is told. No website can stop a camera, so share carefully.'
           : 'Messages are encrypted on each device and disappear on a timer. Screenshot shortcuts blur the chat and everyone is told.'}</p>
+        {members.some(m => m.role === 'owner' && m.changedGroup) && <p className="c-notice" style={{ color: 'var(--c-danger)' }}>{OWNER_UNRECOGNISED_NOTICE}</p>}
+        {room && !room.ownerPinned && <p className="c-notice" style={{ color: 'var(--c-danger)' }}>{UNPINNED_NOTICE}</p>}
         {keyWarnings.map(m => (
           <p key={m.deviceId} className="c-notice" style={{ color: 'var(--c-danger)' }}>
-            {nameOf(m.deviceId)}’s security key changed. <button className="c-link" onClick={() => setSheet('verify')}>Verify again</button>
+            {m.keyMismatch ? `${nameOf(m.deviceId)}: ${friendlyError('member_key_mismatch')}` : m.unlisted ? `${nameOf(m.deviceId)}: ${UNLISTED_NOTE}.` : `${nameOf(m.deviceId)}’s security key changed.`} <button className="c-link" onClick={() => setSheet('verify')}>Verify again</button>
           </p>
         ))}
         {synced && !joined && <p className="c-notice">Waiting for the owner to let you in. Messages will appear once you’re admitted.</p>}
@@ -411,7 +418,7 @@ export default function ConversationPage() {
             {sheet === 'timer' && room && <TimerSheet room={room} ttl={ttl} setTtl={setTtl} isOwner={isOwner} close={() => setSheet(null)} />}
             {sheet === 'invite' && room && <InviteSheet room={room} />}
             {sheet === 'members' && room && <MembersSheet room={room} members={members} me={me} nameOf={nameOf} isOwner={isOwner} onChange={refresh} />}
-            {sheet === 'verify' && <VerifySheet roomId={roomId} members={members.filter(m => m.deviceId !== me && m.state === 'active')} nameOf={nameOf} onChange={refresh} />}
+            {sheet === 'verify' && <VerifySheet roomId={roomId} members={members.filter(m => m.deviceId !== me && m.state === 'active')} readers={members.filter(m => m.inGroup).length} nameOf={nameOf} onChange={refresh} />}
             {sheet === 'burn' && <ConfirmSheet title="Burn this chat?" danger="Burn chat"
               body="Every message, invite and file is deleted from OnePeek’s servers now, everyone loses access, and this device forgets its keys. Copies someone already saved or photographed can’t be recalled."
               onConfirm={async () => { await chat.burn(roomId); router.replace('/chat'); }} onCancel={() => setSheet('menu')} />}
@@ -509,6 +516,7 @@ function InviteSheet({ room }: { room: RoomSummary }) {
   const [expires, setExpires] = useState(86400);
   const [uses, setUses] = useState(1);
   const [copied, setCopied] = useState(false);
+  const [pinned, setPinned] = useState(true);
   const [invites, setInvites] = useState<Awaited<ReturnType<typeof chat.listInvites>>>([]);
   const [err, setErr] = useState('');
   const load = useCallback(() => chat.listInvites(room.id).then(setInvites).catch(() => {}), [room.id]);
@@ -518,7 +526,7 @@ function InviteSheet({ room }: { room: RoomSummary }) {
     setErr('');
     try {
       const r = await chat.createInvite(room.id, { expiresIn: expires, maxUses: uses, approval: room.kind === 'business' });
-      setLink(r.link); load();
+      setLink(r.link); setPinned(r.ownerPinned); load();
     } catch (e) { setErr(friendlyError(e instanceof chat.ChatError ? e.code : '')); }
   }
 
@@ -544,6 +552,7 @@ function InviteSheet({ room }: { room: RoomSummary }) {
             <button className="c-btn sm" onClick={async () => { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
               <Icon name="copy" size={14} />{copied ? 'Copied' : 'Copy'}</button>
           </div>
+          {!pinned && <p className="c-error">{INVITE_UNPINNED_NOTE}</p>}
           <p className="c-hint">Only this chat. {room.kind === 'secret' ? 'They’ll also need the access code — share it another way.' : 'Anyone with the link can join until it’s used up or expires.'}</p>
         </>
       )}
@@ -584,32 +593,40 @@ function MembersSheet({ room, members, me, nameOf, isOwner, onChange }: { room: 
           if (confirm(`Remove ${nameOf(m.deviceId)}? They lose access to new messages immediately.`)) { await chat.removeMember(room.id, m.deviceId); onChange(); }
         }}>
           <Icon name={m.verified && !chat.keyChanged(m) ? 'check' : 'user'} />{nameOf(m.deviceId)}{m.role === 'owner' ? ' · owner' : ''}
-          {isOwner && m.deviceId !== me && <small>Remove</small>}
+          {m.unlisted ? <small>{UNLISTED_NOTE}</small> : isOwner && m.deviceId !== me && <small>Remove</small>}
         </button></li>
       ))}</ul>
     </>
   );
 }
 
-function VerifySheet({ roomId, members, nameOf, onChange }: { roomId: string; members: Member[]; nameOf: (d: string) => string; onChange: () => void }) {
+function VerifySheet({ roomId, members, readers, nameOf, onChange }: { roomId: string; members: Member[]; readers: number; nameOf: (d: string) => string; onChange: () => void }) {
   const [who, setWho] = useState<Member | null>(members.length === 1 ? members[0] : null);
   const [num, setNum] = useState('');
-  useEffect(() => { if (who) chat.safetyNumberWith(roomId, who.deviceId).then(setNum); }, [who, roomId]);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    if (!who) return;
+    setNum(''); setErr('');
+    chat.safetyNumberWith(roomId, who.deviceId).then(setNum, e => setErr(friendlyError(e instanceof chat.ChatError ? e.code : '')));
+  }, [who, roomId]);
 
   if (!members.length) return <><h2>Verify people</h2><p className="c-sub">Nobody else is in this chat yet.</p></>;
   if (!who) return (
     <>
       <h2>Verify people</h2>
       <ul className="c-menu">{members.map(m => <li key={m.deviceId}><button onClick={() => setWho(m)}><Icon name="shield" />{nameOf(m.deviceId)}
-        <small>{m.verified ? (chat.keyChanged(m) ? 'Key changed' : 'Verified') : 'Not verified'}</small></button></li>)}</ul>
+        <small>{m.keyMismatch ? 'Key mismatch' : m.unlisted ? 'Not listed by the server' : m.verified ? (chat.keyChanged(m) ? 'Key changed' : 'Verified') : 'Not verified'}</small></button></li>)}</ul>
     </>
   );
   const groups = num.match(/.{5}/g) ?? [];
   return (
     <>
       <h2>Verify {nameOf(who.deviceId)}</h2>
-      <p className="c-sub">Compare these numbers in person or on a call. If they match on both screens, nobody is intercepting this chat.</p>
-      {num ? <div className="c-digits" aria-label="Safety number">{groups.map((g, i) => <span key={i}>{g}</span>)}</div> : <p className="c-empty">Calculating…</p>}
+      <p className="c-sub">{verifyLine(nameOf(who.deviceId))}</p>
+      {who.unlisted && <p className="c-error">{UNLISTED_NOTE}.</p>}
+      {who.keyHistory && <p className="c-notice">{KEY_HISTORY_NOTE}</p>}
+      {num ? <div className="c-digits" aria-label="Safety number">{groups.map((g, i) => <span key={i}>{g}</span>)}</div> : err ? <p className="c-error">{err}</p> : <p className="c-empty">Calculating…</p>}
+      {num && <p className="c-sub">{readersLine(readers)}</p>}
       <div className="c-qr"><QrCode value={`onepeek-verify:${num}`} size={150} /></div>
       <button className="c-btn block" disabled={!num} onClick={async () => { await chat.markVerified(roomId, who.deviceId); onChange(); setWho(null); }}>They match — mark verified</button>
     </>

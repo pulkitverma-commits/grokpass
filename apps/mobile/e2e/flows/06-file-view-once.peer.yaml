@@ -1,0 +1,53 @@
+# 06 (peer) Device B: open the view-once file once; afterwards the file row is disabled ("Already
+# viewed") and stays so after a relaunch. The viewer content is never held, asserted on or
+# screenshotted: in a Secret room the preview is behind `viewer.hold` and the flow leaves it there.
+appId: io.onepeek.app
+name: 06-file-view-once.peer
+tags:
+  - ios
+  - android
+  - two-device
+  - device-b
+---
+- runFlow: _common/open-room.yaml
+- extendedWaitUntil:
+    visible:
+      id: "file\\..+"
+    timeout: 30000
+- tapOn:
+    id: "file\\..+"
+    index: 0
+- extendedWaitUntil:
+    visible:
+      id: "viewer.screen"
+    timeout: 20000
+- assertVisible:
+    id: "viewer.hold"
+- assertNotVisible:
+    id: "viewer.share"
+- tapOn:
+    id: "viewer.done"
+- assertNotVisible:
+    id: "viewer.screen"
+# Second open refused: the row is disabled and a tap opens nothing.
+- assertVisible:
+    id: "file\\..+"
+    enabled: false
+- tapOn:
+    id: "file\\..+"
+    index: 0
+- assertNotVisible:
+    id: "viewer.screen"
+# Still refused after a relaunch.
+- stopApp
+- launchApp
+- runFlow: _common/open-room.yaml
+- extendedWaitUntil:
+    visible:
+      id: "file\\..+"
+    timeout: 15000
+- assertVisible:
+    id: "file\\..+"
+    enabled: false
+- assertNotVisible:
+    id: "viewer.screen"

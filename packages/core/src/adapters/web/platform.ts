@@ -1,0 +1,87 @@
+// Browser implementation of the chat ports: the `window`, `navigator`, `localStorage`,
+// `BroadcastChannel`, `fetch` and `File`/`Blob` code that used to live inline in
+// lib/chat/client.ts. Globals are read at call time, never captured at import.
+
+import type { ChatEnv, ChatPlatform, FileSource, KeyStore, LockStore, OpenedFile, SupabaseLike, SupabaseSession } from '../../chat/ports';
+
+function deviceLabel() {
+  if (typeof navigator === 'undefined') return 'Browser';
+  const ua = navigator.userAgent;
+  const os = /iPhone|iPad/.test(ua) ? 'iOS' : /Android/.test(ua) ? 'Android' : /Mac/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : 'Linux';
+  const br = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+  return `${br} on ${os}`;
+}
+
+export const webEnv: ChatEnv = {
+  origin: () => window.location.origin,
+  deviceLabel,
+  randomUUID: () => crypto.randomUUID(),
+  /** Posts to the web app's own notify route. Best effort; the caller already swallows errors. */
+  async notify(roomId, accessToken) {
+    if (typeof fetch === 'undefined' || typeof window === 'undefined') return;
+    await fetch('/api/chat/notify', {
+      method: 'POST', keepalive: true,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ room: roomId }),
+    });
+  },
+};
+
+// Panic lock: kept in localStorage so other tabs lock too (they listen on the BroadcastChannel).
+const LOCK = 'onepeek.chat.locked';
+export const webLock: LockStore = {
+  set() {
+    try { localStorage.setItem(LOCK, '1'); } catch { /* ignore */ }
+    try { new BroadcastChannel('onepeek-chat').postMessage({ t: 'lock' }); } catch { /* ignore */ }
+  },
+  get() {
+    try { return localStorage.getItem(LOCK) === '1'; } catch { return false; }
+  },
+  clear() {
+    try { localStorage.removeItem(LOCK); } catch { /* ignore */ }
+  },
+};
+
+/** Adapts a browser `File` for the core's sendFile. */
+export function fileSource(file: File): FileSource {
+  return { name: file.name, mime: file.type, size: file.size, bytes: async () => new Uint8Array(await file.arrayBuffer()) };
+}
+
+/** Turns the core's decrypted attachment back into the `Blob` the web UI expects. */
+export function toBlob(f: OpenedFile): Blob {
+  return new Blob([f.bytes as BlobPart], { type: f.mime });
+}
+
+/**
+ * Wraps the browser Supabase client so attachment uploads reach it as the `Blob` it has always
+ * received: the core hands over raw ciphertext bytes (`Uint8Array`) because React Native cannot
+ * build a Blob from them. Everything else is delegated untouched.
+ */
+export function withBlobUploads<S extends SupabaseSession>(sb: SupabaseLike<S>): SupabaseLike<S> {
+  return {
+    auth: sb.auth,
+    rpc: (fn, args) => sb.rpc(fn, args),
+    channel: (name, options) => sb.channel(name, options),
+    removeChannel: (channel) => sb.removeChannel(channel),
+    realtime: sb.realtime,
+    storage: {
+      from(bucket) {
+        const b = sb.storage.from(bucket);
+        return {
+          upload: (path, body, options) =>
+            b.upload(path, body instanceof Uint8Array ? new Blob([body as BlobPart], { type: options.contentType }) : body, options),
+          download: (path) => b.download(path),
+        };
+      },
+    },
+  };
+}
+
+/**
+ * Builds the browser ChatPlatform. Pass the app's Supabase client (or null when unconfigured) and
+ * its one keystore (lib/chat/keystore.ts); the store is required so no caller ends up with a
+ * second, unintended instance.
+ */
+export function createWebPlatform<S extends SupabaseSession>(opts: { supabase: SupabaseLike<S> | null; keystore: KeyStore }): ChatPlatform<S> {
+  return { supabase: opts.supabase && withBlobUploads(opts.supabase), keystore: opts.keystore, env: webEnv, lock: webLock };
+}

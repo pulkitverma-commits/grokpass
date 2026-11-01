@@ -89,7 +89,11 @@ export function inviteTokenFrom(text: string | null | undefined): string | null 
   return m ? m[1]! : null;
 }
 
-/** Masks the fragment so a token is never drawn on screen (the web shows `#••••••` the same way). */
+/**
+ * Masks the fragment so the token or key is not drawn as text (the web shows `#••••••` the same way).
+ * The text is not the only rendering: the invite and secret sheets can also show the full link as a
+ * QR code, which is why that code stays hidden until "Show QR code" and hides again (HiddenQR, F-4).
+ */
 export function maskLink(link: string) {
   return link.replace(/#.*/, '#••••••');
 }

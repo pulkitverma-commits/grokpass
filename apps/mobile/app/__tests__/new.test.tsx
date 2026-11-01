@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports -- jest.mock factories must require() */
-import { fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
+import { AppState } from 'react-native';
 import NewChatScreen from '../new';
 import { chat, chatError, resetChatMock } from '../../test/chat-mock';
 import { resetRouter, router } from '../../test/expo-router-mock';
@@ -45,7 +46,15 @@ test('creates the room with the chosen options, then an invite, and shows the li
   const link = await screen.findByTestId('invite.link');
   expect(link.props.children).toBe('https://onepeek.io/chat/join#••••••');
   expect(JSON.stringify(screen.toJSON())).not.toContain(TOKEN.slice(0, 12));
+  // F-4: the QR encodes the whole link, so it is not drawn until asked for.
+  expect(mockQr).not.toHaveBeenCalled();
+  expect(screen.queryByTestId('qr')).toBeNull();
+  expect(screen.getByTestId('invite.qr.show')).toBeTruthy();
+  await fireEvent.press(screen.getByTestId('invite.qr.show'));
+  expect(screen.getByTestId('qr')).toBeTruthy();
   expect(mockQr).toHaveBeenCalledWith(`https://onepeek.io/chat/join#${TOKEN}`);
+  await fireEvent.press(screen.getByTestId('invite.qr.hide'));
+  expect(screen.queryByTestId('qr')).toBeNull();
   await fireEvent.press(screen.getByTestId('invite.copy'));
   await waitFor(() => expect(mockSetString).toHaveBeenCalledWith(`https://onepeek.io/chat/join#${TOKEN}`));
   await fireEvent.press(screen.getByTestId('invite.done'));
@@ -105,4 +114,17 @@ test('core errors use the web wording', async () => {
   await fireEvent.press(screen.getByTestId('new.kind.quick'));
   await fireEvent.press(screen.getByTestId('new.create'));
   expect(await screen.findByText('Too many attempts. Wait a few minutes and try again.')).toBeTruthy();
+});
+
+test('F-4: a shown invite QR hides again when the app goes inactive', async () => {
+  const handlers: ((s: string) => void)[] = [];
+  const spy = jest.spyOn(AppState, 'addEventListener').mockImplementation((_t, cb) => { handlers.push(cb as (s: string) => void); return { remove: jest.fn() } as never; });
+  try {
+    await createQuickAndOpenInvite();
+    await fireEvent.press(screen.getByTestId('invite.qr.show'));
+    expect(screen.getByTestId('qr')).toBeTruthy();
+    await act(async () => { for (const h of [...handlers]) h('inactive'); });
+    expect(screen.queryByTestId('qr')).toBeNull();
+    expect(screen.getByTestId('invite.qr.show')).toBeTruthy();
+  } finally { spy.mockRestore(); }
 });

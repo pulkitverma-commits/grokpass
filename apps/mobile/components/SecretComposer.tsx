@@ -9,9 +9,9 @@ import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
 import { useState } from 'react';
 import { Pressable, Share, StyleSheet, Switch, View } from 'react-native';
-import QRCode from 'react-native-qrcode-svg';
 import { colors, radii, spacing, touchTarget } from '../theme';
 import { Button } from './Button';
+import { HiddenQR } from './HiddenQR';
 import { Field } from './Field';
 import { Icon } from './Icon';
 import { Notice, Toast } from './Notice';
@@ -283,9 +283,7 @@ export function SecretLinkSheet({ link, viewsLabel, expiresLabel, onSendInChat, 
 
   return (
     <Sheet open onClose={onDone} title="Your one-time link" testID="secret.result">
-      <View style={styles.qrWrap} accessible accessibilityLabel="Secret link as a QR code. Scan it with a phone camera to open the secret.">
-        <View style={styles.qrBox}><QRCode value={link} size={180} color="#000" backgroundColor="#fff" /></View>
-      </View>
+      <HiddenQR value={link} label="Secret link as a QR code. Scan it with a phone camera to open the secret." testID="secret.qr" />
       <View style={styles.linkBox}>
         <Text variant="mono" tone="muted" numberOfLines={E2E ? undefined : 1} ellipsizeMode={E2E ? undefined : 'middle'} style={styles.link} testID="secret.resultLink" accessibilityLabel="Secret link, hidden">{E2E ? link : maskLink(link)}</Text>
         <Button title="Copy" icon="copy" small block={false} onPress={copy} testID="secret.copy" />
@@ -319,8 +317,6 @@ const styles = StyleSheet.create({
   burn: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.md, padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.dangerSoft },
   burnText: { flex: 1 },
   actions: { gap: spacing.sm, marginTop: spacing.lg },
-  qrWrap: { alignItems: 'center', marginVertical: spacing.md },
-  qrBox: { padding: 12, backgroundColor: '#fff', borderRadius: radii.lg },
   linkBox: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, backgroundColor: colors.fill, borderRadius: radii.md, paddingLeft: 14, paddingRight: 6, paddingVertical: 6 },
   link: { flex: 1 },
   errBox: { marginTop: spacing.sm },

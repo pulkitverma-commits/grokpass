@@ -1,6 +1,8 @@
-// Invite sheet: the link the core built (token in the #fragment only), as a QR code, with Copy and
-// Share. The screen shows the link masked; the full link goes only to the clipboard or the share
-// sheet, never to any server from here. Security review W1-9 / W3-2: `invite.link` renders the full
+// Invite sheet: the link the core built (token in the #fragment only), with Copy and Share, and a QR
+// code behind "Show QR code" (HiddenQR: it encodes the whole link, so it is drawn only on request and
+// hides again after 30 s or when the app goes inactive; review F-4). The screen shows the link
+// masked; the full link goes only to the clipboard, the share sheet or the shown QR, never to any
+// server from here. Security review W1-9 / W3-2: `invite.link` renders the full
 // link only when the build's config carries `extra.e2e === true`, which app.config.ts sets for the
 // `e2e` EAS profile alone (so Maestro can copy it); every other build, OTA bundle or local release
 // build masks it. The env var is not read here: a stray EXPO_PUBLIC_E2E in a shell unmasks nothing.
@@ -8,9 +10,9 @@ import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
 import { useState } from 'react';
 import { Share, StyleSheet, View } from 'react-native';
-import QRCode from 'react-native-qrcode-svg';
 import { colors, radii, spacing } from '../theme';
 import { Button } from './Button';
+import { HiddenQR } from './HiddenQR';
 import { Notice, Toast } from './Notice';
 import { Sheet } from './Sheet';
 import { Text } from './Text';
@@ -39,9 +41,7 @@ export function InviteSheet({ open, link, kind, onDone, expiresLabel = '1 day', 
 
   return (
     <Sheet open={open} onClose={onDone} title="Invite someone" testID="invite.sheet">
-      <View style={styles.qrWrap} accessible accessibilityLabel="Invite QR code. Scan it with another phone to join this chat.">
-        <View style={styles.qrBox}><QRCode value={link} size={180} color="#000" backgroundColor="#fff" /></View>
-      </View>
+      <HiddenQR value={link} label="Invite QR code. Scan it with another phone to join this chat." testID="invite.qr" />
       <View style={styles.linkBox}>
         <Text variant="mono" tone="muted" numberOfLines={E2E ? undefined : 1} ellipsizeMode={E2E ? undefined : 'middle'} style={styles.link} testID="invite.link" accessibilityLabel="Invite link, hidden">{E2E ? link : maskLink(link)}</Text>
         <Button title="Copy" icon="copy" small block={false} onPress={copy} testID="invite.copy" />
@@ -60,8 +60,6 @@ export function InviteSheet({ open, link, kind, onDone, expiresLabel = '1 day', 
 }
 
 const styles = StyleSheet.create({
-  qrWrap: { alignItems: 'center', marginVertical: spacing.md },
-  qrBox: { padding: 12, backgroundColor: '#fff', borderRadius: radii.lg },
   linkBox: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, backgroundColor: colors.fill, borderRadius: radii.md, paddingLeft: 14, paddingRight: 6, paddingVertical: 6 },
   link: { flex: 1 },
   hint: { marginTop: spacing.sm, marginHorizontal: spacing.xs },

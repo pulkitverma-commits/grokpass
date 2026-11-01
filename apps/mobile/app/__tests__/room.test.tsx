@@ -521,3 +521,54 @@ describe('F-1: a room that myRooms() does not list for this session', () => {
     expect(chat.messages).toHaveBeenCalledWith(ROOM.id);
   });
 });
+
+describe('accessibility (qa A1, A2, §12 key-changed row)', () => {
+  test('A1: a hidden Secret bubble is labelled with the sender and the time, never the text', async () => {
+    const sentAt = new Date(2026, 10, 1, 9, 41).getTime();
+    await open([message({ sentAt })]);
+    const bubble = await screen.findByTestId('msg.m1');
+    expect(bubble.props.accessibilityLabel).toBe('Hidden message from Bea, 9:41. Hold to read.');
+    expect(bubble.props.accessibilityLabel).not.toMatch(/locker|4471/);
+  });
+
+  test('A2: holding announces the body once; re-renders while held and the release announce nothing', async () => {
+    const { AccessibilityInfo } = require('react-native');
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => {});
+    announce.mockClear();   // react-native's jest setup already mocks it: drop calls from earlier tests
+    try {
+      await open();
+      const bubble = await screen.findByTestId('msg.m1');
+      expect(announce).not.toHaveBeenCalled();   // nothing outside a hold
+      await act(async () => { fireEvent(bubble, 'pressIn'); });
+      await waitFor(() => expect(chat.markOpened).toHaveBeenCalledTimes(1));   // re-render while held
+      expect(announce).toHaveBeenCalledTimes(1);
+      expect(announce).toHaveBeenCalledWith('The locker code is 4471.');
+      await act(async () => { fireEvent(screen.getByTestId('msg.m1'), 'pressOut'); });
+      expect(announce).toHaveBeenCalledTimes(1);
+      // A second hold is a second reveal: announced once more.
+      await act(async () => { fireEvent(screen.getByTestId('msg.m1'), 'pressIn'); });
+      expect(announce).toHaveBeenCalledTimes(2);
+    } finally { announce.mockRestore(); }
+  });
+
+  test('A2: own messages and Quick rooms are never announced (their text is on screen anyway)', async () => {
+    const { AccessibilityInfo } = require('react-native');
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => {});
+    announce.mockClear();   // react-native's jest setup already mocks it: drop calls from earlier tests
+    try {
+      chat.myRooms.mockResolvedValue([room({ id: ROOM.id, kind: 'quick', name: 'Vault handover', ttl: 60 })]);
+      await open([message(), message({ id: 'm2', mine: true, body: 'Mine.' })]);
+      expect(await screen.findByText('The locker code is 4471.')).toBeTruthy();
+      expect(announce).not.toHaveBeenCalled();
+    } finally { announce.mockRestore(); }
+  });
+
+  test('the key-changed row has a fixed label without the nickname', async () => {
+    chat.members.mockResolvedValue([MEMBERS[0]!, { ...MEMBERS[1]!, verified: '\\x99' }]);
+    await open([]);
+    const row = await screen.findByTestId('room.keyChanged');
+    expect(row.props.accessibilityLabel).toBe('A member’s security key changed. Verify again.');
+    expect(row.props.accessibilityRole).toBe('button');
+    expect(screen.getByText('Bea’s security key changed. Verify again.')).toBeTruthy();
+  });
+});

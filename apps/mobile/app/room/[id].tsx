@@ -48,6 +48,9 @@ const SLOW_POLL_MS = 15000;
 // Honest per-platform copy (Android blocks screenshots with FLAG_SECURE; iOS can only report them).
 const SHOT_LINE = Platform.select({ android: 'Screenshots are blocked on this phone.', default: 'Screenshots are flagged to everyone in the chat.' });
 const INTRO_SECRET = `Press and hold a message to read it. ${SHOT_LINE} No app can stop a camera, so share carefully.`;
+// A fixed label for the "<name>'s security key changed" row (qa §12): the nickname stays out of the
+// announcement, the visible text still names the member.
+const KEY_CHANGED_LABEL = 'A member’s security key changed. Verify again.';
 const INTRO_QUICK = `Messages are encrypted on each device and disappear on a timer. ${SHOT_LINE}`;
 
 /** Runs `fn` one at a time; calls made while it runs collapse into one more run afterwards (the web's useCoalesced). */
@@ -384,7 +387,7 @@ export default function RoomScreen() {
             <View style={styles.intro}>
               <Text variant="meta" tone="muted" center style={styles.introBox}>{secret ? INTRO_SECRET : INTRO_QUICK}</Text>
               {members.filter((m) => m.state === 'active' && keyChanged(m)).map((m) => (
-                <Pressable key={m.deviceId} onPress={() => setMenu('verify')} accessibilityRole="button" style={styles.introBox}>
+                <Pressable key={m.deviceId} onPress={() => setMenu('verify')} accessibilityRole="button" accessibilityLabel={KEY_CHANGED_LABEL} style={styles.introBox} testID="room.keyChanged">
                   <Text variant="meta" tone="danger" center>{nameOf(m.deviceId)}’s security key changed. Verify again.</Text>
                 </Pressable>
               ))}

@@ -116,3 +116,9 @@ export function timerText(ttl: number, expiresAt: number | null, now: number) {
   if (expiresAt === null) return `${ttlLabel(ttl)} once read`;
   return `${countdown(expiresAt - now)} left`;
 }
+
+/** The time a message was sent, as the phone's local "H:MM" (accessibility labels; no Intl on Hermes needed). */
+export function sentTime(ms: number) {
+  const d = new Date(ms);
+  return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+}

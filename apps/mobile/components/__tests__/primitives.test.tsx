@@ -46,6 +46,23 @@ describe('Button', () => {
     expect(onPress).not.toHaveBeenCalled();
     expect(screen.getByTestId('a').props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));
   });
+  it('P3-A1: destructive text meets 4.5:1 on the danger red (dark text, 7.06:1)', async () => {
+    const lum = (hex: string) => {
+      const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((x) => (x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4));
+      return 0.2126 * c[0]! + 0.7152 * c[1]! + 0.0722 * c[2]!;
+    };
+    const ratio = (a: string, b: string) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi! + 0.05) / (lo! + 0.05); };
+    await render(<Button title="Burn chat" variant="destructive" testID="d" />);
+    const btn = screen.getByTestId('d');
+    const bg = Object.assign({}, ...[btn.props.style].flat(Infinity).filter(Boolean)).backgroundColor as string;
+    const label = screen.getByText('Burn chat');
+    const fg = Object.assign({}, ...[label.props.style].flat(Infinity).filter(Boolean)).color as string;
+    expect(bg).toBe(colors.danger);
+    expect(fg).toBe(colors.onDanger);
+    expect(ratio(fg, bg)).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(fg, bg)).toBeCloseTo(7.06, 1);
+    expect(ratio(colors.danger, colors.bg)).toBeGreaterThanOrEqual(4.5);   // danger as text stays readable
+  });
   it('renders the four variants', async () => {
     await render(<>{(['primary', 'secondary', 'ghost', 'destructive'] as const).map((v) => <Button key={v} title={v} variant={v} testID={v} />)}</>);
     for (const v of ['primary', 'secondary', 'ghost', 'destructive']) expect(screen.getByTestId(v)).toBeTruthy();

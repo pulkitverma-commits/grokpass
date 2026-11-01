@@ -24,7 +24,7 @@ export type ButtonProps = Omit<PressableProps, 'children' | 'style'> & {
 
 export function Button({ title, variant = 'primary', icon, leading, busy, small, block = true, disabled, style, accessibilityLabel, testID, ...rest }: ButtonProps) {
   const off = disabled || busy;
-  const fg = variant === 'primary' ? colors.accentText : variant === 'secondary' ? colors.accentText : variant === 'destructive' ? colors.white : colors.text;
+  const fg = variant === 'primary' ? colors.accentText : variant === 'secondary' ? colors.accentText : variant === 'destructive' ? colors.onDanger : colors.text;
   const tone = variant === 'primary' || variant === 'secondary' ? 'inverse' : variant === 'destructive' ? 'text' : 'text';
   return (
     <Pressable
@@ -46,7 +46,7 @@ export function Button({ title, variant = 'primary', icon, leading, busy, small,
       {...rest}
     >
       {busy ? <ActivityIndicator color={fg} /> : leading ? <View>{leading}</View> : icon ? <Icon name={icon} size={18} color={fg} /> : null}
-      <Text variant={small ? 'sub' : 'body'} tone={tone} style={[variant === 'destructive' && { color: colors.white }, variant === 'link' && styles.linkText]} numberOfLines={1}>
+      <Text variant={small ? 'sub' : 'body'} tone={tone} style={[variant === 'destructive' && { color: colors.onDanger }, variant === 'link' && styles.linkText]} numberOfLines={1}>
         {title}
       </Text>
     </Pressable>

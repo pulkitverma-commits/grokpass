@@ -28,6 +28,12 @@ export const colors = {
   secure: '#89DB96',
   secureSoft: 'rgba(137, 219, 150, 0.12)',
   danger: '#ff6b6b',
+  /**
+   * Text and icons on a `danger` fill (destructive buttons). qa P3-A1: white on #ff6b6b is 2.78:1;
+   * #0A0C0F on #ff6b6b is 7.06:1 (WCAG AA 4.5:1 for text, AAA 7:1). The red itself is unchanged, so
+   * `danger` as text on `bg` stays at 7.06:1.
+   */
+  onDanger: '#0A0C0F',
   dangerSoft: 'rgba(255, 107, 107, 0.12)',
   focus: 'rgba(200, 241, 53, 0.55)',
   white: '#FFFFFF',

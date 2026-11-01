@@ -1,6 +1,6 @@
 # OnePeek mobile apps: build plan
 
-Lead: Claude (lead engineer). Status: **Gate 3 reached on `mobile/integration` (2026-11-01): everything in Phase 3 that needs no device or account is done; one open high (F-2, inherited from the web) needs a human decision; the device matrix is blocked on accounts and disk. See `gates/phase-3.md`.**
+Lead: Claude (lead engineer). Status: **Gate 3 reached on `mobile/integration` (2026-11-01): everything in Phase 3 that needs no device or account is done; F-2 fixed in core by the human's decision; no open high or critical; the device matrix is blocked on accounts and disk. See `gates/phase-3.md`.**
 Source of truth for scope and rules: the build prompt (sections 1, 3, 4). This file holds the task
 breakdown, owners, order and risks. The running log is `log.md`; gate evidence goes in `gates/`.
 

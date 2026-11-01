@@ -2,25 +2,23 @@
 
 Date: 2026-11-01. Branch: `mobile/integration` (22 commits after Gate 2 approval, 78 files, +5k lines).
 
-Decisions requested from the human:
-1. **F-2 (high, inherited from the website):** safety numbers and "key changed" are computed from the keys the
-   server lists, not from the keys inside the encrypted group, so a server operator could substitute a key without
-   either side seeing a mismatch. The fix lives in the shared core and **changes the safety numbers the live website
-   shows** (every verified pair would see a "key changed" once). The app's wording is already honest about it. Choose:
-   fix now in core and web together, or keep the honest wording and fix before the store submission.
-2. **Gate 3 itself.** The original prompt's Gate 3 text is gone from this Mac; plan §5 lists the Phase 3 work. Everything
-   that can be done without a device or an account is done. Every remaining Gate 3 criterion needs a device build,
-   which needs the accounts. Approve "Phase 3 complete except the device matrix", or hold the gate until it runs.
+Decision requested from the human: **approve Phase 3 as "complete except the device matrix"**, or hold the gate until
+a device build runs. The original prompt's Gate 3 text is gone from this Mac; plan §5 lists the Phase 3 work. Every
+remaining Gate 3 criterion needs a device build, which needs the accounts and free disk.
 
-Security verdict: **one open high (F-2, decision above)**. F-1 (sign-out kept the chat keys) is fixed: sign-out now
-wipes the chat keystore as the website does. All other findings from the full report are fixed or recorded as lows
-with owners (`security-review/phase-3-full-report.md` §4).
+Security verdict: **no open high or critical findings.** F-1 (sign-out kept the chat keys) is fixed. F-2 (safety
+numbers trusted server-listed keys) is fixed in the shared core by the human's decision of 2026-11-01, after four review
+passes (`security-review/f2-tree-keys.md`): safety numbers and verification now use the keys inside the encrypted group;
+invite links carry the owner's key in the fragment (`#<token>.1<pin>`, never sent to the server) and joiners refuse any
+Welcome or commit not from that owner; devices the server does not list are shown and counted; only the owner's device
+may change the group, and a member's rogue change is skipped without freezing the room. Honest rooms keep byte-identical
+safety numbers, so verified pairs on the live website see no change. Remaining lows are in §4.
 
 ## 1. Phase 3 items and status
 
 | Item (plan §5) | Status | Evidence |
 | --- | --- | --- |
-| Security-reviewer full report | **Done** | `security-review/phase-3-full-report.md`: threat model, architecture walk, 22 claims with proof, parity table with the web, beta readiness. F-1 fixed; F-2 decision; F-3 (sender attribution is the server's word, ts-mls API limit) and F-5 (no heap zeroisation on Hermes) recorded honestly. |
+| Security-reviewer full report | **Done** | `security-review/phase-3-full-report.md`: threat model, architecture walk, 22 claims with proof, parity table with the web, beta readiness. F-1 and F-2 fixed; F-3 (sender attribution is the server's word, ts-mls API limit) and F-5 (no heap zeroisation on Hermes) recorded honestly. |
 | Device matrix (2 iPhones incl. one older, 3 Android across price ranges) | **Specified; 0 of 5 run** | test-plan §10: iPhone 16, iPhone 11 on iOS 17, Redmi 13C, Galaxy A35, Pixel 8/9; per-device pass criteria for S1–S27, P1–P10, flows; run order; results template. Build floors read from the SDK: iOS 16.4, Android minSdk 24 (tested floor Android 10). |
 | Performance (cold start, 200-message sync, 50 MB file) | **Core proof done; device numbers pending** | `packages/core/test/perf.sync.test.ts` (200 messages, one state write per page), sync hardening (multi-page sync). Device targets in test-plan §11. |
 | Offline / reconnect | **Core proof done; device rows pending** | `offline.integration.test.ts` and `sync.batch.test.ts`: stable `network` error, no partial state, no duplicates, channel reopened with backoff after errors. |
@@ -35,9 +33,9 @@ with owners (`security-review/phase-3-full-report.md` §4).
 ```
 npm run typecheck        → clean (web root, @onepeek/core, @onepeek/mobile)
 npm run lint             → 0 errors
-npm test                 → web vitest 145/145 (was 142 at Gate 2)
-                           @onepeek/core vitest 354/354 (was 322)
-                           @onepeek/mobile jest 442/442, 40 suites (was 396), run with --no-cache
+npm test                 → web vitest 150/150 (was 142 at Gate 2)
+                           @onepeek/core vitest 383/383 (was 322)
+                           @onepeek/mobile jest 460/460, 41 suites (was 396), run with --no-cache
 next build / expo export → not re-run this phase: the disk had under 700 MB free; typecheck covers the web changes,
                            and the three web-visible core changes each have a web test
 ```
@@ -58,18 +56,26 @@ next build / expo export → not re-run this phase: the disk had under 700 MB fr
 
 ## 4. Open lows and follow-ups (owners)
 
+- F-2 follow-ups: token-only invite links (all links made before this build) still trust the server's listing for who
+  the owner is; they show a persistent notice, and a sunset of 2027-02-01 is proposed (human to confirm). A server-side
+  restriction so only the owner's device may post Welcome and commit rows (new migration, live behaviour) is
+  recommended and is a human decision. `changedGroup` for non-owner members is recorded but not shown. Old pre-F-2
+  web clients can diverge from upgraded ones after a rogue member's commit. The public `/secret-chat` page should mirror
+  known-limitations item 15 (web owner).
+
 - F-3 sender attribution (core-crypto; upstream ts-mls), F-5 heap zeroisation (informational), F-6 anonymous user per
   invite peek (backend), F-8 pin the Supabase project ref per profile (core-crypto), F-10 exact dependency pins
   (lead), F-11 leak-guard is name-based (qa), F-12 adding `expo-updates` must trigger a review (lead).
 - W1-8: the Phase 0 spike screen ships behind sign-in until the device spike runs (lead deletes it after).
 - W2-4: EXIF not stripped from photos (needs `expo-image-manipulator`; disk). `KeyStore.putMany` for an atomic state
   write (core-crypto). `friendlyError` "You're offline" case and a reconnecting hint (mobile-ui, web owner).
-- Web parity items for the web owner: Secret reply quotes on the website; F-2 if fixed in core.
+- Web parity items for the web owner: Secret reply quotes on the website.
 - Account-deletion page on onepeek.io (Apple 5.1.1(v), Play policy) and the privacy-policy additions (web owner).
 
 ## 5. What the human decides and does now
 
-- The F-2 decision and the Gate 3 decision above.
+- The Gate 3 decision above; the 2027-02-01 sunset for token-only invite links; whether to add the owner-only `chat_send`
+  migration.
 - **Disk:** the Mac has well under 1 GB free (Claude desktop data ~16 GB, Chrome cache ~1 GB). No build can run here.
 - Accounts and server steps still open since Gate 1: Expo and Apple accounts, migrations 008 and 009 (rehearse first),
   Vercel push variables, Supabase redirect URL and providers, E2E runner, push the branch and open the pull request.

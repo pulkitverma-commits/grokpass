@@ -4,6 +4,14 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- F-2 fix merged after four security-review passes (`security-review/f2-tree-keys.md`): safety numbers, verification and
+  "key changed" from the MLS tree keys (byte-identical when keys agree); invite links `#<token>.1<pin>` carry the owner's
+  device id and key hash in the fragment (member-made invites carry the owner's pin); Welcome signer, every committer and
+  the listed owner must match the pin; unlisted tree devices shown and counted; non-owner commits skipped and recorded
+  (no room freeze); clearable per-row mismatch records; strict device ids; new codes `member_key_mismatch` /
+  `invite_owner_mismatch` with web and app copy; token-only links join with a persistent notice (sunset 2027-02-01
+  proposed). Web 150, core 383, mobile 460. F-2 closed; no open high or critical. Human decisions left: the sunset date,
+  an owner-only `chat_send` migration. Gate 3 doc updated; stopping for the Gate 3 decision.
 - **Human decided F-2: fix in core now** (2026-11-01). Safety numbers, "key changed" and verification move to the
   signature keys inside the MLS group (ts-mls leaves), and a member whose server-listed key disagrees with the group
   is refused at welcome/admit/sync. Shared with the website, so web tests must prove the page's behaviour; where the

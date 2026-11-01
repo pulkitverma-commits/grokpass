@@ -13,7 +13,7 @@ describe('redact', () => {
       roomId: 'r1',
       Body: REDACTED,
       nested: { accessCode: REDACTED, ok: 2, deeper: { FILE_NAME: REDACTED, nick: REDACTED } },
-      list: [{ token: REDACTED }, 7],
+      list: [{ token: REDACTED }, REDACTED],
     });
     expect(JSON.stringify(out)).not.toContain('4471');
     expect(JSON.stringify(out)).not.toContain('blue-river');
@@ -42,13 +42,25 @@ describe('redact', () => {
   it('redacts every string inside an array whole, at any depth, whatever the key (W1-10)', () => {
     const token = 'tok_' + 'a'.repeat(60);
     const out = redact({ ids: [token, 'short', 7, null], nested: { rows: [[token], ['x', token]] }, roomId: 'r1' });
-    expect(out).toEqual({ ids: [REDACTED, REDACTED, 7, null], nested: { rows: [[REDACTED], [REDACTED, REDACTED]] }, roomId: 'r1' });
+    expect(out).toEqual({ ids: [REDACTED, REDACTED, REDACTED, null], nested: { rows: [[REDACTED], [REDACTED, REDACTED]] }, roomId: 'r1' });
     const s = JSON.stringify(out);
     expect(s).not.toContain('tok_');
     expect(s).not.toContain('aaaa');
     expect(s).not.toContain('short');
-    // Arrays of non-strings are still walked.
-    expect(redact({ list: [{ token: 'abc', n: 1 }, [2, true]] })).toEqual({ list: [{ token: REDACTED, n: 1 }, [2, true]] });
+    // Arrays are still walked: objects inside keep their non-sensitive fields, booleans and null stay.
+    expect(redact({ list: [{ token: 'abc', n: 1 }, [2, true, null]] })).toEqual({ list: [{ token: REDACTED, n: 1 }, [REDACTED, true, null]] });
+  });
+
+  it('redacts numbers under sensitive keys, bare numbers and numbers inside arrays (W3-3)', () => {
+    // A six-digit access code held as a number must go the same way as the string form.
+    const out = redact({ code: 447101, accessCode: 447101, nested: { token: 9007199254740991n }, ids: [447101, 2], count: 3, size: 48213 });
+    expect(out).toEqual({ code: REDACTED, accessCode: REDACTED, nested: { token: REDACTED }, ids: [REDACTED, REDACTED], count: 3, size: 48213 });
+    expect(JSON.stringify(out, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))).not.toContain('447101');
+    expect(redact(447101)).toBe(REDACTED);
+    expect(redact(42n)).toBe(REDACTED);
+    // Named so nobody reads it as a guarantee: a number under a neutral key is kept. The redactor is
+    // name-based, like the lint (test-plan §1.6); the proof against a leak is the sweep in the tests.
+    expect(redact({ value: 447101 })).toEqual({ value: 447101 });
   });
 
   it('turns byte buffers into their length and never their contents', () => {

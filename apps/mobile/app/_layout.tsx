@@ -8,6 +8,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { SecurityProvider } from '@/security';
 import { useEffect, useState } from 'react';
+import { AppState } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ChatProvider } from '../components/ChatProvider';
@@ -23,8 +24,26 @@ installRnCrypto();
 // the right screen in the right face (no flash of Welcome for a signed-in user).
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
-/** Routes a signed-out user may see. Joining is public (guests), and the recovery screen must always open. */
-const PUBLIC = new Set(['welcome', 'sign-in', 'auth', 'join', 'chat', 'reset']);
+/**
+ * Routes a signed-out user may see. Joining is public (guests), the recovery screen must always
+ * open, and a secret link (`/s/<id>`) opens for anyone who holds it, as on the website.
+ */
+const PUBLIC = new Set(['welcome', 'sign-in', 'auth', 'join', 'chat', 'reset', 's']);
+
+/**
+ * Tells the core whether the app is in front (core-crypto adds `auth.setForeground` for Supabase's
+ * token auto-refresh). Guarded: an older lib/chat without it is left alone.
+ */
+function useForegroundSignal() {
+  useEffect(() => {
+    const set = (auth as typeof auth & { setForeground?: (active: boolean) => void }).setForeground;
+    if (typeof set !== 'function') return;
+    const tell = (state: string | null | undefined) => { try { set(state === 'active'); } catch { /* best effort */ } };
+    tell(AppState.currentState);
+    const sub = AppState.addEventListener('change', tell);
+    return () => sub.remove();
+  }, []);
+}
 
 function useSession() {
   const [session, setSession] = useState<AuthSession | null | undefined>(undefined);
@@ -72,6 +91,7 @@ function AuthGate({ session }: { session: AuthSession | null }) {
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts(fontAssets);
   const session = useSession();
+  useForegroundSignal();
   const ready = (fontsLoaded || !!fontError) && session !== undefined;
   useEffect(() => {
     if (ready) SplashScreen.hideAsync().catch(() => {});
@@ -101,6 +121,10 @@ export default function RootLayout() {
               <Stack.Screen name="join" options={{ presentation: 'modal' }} />
               <Stack.Screen name="chat/join" options={{ presentation: 'modal' }} />
               <Stack.Screen name="settings" />
+              <Stack.Screen name="secret" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="share" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="scan" options={{ presentation: 'fullScreenModal', animation: 'fade' }} />
+              <Stack.Screen name="s/[id]" options={{ animation: 'fade' }} />
               <Stack.Screen name="reset" options={{ gestureEnabled: false }} />
             </Stack>
           </SecurityProvider>

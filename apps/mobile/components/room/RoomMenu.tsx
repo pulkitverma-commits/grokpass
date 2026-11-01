@@ -2,6 +2,10 @@
 // invites, revoke), safety number with QR and "mark verified", message timer and room default,
 // rename (owner, local only), Panic Exit, leave and burn with confirmation. Wording is the web's
 // room page. All data goes through the core client; nothing here reads message content.
+// Phase 2: block a member on this phone (a local list in the keystore; the room screen hides their
+// messages here, nothing is sent and they are not told), report the chat (ids only, lib/report),
+// and scan the other person's safety-number QR from Verify people.
+import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
@@ -19,8 +23,12 @@ import { Segmented } from '../Segmented';
 import { Sheet } from '../Sheet';
 import { Text } from '../Text';
 import { KIND_NAME, LIFETIMES, TIMERS, countdown, errorCode, friendlyError, keyChanged, memberName, ttlLabel } from '@/lib/format';
+import { REPORT_REASONS, reportRoom, type ReportReason } from '@/lib/report';
 
-export type MenuView = null | 'menu' | 'members' | 'invite' | 'verify' | 'timer' | 'rename' | 'leave' | 'burn';
+export type MenuView = null | 'menu' | 'members' | 'invite' | 'verify' | 'timer' | 'rename' | 'leave' | 'burn' | 'report';
+
+/** Keystore key of this phone's block list for a room: an array of device ids. Local to this phone. */
+export const blockedKey = (roomId: string) => `room:${roomId}:blocked`;
 
 export type Member = {
   deviceId: string; role: 'owner' | 'member'; state: 'pending' | 'active';
@@ -38,6 +46,8 @@ type Props = {
   me: string;
   ttl: number;
   setTtl: (n: number) => void;
+  /** Device ids blocked on this phone (from the keystore); the room screen hides their messages. */
+  blocked?: string[];
   /** Re-syncs room, members and messages after a change. */
   onChange: () => void;
   /** After leave or burn succeeded: the room is gone from this device. */
@@ -45,19 +55,20 @@ type Props = {
 };
 
 const MENU_TITLE: Record<Exclude<MenuView, null>, string> = {
-  menu: '', members: 'Room details', invite: 'Invite someone', verify: 'Verify people', timer: 'Message timer', rename: 'Name this chat', leave: 'Leave this chat?', burn: 'Burn this chat?',
+  menu: '', members: 'Room details', invite: 'Invite someone', verify: 'Verify people', timer: 'Message timer', rename: 'Name this chat', leave: 'Leave this chat?', burn: 'Burn this chat?', report: 'Report this chat',
 };
 
-export function RoomMenu({ view, setView, room, title, members, me, ttl, setTtl, onChange, onGone }: Props) {
+export function RoomMenu({ view, setView, room, title, members, me, ttl, setTtl, blocked = [], onChange, onGone }: Props) {
   const isOwner = room.role === 'owner';
   const active = members.filter((m) => m.state === 'active');
   const close = () => setView(null);
   return (
     <Sheet open={view !== null} onClose={close} title={view ? MENU_TITLE[view] || title : undefined} testID="room.menuSheet">
       {view === 'menu' ? <Menu room={room} isOwner={isOwner} activeCount={active.length} setView={setView} /> : null}
-      {view === 'members' ? <Members room={room} members={members} me={me} isOwner={isOwner} onChange={onChange} /> : null}
+      {view === 'members' ? <Members room={room} members={members} me={me} isOwner={isOwner} blocked={blocked} onChange={onChange} /> : null}
+      {view === 'report' ? <Report room={room} onDone={close} /> : null}
       {view === 'invite' ? <Invite room={room} /> : null}
-      {view === 'verify' ? <Verify roomId={room.id} members={active.filter((m) => m.deviceId !== me)} onChange={onChange} /> : null}
+      {view === 'verify' ? <Verify roomId={room.id} members={active.filter((m) => m.deviceId !== me)} onChange={onChange} onClose={close} /> : null}
       {view === 'timer' ? <Timer room={room} ttl={ttl} setTtl={setTtl} isOwner={isOwner} onSaved={() => { onChange(); close(); }} /> : null}
       {view === 'rename' ? <Rename room={room} onSaved={() => { onChange(); close(); }} /> : null}
       {view === 'leave' ? (
@@ -103,6 +114,7 @@ function Menu({ room, isOwner, activeCount, setView }: { room: MenuRoom; isOwner
       </View>
       <View style={styles.card}>
         <Item icon="lock" title="Panic Exit" sub="Locks this device" onPress={panic} testID="room.panic" />
+        <Item icon="alert" title="Report chat" sub="Sends only the chat’s id, never messages" onPress={() => setView('report')} testID="room.menu.report" />
         {isOwner
           ? <Item icon="flame" title="Burn chat" tone="danger" onPress={() => setView('burn')} testID="room.burn" />
           : <Item icon="ban" title="Leave chat" tone="danger" onPress={() => setView('leave')} testID="room.leave" />}
@@ -113,10 +125,17 @@ function Menu({ room, isOwner, activeCount, setView }: { room: MenuRoom; isOwner
 
 // ---------------------------------------------------------------------------- members
 
-function Members({ room, members, me, isOwner, onChange }: { room: MenuRoom; members: Member[]; me: string; isOwner: boolean; onChange: () => void }) {
+function Members({ room, members, me, isOwner, blocked, onChange }: { room: MenuRoom; members: Member[]; me: string; isOwner: boolean; blocked: string[]; onChange: () => void }) {
   const { chat, guard } = useChat();
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<Member | null>(null);
+  const [confirmBlock, setConfirmBlock] = useState<Member | null>(null);
+
+  /** Toggles a device on this phone's block list (keystore only; nothing leaves the phone). */
+  function toggleBlock(m: Member) {
+    const next = blocked.includes(m.deviceId) ? blocked.filter((d) => d !== m.deviceId) : [...blocked, m.deviceId];
+    return run(m.deviceId, () => chat().keystore.put(blockedKey(room.id), next));
+  }
   const [err, setErr] = useState('');
   const [now] = useState(() => Date.now());
   const pending = members.filter((m) => m.state === 'pending');
@@ -150,11 +169,20 @@ function Members({ room, members, me, isOwner, onChange }: { room: MenuRoom; mem
         {active.map((m) => {
           const changed = keyChanged(m);
           const name = memberName(m.nickname, m.deviceId) + (m.deviceId === me ? ' (you)' : '') + (m.role === 'owner' ? ' · owner' : '');
-          const status = changed ? 'Key changed' : m.verified ? 'Verified' : 'Not verified';
+          const isBlocked = blocked.includes(m.deviceId);
+          const status = isBlocked ? 'Blocked on this phone' : changed ? 'Key changed' : m.verified ? 'Verified' : 'Not verified';
+          const who = memberName(m.nickname, m.deviceId);
           return (
-            <ListRow key={m.deviceId} leading={<Icon name={m.verified && !changed ? 'check' : 'user'} size={20} color={changed ? colors.danger : m.verified ? colors.secure : colors.muted} />}
+            <ListRow key={m.deviceId} leading={<Icon name={isBlocked ? 'ban' : m.verified && !changed ? 'check' : 'user'} size={20} color={isBlocked || changed ? colors.danger : m.verified ? colors.secure : colors.muted} />}
               title={name} subtitle={`${status} · device ${memberName(null, m.deviceId).slice(6)}`} testID="members.row"
-              trailing={isOwner && m.deviceId !== me ? <Button title="Remove" small variant="ghost" block={false} busy={busy === m.deviceId} onPress={() => setConfirmRemove(m)} accessibilityLabel={`Remove ${memberName(m.nickname, m.deviceId)}`} testID="members.remove" /> : undefined} />
+              trailing={m.deviceId !== me ? (
+                <View style={styles.rowBtns}>
+                  {isBlocked
+                    ? <Button title="Unblock" small variant="ghost" block={false} busy={busy === m.deviceId} onPress={() => toggleBlock(m)} accessibilityLabel={`Unblock ${who}`} testID="members.unblock" />
+                    : <Button title="Block" small variant="ghost" block={false} busy={busy === m.deviceId} onPress={() => setConfirmBlock(m)} accessibilityLabel={`Block ${who}`} testID="members.block" />}
+                  {isOwner ? <Button title="Remove" small variant="ghost" block={false} busy={busy === m.deviceId} onPress={() => setConfirmRemove(m)} accessibilityLabel={`Remove ${who}`} testID="members.remove" /> : null}
+                </View>
+              ) : undefined} />
           );
         })}
       </View>
@@ -167,7 +195,43 @@ function Members({ room, members, me, isOwner, onChange }: { room: MenuRoom; mem
           </View>
         </View>
       ) : null}
+      {confirmBlock ? (
+        <View style={styles.confirmBox} testID="members.block.confirm">
+          <Text variant="sub">Block {memberName(confirmBlock.nickname, confirmBlock.deviceId)} on this phone? Their messages are hidden here only. They stay in the chat, keep seeing it, and aren’t told.{isOwner ? ' To take them out of the chat for everyone, use Remove.' : ''}</Text>
+          <View style={styles.rowBtns}>
+            <Button title="Block" variant="destructive" small block={false} style={styles.flex} busy={busy === confirmBlock.deviceId} onPress={() => { const m = confirmBlock; setConfirmBlock(null); void toggleBlock(m); }} testID="members.block.yes" />
+            <Button title="Keep" variant="ghost" small block={false} style={styles.flex} onPress={() => setConfirmBlock(null)} testID="members.block.no" />
+          </View>
+        </View>
+      ) : null}
       {err ? <Notice tone="error" text={err} /> : null}
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------- report
+
+function Report({ room, onDone }: { room: MenuRoom; onDone: () => void }) {
+  const [reason, setReason] = useState<ReportReason>('spam');
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [err, setErr] = useState('');
+  return (
+    <View style={styles.stack}>
+      <Text variant="sub" tone="muted">Tell OnePeek this chat needs a look. Only the chat’s id and your reason are sent: no messages, names or files, which OnePeek can’t read anyway.</Text>
+      <Segmented label="Reason" value={reason} onChange={setReason} testID="report.reason" options={REPORT_REASONS.map((r) => ({ value: r.value, label: r.label, testID: `report.reason.${r.value}` }))} />
+      {sent ? (
+        <Notice tone="success" icon="check" text="Thanks. The report has been sent." testID="report.sent" />
+      ) : (
+        <Button title={busy ? 'Sending…' : 'Send report'} busy={busy} style={styles.topGap} onPress={async () => {
+          setBusy(true); setErr('');
+          try { await reportRoom(room.id, reason); setSent(true); }
+          catch (e) { setErr(friendlyError(errorCode(e))); }
+          finally { setBusy(false); }
+        }} testID="report.send" />
+      )}
+      {err ? <Notice tone="error" text={err} testID="report.error" /> : null}
+      <Button title={sent ? 'Done' : 'Cancel'} variant="ghost" disabled={busy} onPress={onDone} testID="report.done" />
     </View>
   );
 }
@@ -224,8 +288,9 @@ function Invite({ room }: { room: MenuRoom }) {
 
 // ---------------------------------------------------------------------------- verify (safety number)
 
-function Verify({ roomId, members, onChange }: { roomId: string; members: Member[]; onChange: () => void }) {
+function Verify({ roomId, members, onChange, onClose }: { roomId: string; members: Member[]; onChange: () => void; onClose: () => void }) {
   const { chat, guard } = useChat();
+  const router = useRouter();
   const [who, setWho] = useState<Member | null>(members.length === 1 ? members[0]! : null);
   const [num, setNum] = useState('');
   const [busy, setBusy] = useState(false);
@@ -273,6 +338,7 @@ function Verify({ roomId, members, onChange }: { roomId: string; members: Member
         catch (e) { setErr(friendlyError(errorCode(e))); }
         finally { setBusy(false); }
       }} testID="verify.mark" />
+      <Button title="Scan their code" icon="qr" variant="ghost" onPress={() => { onClose(); router.push({ pathname: '/scan', params: { room: roomId } }); }} testID="verify.scan" />
       {members.length > 1 ? <Button title="Someone else" variant="ghost" onPress={() => select(null)} testID="verify.back" /> : null}
     </View>
   );

@@ -54,6 +54,35 @@ export async function pickDocument(): Promise<Picked | null> {
   return picked(a.uri, a.name, a.mimeType, a.size);
 }
 
+/** A rough MIME type from a file name, for files that arrive without one (the share intent). */
+export function mimeFromName(name: string): string {
+  const ext = (/\.([A-Za-z0-9]{1,8})$/.exec(name)?.[1] ?? '').toLowerCase();
+  switch (ext) {
+    case 'jpg': case 'jpeg': return 'image/jpeg';
+    case 'png': return 'image/png';
+    case 'gif': return 'image/gif';
+    case 'webp': return 'image/webp';
+    case 'heic': return 'image/heic';
+    case 'pdf': return 'application/pdf';
+    case 'txt': return 'text/plain';
+    case 'json': return 'application/json';
+    case 'mp4': return 'video/mp4';
+    case 'mov': return 'video/quicktime';
+    default: return 'application/octet-stream';
+  }
+}
+
+/**
+ * A Picked for a file another app handed over (share target, design 10): the name is the URI's last
+ * segment unless given, the type is guessed from it, the size read from disk. Nothing is copied.
+ */
+export function pickedFromUri(uri: string, name?: string | null, mime?: string | null): Picked {
+  let tail = '';
+  try { tail = decodeURIComponent(uri.split('?')[0]!.split('/').pop() ?? ''); } catch { tail = ''; }
+  const n = name || tail || 'file';
+  return picked(uri, n, mime || mimeFromName(n), null);
+}
+
 /** The core's FileSource for a picked file (bytes are read lazily by sendFile). */
 export function fileSource(p: Picked) {
   return coreFileSource(p);

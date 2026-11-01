@@ -15,6 +15,21 @@ export const LIFETIMES = [
   { s: 604800, label: '7 days' },
 ] as const;
 
+/** One-time secret options (the web's app/page.tsx): views before the link burns, and the viewer timer. */
+export const SECRET_VIEWS = [
+  { n: 1, label: 'Once' },
+  { n: 3, label: '3 times' },
+  { n: 5, label: '5 times' },
+  { n: 10, label: '10 times' },
+] as const;
+
+export const SECRET_TIMERS = [
+  { s: 0, label: 'Off' },
+  { s: 10, label: '10s' },
+  { s: 30, label: '30s' },
+  { s: 60, label: '60s' },
+] as const;
+
 export const ttlLabel = (s: number) => TIMERS.find((t) => t.s === s)?.label ?? (s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`);
 
 export function countdown(ms: number) {
@@ -59,6 +74,10 @@ export function friendlyError(code: string) {
     case 'gone': return 'That file has already been opened or has expired.';
     case 'no_local_state': return 'You haven’t been let into this chat yet. Wait for the owner, then try again.';
     case 'keystore_unavailable': return 'This phone’s chat keys are missing.';
+    case 'report_failed': return 'The report couldn’t be sent. Try again.';
+    case 'quota_exceeded': return 'You’ve used this month’s free secrets. See onepeek.io/pricing.';
+    case 'secret_gone': return 'This secret has already been opened, or it has expired.';
+    case 'bad_key': return 'This link’s key doesn’t match the secret. Ask the sender to share it again.';
     default: return 'Something went wrong. Try again.';
   }
 }

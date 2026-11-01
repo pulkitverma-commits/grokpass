@@ -65,7 +65,7 @@ export function JoinScreen({ initialToken }: { initialToken: string | null }) {
   // No token yet: ask for the link (Welcome → "I have an invite link", or the QR button on Chats).
   if (!token) {
     return (
-      <Screen scroll header={<Header close title="Join a chat" />} testID="join.screen" footer={<Button title="Continue" onPress={usePasted} disabled={!pasted.trim()} testID="join.continue" />}>
+      <Screen scroll header={<Header close title="Join a chat" />} testID="join.screen" footer={<><Button title="Continue" onPress={usePasted} disabled={!pasted.trim()} testID="join.continue" /><Button title="Scan a QR code" icon="qr" variant="ghost" onPress={() => router.push('/scan')} testID="join.scan" /></>}>
         <Text variant="sub" tone="muted" style={styles.sub}>Paste the invite link you were sent. Scanning a QR code arrives in a later update.</Text>
         <Field label="Invite link" value={pasted} onChangeText={(v) => { setPasted(v); setErr(''); }} placeholder="https://onepeek.io/chat/join#…" autoCapitalize="none" autoCorrect={false} keyboardType="url" textContentType="URL" mono error={err} testID="join.link" />
       </Screen>

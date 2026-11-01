@@ -21,6 +21,8 @@ export const chat = {
   subscribe: jest.fn(() => () => {}),
   // Wave 2: conversation, room menu, settings.
   ensureDevice: jest.fn(async () => ({ id: 'dddddddd-0000-0000-0000-00000000000d', userId: 'u', signing: {} })),
+  // Phase 2: lib/report reads the session bearer through the client.
+  ensureSession: jest.fn(async (_guest?: boolean): Promise<null | { access_token: string }> => ({ access_token: 'session-bearer-for-tests' })),
   messages: jest.fn(async (): Promise<MockMessage[]> => []),
   dropMessage: jest.fn(async () => {}),
   forgetRoom: jest.fn(async () => {}),
@@ -81,8 +83,12 @@ export const resetThisPhone = jest.fn(async () => {});
 /** Stub of the lib's `push` export (core-crypto wave 2) until the merged lib carries the real one. */
 export const push = { register: jest.fn(async (_p: 'ios' | 'android', _t: string) => {}), unregister: jest.fn(async () => {}), current: jest.fn(async () => false) };
 
+/** C4 adds `getSupabase()` to lib/chat; a test that needs it sets `supabaseHolder.getSupabase` (read through a getter, so a namespace import sees it). */
+export const supabaseHolder: { getSupabase: undefined | (() => unknown) } = { getSupabase: undefined };
+
 export const chatMock = {
   AUTH_REDIRECT_URL: 'onepeek://auth',
+  get getSupabase() { return supabaseHolder.getSupabase; },
   getChat: () => chat,
   getLockStore: () => ({ set() {}, get: () => false, clear() {} }),
   auth,
@@ -106,4 +112,5 @@ export function resetChatMock() {
   chat.listInvites.mockResolvedValue([]);
   chat.listDevices.mockResolvedValue([]);
   auth.getSession.mockResolvedValue(null);
+  chat.ensureSession.mockResolvedValue({ access_token: 'session-bearer-for-tests' });
 }

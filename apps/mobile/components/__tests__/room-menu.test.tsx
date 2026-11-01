@@ -13,6 +13,7 @@ jest.mock('react-native-safe-area-context', () => require('react-native-safe-are
 jest.mock('react-native-qrcode-svg', () => { const { View } = require('react-native'); function QrMock() { return <View testID="qr" />; } return QrMock; });
 jest.mock('expo-clipboard', () => ({ setStringAsync: jest.fn() }));
 jest.mock('@/security', () => ({ ...jest.requireActual('@/security/constants'), useSecurity: () => ({ panic: mockPanic }) }));
+const mockFetch = jest.fn(async () => ({ ok: true, status: 200 }));
 
 const ME = 'dddddddd-0000-0000-0000-00000000000d';
 const ROOM = room({ id: 'aaaaaaaa-0000-0000-0000-000000000001', kind: 'secret', name: 'Vault handover', ttl: 30 });
@@ -21,12 +22,12 @@ const MEMBERS: Member[] = [
   { deviceId: THEM, role: 'member', state: 'active', signaturePub: new Uint8Array([2]), hasKeyPackage: true, nickname: 'Bea', verified: null },
 ];
 
-function Harness({ initial, onGone = jest.fn(), onChange = jest.fn(), role = 'owner' as 'owner' | 'member' }: { initial: MenuView; onGone?: () => void; onChange?: () => void; role?: 'owner' | 'member' }) {
+function Harness({ initial, onGone = jest.fn(), onChange = jest.fn(), role = 'owner' as 'owner' | 'member', blocked = [] as string[] }: { initial: MenuView; onGone?: () => void; onChange?: () => void; role?: 'owner' | 'member'; blocked?: string[] }) {
   const [view, setView] = useState<MenuView>(initial);
-  return <RoomMenu view={view} setView={setView} room={{ ...ROOM, role }} title="Vault handover" members={MEMBERS} me={ME} ttl={30} setTtl={jest.fn()} onChange={onChange} onGone={onGone} />;
+  return <RoomMenu view={view} setView={setView} room={{ ...ROOM, role }} title="Vault handover" members={MEMBERS} me={ME} ttl={30} setTtl={jest.fn()} blocked={blocked} onChange={onChange} onGone={onGone} />;
 }
 
-beforeEach(() => { resetChatMock(); resetRouter(); mockPanic.mockClear(); });
+beforeEach(() => { resetChatMock(); resetRouter(); mockPanic.mockClear(); mockFetch.mockClear().mockResolvedValue({ ok: true, status: 200 }); (globalThis as { fetch: unknown }).fetch = mockFetch; });
 
 test('burn needs two taps: room.burn opens the confirmation, room.burn.confirm calls burn() and leaves', async () => {
   const onGone = jest.fn();
@@ -101,4 +102,61 @@ test('rename: setRoomName with the typed name', async () => {
   await fireEvent.changeText(await screen.findByTestId('rename.name'), 'Handover');
   await fireEvent.press(screen.getByTestId('rename.save'));
   await waitFor(() => expect(chat.setRoomName).toHaveBeenCalledWith(ROOM.id, 'Handover'));
+});
+
+test('U8 block: any member can block another on this phone; confirm writes the keystore list; the copy says it is local; Unblock removes it', async () => {
+  const onChange = jest.fn();
+  await renderScreen(<Harness initial="members" role="member" onChange={onChange} />);
+  const rows = await screen.findAllByTestId('members.row');
+  expect(rows).toHaveLength(2);
+  expect(screen.queryByTestId('members.remove')).toBeNull();   // not the owner
+  expect(screen.getAllByTestId('members.block')).toHaveLength(1);   // never for me
+  await fireEvent.press(screen.getByTestId('members.block'));
+  expect(await screen.findByTestId('members.block.confirm')).toBeTruthy();
+  expect(screen.getByText(/Block Bea on this phone\? Their messages are hidden here only\. They stay in the chat, keep seeing it, and aren’t told\./)).toBeTruthy();
+  expect(chat.keystore.put).not.toHaveBeenCalled();
+  await fireEvent.press(screen.getByTestId('members.block.yes'));
+  await waitFor(() => expect(chat.keystore.put).toHaveBeenCalledWith(`room:${ROOM.id}:blocked`, [THEM]));
+  expect(onChange).toHaveBeenCalled();
+  expect(chat.removeMember).not.toHaveBeenCalled();
+  await screen.unmount();
+  // Already blocked: the row says so and offers Unblock.
+  await renderScreen(<Harness initial="members" role="owner" blocked={[THEM]} />);
+  expect(await screen.findByText(/Blocked on this phone/)).toBeTruthy();
+  expect(screen.getByTestId('members.remove')).toBeTruthy();   // the owner still has Remove
+  await fireEvent.press(screen.getByTestId('members.unblock'));
+  await waitFor(() => expect(chat.keystore.put).toHaveBeenCalledWith(`room:${ROOM.id}:blocked`, []));
+});
+
+test('U8 report: the menu item opens the reason view; Send posts only the room id and the reason', async () => {
+  await renderScreen(<Harness initial="menu" />);
+  await fireEvent.press(await screen.findByTestId('room.menu.report'));
+  expect(await screen.findByTestId('report.reason')).toBeTruthy();
+  expect(screen.getByText(/Only the chat’s id and your reason are sent: no messages, names or files/)).toBeTruthy();
+  await fireEvent.press(screen.getByTestId('report.reason.abuse'));
+  await fireEvent.press(screen.getByTestId('report.send'));
+  expect(await screen.findByTestId('report.sent')).toBeTruthy();
+  expect(mockFetch).toHaveBeenCalledTimes(1);
+  const [url, init] = (mockFetch.mock.calls as unknown as [string, RequestInit][])[0]!;
+  expect(url).toBe('https://onepeek.io/api/chat/report');
+  expect(JSON.parse(String(init.body))).toEqual({ room: ROOM.id, reason: 'abuse' });
+  expect(String(init.body)).not.toMatch(/Vault|Bea|Pulkit/);
+  expect(chat.messages).not.toHaveBeenCalled();
+});
+
+test('U8 report: a failed post shows report.error and leaves the button', async () => {
+  mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+  await renderScreen(<Harness initial="report" />);
+  await fireEvent.press(await screen.findByTestId('report.send'));
+  expect(await screen.findByTestId('report.error')).toBeTruthy();
+  expect(screen.getByText('The report couldn’t be sent. Try again.')).toBeTruthy();
+  expect(screen.getByTestId('report.send')).toBeTruthy();
+});
+
+test('U8 verify: "Scan their code" closes the menu and opens the scanner for this room', async () => {
+  await renderScreen(<Harness initial="verify" />);
+  await fireEvent.press(await screen.findByTestId('verify.scan'));
+  const { router } = jest.requireMock('expo-router') as { router: { push: jest.Mock } };
+  expect(router.push).toHaveBeenCalledWith({ pathname: '/scan', params: { room: ROOM.id } });
+  await waitFor(() => expect(screen.queryByTestId('verify.scan')).toBeNull());
 });

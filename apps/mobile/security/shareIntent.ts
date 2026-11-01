@@ -27,12 +27,18 @@
 import { Directory, Paths } from 'expo-file-system';
 import { useLinkingURL } from 'expo-linking';
 import { useRouter } from 'expo-router';
-import { getShareExtensionKey, ShareIntentModule, useShareIntent as usePackageShareIntent, type ShareIntent } from 'expo-share-intent';
+import {
+  getShareExtensionKey,
+  ShareIntentModule,
+  useShareIntent as usePackageShareIntent,
+  type ShareIntent,
+} from 'expo-share-intent';
 import { useEffect, useMemo, useRef } from 'react';
 import { Platform } from 'react-native';
 import { addShareListener, clearPendingShare, getPendingShare, type PendingShare } from '@/modules/share-intent';
 import { importShareIntent, SHARE_DIR, sweepGroupContainer } from './iosShare';
-import { isShareWakeUrl } from './links';
+import { isShareWakeUrl, parseOnePeekLink } from './links';
+import { stashHandoff } from '@/lib/links';
 import { secureScreenMount } from './secureScreen';
 
 export type { PendingShare };
@@ -59,7 +65,9 @@ export function sweepShareCache(): Promise<void> {
     try {
       const d = new Directory(Paths.cache, SHARE_DIR);
       if (d.exists) d.delete();
-    } catch { /* best effort: the next launch tries again */ }
+    } catch {
+      /* best effort: the next launch tries again */
+    }
   })();
   sweep = run;
   return run;
@@ -70,7 +78,11 @@ export function sweepShareCache(): Promise<void> {
  * thing its `resetShareIntent()` does natively) so it does not outlive the files. Never throws.
  */
 export function resetPackageShare(): void {
-  try { ShareIntentModule?.clearShareIntent(getShareExtensionKey()); } catch { /* no native module (jest, web) */ }
+  try {
+    ShareIntentModule?.clearShareIntent(getShareExtensionKey());
+  } catch {
+    /* no native module (jest, web) */
+  }
 }
 
 /** mobile-ui calls this when the share screen is done with the items (sent or cancelled). */
@@ -121,6 +133,22 @@ export function useShareIntent(): void {
   const route = (p: PendingShare | null) => {
     const params = shareParams(p);
     if (!params) return;
+    // A shared OnePeek link never travels as a route param (review P2-5): the full link is parked in
+    // the one-shot hand-off and the destination screen reads it from there.
+    if (params.text && !params.uris) {
+      const link = parseOnePeekLink(params.text.trim());
+      if (link?.kind === 'secret') {
+        stashHandoff('secret', params.text.trim());
+        secureScreenMount(SHARE_SECURE_KEY);
+        router.push({ pathname: '/s/[id]', params: { id: link.id } });
+        return;
+      }
+      if (link?.kind === 'invite') {
+        stashHandoff('invite', params.text.trim());
+        router.push('/chat/join');
+        return;
+      }
+    }
     secureScreenMount(SHARE_SECURE_KEY);
     router.push({ pathname: SHARE_ROUTE, params });
   };
@@ -140,9 +168,16 @@ export function useShareIntent(): void {
   useEffect(() => {
     let alive = true;
     if (Platform.OS === 'ios' && !isShareWakeUrl(url)) sweepGroupContainer();
-    sweepShareCache().then(() => { if (alive && Platform.OS === 'android') void deliverAndroid(); });
-    const offShare = addShareListener(() => { if (alive) void deliverAndroid(); });
-    return () => { alive = false; offShare(); };
+    sweepShareCache().then(() => {
+      if (alive && Platform.OS === 'android') void deliverAndroid();
+    });
+    const offShare = addShareListener(() => {
+      if (alive) void deliverAndroid();
+    });
+    return () => {
+      alive = false;
+      offShare();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

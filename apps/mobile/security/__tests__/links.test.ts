@@ -69,7 +69,7 @@ describe('parseOnePeekLink: reject', () => {
     ['auth look-alike host', 'onepeek://auth.evil'],
     ['auth with user info', 'onepeek://auth@evil'],
     ['auth with path', 'onepeek://auth/x'],
-    ['share wake url is not a link kind', 'onepeek://share'],
+    ['the expo-share-intent wake url is not a link kind', 'onepeek://dataUrl=onepeekShareKey?nonce=1#media'],
     ['root', 'https://onepeek.io/'],
     ['other page', 'https://onepeek.io/about'],
     ['whitespace inside', `https://onepeek.io/s/${ID} #${KEY}`],
@@ -90,17 +90,22 @@ describe('parseOnePeekLink: reject', () => {
   });
 });
 
-test('isSecretLink / isInviteLink / isShareWakeUrl', () => {
+test('isShareWakeUrl: expo-share-intent\'s dataUrl deep link only; parseOnePeekLink sees no link in it', () => {
+  expect(isShareWakeUrl('onepeek://dataUrl=onepeekShareKey?nonce=123#media')).toBe(true);
+  expect(isShareWakeUrl('onepeek://dataUrl=onepeekShareKey#text')).toBe(true);
+  expect(isShareWakeUrl('onepeek://dataUrl=onepeekShareKey')).toBe(true);
+  expect(isShareWakeUrl('onepeek://share')).toBe(false);
+  expect(isShareWakeUrl('onepeek://dataUrl=')).toBe(false);
+  expect(isShareWakeUrl(`https://onepeek.io/s/${ID}#${KEY}`)).toBe(false);
+  expect(isShareWakeUrl(null)).toBe(false);
+  expect(parseOnePeekLink('onepeek://dataUrl=onepeekShareKey?nonce=123#media')).toBeNull();
+});
+
+test('isSecretLink / isInviteLink', () => {
   expect(isSecretLink(`https://onepeek.io/s/${ID}#${KEY}`)).toBe(true);
   expect(isSecretLink(`https://onepeek.io/chat/join#${TOKEN}`)).toBe(false);
   expect(isInviteLink(`onepeek://chat/join#${TOKEN}`)).toBe(true);
   expect(isInviteLink(`https://onepeek.io/s/${ID}#${KEY}`)).toBe(false);
-  expect(isShareWakeUrl('onepeek://share')).toBe(true);
-  expect(isShareWakeUrl('onepeek://share/')).toBe(true);
-  expect(isShareWakeUrl('onepeek://share?x=1')).toBe(true);
-  expect(isShareWakeUrl('onepeek://shared')).toBe(false);
-  expect(isShareWakeUrl('https://onepeek.io/share')).toBe(false);
-  expect(isShareWakeUrl(null)).toBe(false);
 });
 
 test('forgetLinkingURL clears expo-linking\'s cached URL and the Android Intent data', () => {

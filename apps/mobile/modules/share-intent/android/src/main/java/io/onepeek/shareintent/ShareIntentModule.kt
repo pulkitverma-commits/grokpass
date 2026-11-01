@@ -33,8 +33,20 @@ import java.security.SecureRandom
 // (plugins/withBackupRules.js). The copy runs in an AsyncFunction, i.e. on the module queue, not
 // the UI thread (https://docs.expo.dev/modules/module-api/#asyncfunction).
 //
+// Caps (security review P2-4; mirrored in apps/mobile/security/constants.ts and src/ShareIntentModule.ts):
+// content:// URIs only (a file:// URI would be opened with OUR permissions: a hostile sender could point
+// it at our own databases/ or shared_prefs/), never a URI whose authority belongs to this package, at most
+// MAX_ITEMS items and MAX_ITEM_BYTES per item (an oversize item is stopped and its partial copy deleted;
+// the other items still go through). `dropped` tells JS how many items were skipped (count only).
+//
 // Nothing here logs anything: no Uri, no text, no file name, no size.
 class ShareIntentModule : Module() {
+  companion object {
+    const val MAX_ITEMS = 10
+    const val MAX_ITEM_BYTES = 50L * 1024L * 1024L - 1024L
+  }
+
+  private var pendingDropped: Int = 0
   private var pendingText: String? = null
   private var pendingUris: List<Uri> = emptyList()
   private var pendingToken: Long = 0L
@@ -65,19 +77,28 @@ class ShareIntentModule : Module() {
       }
       val out = mutableMapOf<String, Any>()
       if (text != null) out["text"] = text
+      var dropped = pendingDropped
       if (uris.isNotEmpty()) {
         val copied = uris.mapNotNull { copyToCache(it) }
+        dropped += uris.size - copied.size
         if (copied.isNotEmpty()) out["uris"] = copied
       }
       // Consumed: the Uri grants are single-use from our point of view; a second call returns null.
       pendingText = null
       pendingUris = emptyList()
-      if (out.isEmpty()) null else out
+      pendingDropped = 0
+      if (out.isEmpty()) {
+        null
+      } else {
+        if (dropped > 0) out["dropped"] = dropped
+        out
+      }
     }
 
     Function("clearPendingShare") {
       pendingText = null
       pendingUris = emptyList()
+      pendingDropped = 0
       stripIntent()
     }
 
@@ -105,8 +126,11 @@ class ShareIntentModule : Module() {
     // Some senders put the items in ClipData only (API 16+ mirror of EXTRA_STREAM).
     if (uris.isEmpty()) uris.addAll(clipUris(intent.clipData))
     if (text == null && uris.isEmpty()) return false
+    val accepted = uris.distinct().filter { acceptable(it) }
+    if (text == null && accepted.isEmpty()) return false
     pendingText = text
-    pendingUris = uris.distinct()
+    pendingUris = accepted.take(MAX_ITEMS)
+    pendingDropped = uris.distinct().size - pendingUris.size
     pendingToken += 1
     if (notify) {
       // Payload is a bare signal (no content): JS calls getPendingShare().
@@ -144,27 +168,54 @@ class ShareIntentModule : Module() {
 
   private fun shareDir(): File = File(appContext.cacheDirectory, "share-intent")
 
-  /** Copies one content Uri into the share cache under a random name; null when it cannot be read. */
+  /**
+   * content:// only, and not from a provider of our own package (we export none; a URI naming our
+   * authority is an attempt to make us read our own files). The sender's read grant is what makes a
+   * content Uri safe: the resolver asks the provider, not the file system, in our process.
+   */
+  private fun acceptable(uri: Uri): Boolean {
+    if (uri.scheme != "content") return false
+    val authority = uri.authority ?: return false
+    val self = appContext.reactContext?.packageName ?: return false
+    return !authority.startsWith(self)
+  }
+
+  /** Copies one content Uri into the share cache under a random name; null when it cannot be read, is not acceptable or exceeds MAX_ITEM_BYTES. */
   private fun copyToCache(uri: Uri): String? {
     val resolver = appContext.reactContext?.contentResolver ?: return null
-    val scheme = uri.scheme ?: return null
-    if (scheme != "content" && scheme != "file") return null
+    if (!acceptable(uri)) return null
     val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(resolver.getType(uri) ?: "")?.let { ".$it" }
       ?: extensionOf(uri)
+    val dir = shareDir()
+    if (!dir.exists()) dir.mkdirs()
+    val target = File(dir, randomName() + ext)
     return try {
-      val dir = shareDir()
-      if (!dir.exists()) dir.mkdirs()
-      val target = File(dir, randomName() + ext)
-      resolver.openInputStream(uri)?.use { input ->
-        FileOutputStream(target).use { output -> input.copyTo(output) }
-      } ?: return null
-      if (target.length() == 0L) {
+      val input = resolver.openInputStream(uri) ?: return null
+      var total = 0L
+      var ok = true
+      input.use { src ->
+        FileOutputStream(target).use { output ->
+          val buffer = ByteArray(64 * 1024)
+          while (true) {
+            val n = src.read(buffer)
+            if (n < 0) break
+            total += n
+            if (total > MAX_ITEM_BYTES) {
+              ok = false
+              break
+            }
+            output.write(buffer, 0, n)
+          }
+        }
+      }
+      if (!ok || total == 0L) {
         target.delete()
         null
       } else {
         Uri.fromFile(target).toString()
       }
     } catch (_: Exception) {
+      target.delete()
       null
     }
   }

@@ -34,3 +34,9 @@ export const PROTECTION_COPY = {
 
 /** W1-4: delay before the one retry of the app-wide `preventScreenCaptureAsync` when the native call throws. */
 export const SECURE_RETRY_MS = 500;
+
+// N6 share receive caps (security review P2-4), mirrored in modules/share-intent/android/.../ShareIntentModule.kt:
+/** Items accepted per share (ACTION_SEND_MULTIPLE / iOS activation rules say 10 too); the rest are skipped. */
+export const MAX_SHARE_ITEMS = 10;
+/** Bytes accepted per shared item: the core's MAX_ATTACHMENT_BYTES (50 MB bucket minus encryption overhead). Oversize items are skipped, never the whole share. */
+export const MAX_SHARE_ITEM_BYTES = 50 * 1024 * 1024 - 1024;

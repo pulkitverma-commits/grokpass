@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports -- jest.mock factories must require() */
 // lib/report: the report call carries the room id and a reason word, authenticated, and nothing else.
 import { reportRoom } from '../report';
-import { chat, resetChatMock, supabaseHolder } from '../../test/chat-mock';
+import { chat, resetChatMock } from '../../test/chat-mock';
 
 jest.mock('../chat', () => require('../../test/chat-mock').chatMock);
 
@@ -30,16 +30,4 @@ test('no session: not_signed_in before any request; a non-2xx answer is report_f
   expect(mockFetch).not.toHaveBeenCalled();
   mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
   await expect(reportRoom('r', 'spam')).rejects.toMatchObject({ code: 'report_failed' });
-});
-
-test('with core-crypto’s getSupabase() present, the bearer comes from the Supabase session instead', async () => {
-  supabaseHolder.getSupabase = () => ({ auth: { getSession: async () => ({ data: { session: { access_token: 'supabase-bearer' } } }) } });
-  try {
-    await reportRoom('r', 'other');
-    const [, init] = (mockFetch.mock.calls as unknown as [string, RequestInit][])[0]!;
-    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer supabase-bearer');
-    expect(chat.ensureSession).not.toHaveBeenCalled();
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 429 });
-    await expect(reportRoom('r', 'other')).rejects.toMatchObject({ code: 'rate_limited' });
-  } finally { supabaseHolder.getSupabase = undefined; }
 });

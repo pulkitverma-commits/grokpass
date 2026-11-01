@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports -- jest.mock factories must require() */
-// PushRefresher (review W2-8): a registered phone re-registers its fresh token on start and on rotation.
+// PushRefresher (review W2-8): a registered phone re-registers its fresh token on start and on rotation,
+// and after a VERIFIED sign-in (`auth.onSignedIn`, review P2-1) but never on Supabase's raw `onChange`.
 import { render, screen, waitFor } from '@testing-library/react-native';
 import { PushRefresher } from '../PushRefresher';
 import { auth, push, resetChatMock } from '../../test/chat-mock';
@@ -19,11 +20,14 @@ jest.mock('expo-notifications', () => ({
 }));
 
 let signIn: ((s: unknown) => void) | null = null;
+let rawChange: ((s: unknown) => void) | null = null;
 
 beforeEach(() => {
   resetChatMock();
-  signIn = null;
-  auth.onChange.mockImplementation((cb: unknown) => { signIn = cb as (s: unknown) => void; return () => { signIn = null; }; });
+  signIn = null; rawChange = null;
+  auth.onSignedIn.mockImplementation((cb: unknown) => { signIn = cb as (s: unknown) => void; return () => { signIn = null; }; });
+  // If anything subscribed to the raw event, this is how a test would reach it. Nothing should.
+  auth.onChange.mockImplementation((cb: unknown) => { rawChange = cb as (s: unknown) => void; return () => { rawChange = null; }; });
   mockN.getPermissionsAsync.mockClear().mockResolvedValue({ granted: true });
   mockN.getDevicePushTokenAsync.mockClear();
   mockN.listener = null;
@@ -95,23 +99,35 @@ test('a failing register is swallowed (nothing thrown, nothing rendered)', async
   expect(screen.toJSON()).toBeNull();
 });
 
-test('W2-8 follow-up: a sign-in re-registers the current token even when it has not changed; sign-out does nothing', async () => {
+test('W2-8 follow-up: a verified sign-in (auth.onSignedIn) re-registers the current token even when it has not changed', async () => {
   push.current.mockResolvedValue(true);
   await render(<PushRefresher />);
   await waitFor(() => expect(push.register).toHaveBeenCalledTimes(1));
+  expect(auth.onSignedIn).toHaveBeenCalledTimes(1);
   expect(signIn).not.toBeNull();
   signIn!({ userId: 'u-2', email: 'next@example.test', isAnonymous: false });
   await waitFor(() => expect(push.register).toHaveBeenCalledTimes(2));
   expect(push.register).toHaveBeenLastCalledWith('ios', 'FRESH-TOKEN-0123456789abcdef');
   expect(mockN.getPermissionsAsync).toHaveBeenCalledTimes(2);   // still no prompt: permission is read, never requested
-  signIn!(null);
-  await flush();
-  expect(push.register).toHaveBeenCalledTimes(2);
   await screen.unmount();
-  expect(signIn).toBeNull();
+  expect(signIn).toBeNull();   // unsubscribed
 });
 
-test('a sign-in on a phone that never turned notifications on registers nothing', async () => {
+test('P2-1: the component never subscribes to the raw auth.onChange, so a session Supabase reports inside the W1-1 window registers nothing', async () => {
+  push.current.mockResolvedValue(true);
+  await render(<PushRefresher />);
+  await waitFor(() => expect(push.register).toHaveBeenCalledTimes(1));
+  // No raw subscription at all: there is no listener an attacker's SIGNED_IN event could reach.
+  expect(auth.onChange).not.toHaveBeenCalled();
+  expect(rawChange).toBeNull();
+  // Belt and braces: even a session reported through onChange by some other subscriber changes nothing here.
+  for (const cb of auth.onChange.mock.calls) (cb[0] as (s: unknown) => void)({ userId: 'attacker', email: 'other@evil.test', isAnonymous: false });
+  await flush();
+  expect(push.register).toHaveBeenCalledTimes(1);
+  expect(mockN.getPermissionsAsync).toHaveBeenCalledTimes(1);
+});
+
+test('a verified sign-in on a phone that never turned notifications on registers nothing', async () => {
   push.current.mockResolvedValue(false);
   await render(<PushRefresher />);
   await waitFor(() => expect(signIn).not.toBeNull());

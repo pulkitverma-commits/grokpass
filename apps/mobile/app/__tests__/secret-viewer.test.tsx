@@ -1,9 +1,11 @@
 /* eslint-disable @typescript-eslint/no-require-imports -- jest.mock factories must require() */
 // Secret viewer (U8, `/s/<id>#<key>`): states from the mocked peek/open, the key read from the launch
 // URL or the hand-off (never a param), content cleared when the app leaves the foreground, noCopy /
-// noSave honoured, guard needs a hold, the timer vanishes the secret.
+// noSave honoured, guard needs a hold, the timer vanishes the secret. The launch URL is forgotten
+// once the peek resolved (P2-2); "Open in browser" uses a Custom Tab on Android and openURL on iOS,
+// with the honest sentence under it (P2-8).
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
-import { AppState } from 'react-native';
+import { AppState, Linking, Platform } from 'react-native';
 import SecretViewerRoute from '../s/[id]';
 import { clearHandoffs, stashHandoff } from '../../lib/links';
 import { resetRouter, router, setLocalParams } from '../../test/expo-router-mock';
@@ -11,6 +13,8 @@ import { renderScreen } from '../../test/render';
 import { peek, resetSecretsMock, secrets, SECRET_ID, SECRET_KEY, SECRET_URL } from '../../test/secrets-mock';
 
 const mockLinking = { url: null as string | null };
+const mockSecurity = { forgetLinkingURL: jest.fn() };
+const mockBrowser = { openBrowserAsync: jest.fn(async () => ({ type: 'cancel' })) };
 const mockClipboard = { setStringAsync: jest.fn(async () => true) };
 const mockFiles = { shareBytes: jest.fn(async () => {}), writeTemp: jest.fn(async () => 'file:///cache/onepeek-view/t.png'), deleteTemp: jest.fn() };
 let appStateHandlers: ((s: string) => void)[] = [];
@@ -19,6 +23,7 @@ jest.mock('expo-router', () => require('../../test/expo-router-mock'));
 jest.mock('@/lib/chat', () => require('../../test/chat-mock').chatMock);
 jest.mock('@/lib/secrets', () => require('../../test/secrets-mock').secretsMock);
 jest.mock('expo-linking', () => ({ useLinkingURL: () => mockLinking.url }));
+jest.mock('expo-web-browser', () => ({ openBrowserAsync: (u: string) => (mockBrowser.openBrowserAsync as unknown as (u: string) => Promise<unknown>)(u) }));
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 jest.mock('react-native-qrcode-svg', () => { const { View } = require('react-native'); function QrMock(p: { value: string }) { return <View testID="qr" accessibilityValue={{ text: p.value }} />; } return QrMock; });
 jest.mock('expo-clipboard', () => ({ setStringAsync: (s: string) => (mockClipboard.setStringAsync as unknown as (s: string) => Promise<boolean>)(s) }));
@@ -26,6 +31,7 @@ jest.mock('expo-image', () => { const { View } = require('react-native'); return
 jest.mock('@/security', () => ({
   ...jest.requireActual('@/security/constants'),
   useSecureScreen: jest.fn(),
+  forgetLinkingURL: () => mockSecurity.forgetLinkingURL(),
   Watermark: () => { const { View } = require('react-native'); return <View testID="security.watermark" />; },
 }));
 jest.mock('@/lib/files', () => ({
@@ -41,6 +47,8 @@ jest.mock('@/lib/files', () => ({
 beforeEach(() => {
   resetRouter(); resetSecretsMock(); clearHandoffs();
   mockLinking.url = null;
+  mockSecurity.forgetLinkingURL.mockClear();
+  mockBrowser.openBrowserAsync.mockClear().mockResolvedValue({ type: 'cancel' });
   mockClipboard.setStringAsync.mockClear();
   mockFiles.shareBytes.mockClear(); mockFiles.writeTemp.mockClear(); mockFiles.deleteTemp.mockClear();
   appStateHandlers = [];
@@ -65,8 +73,16 @@ function treeText(): string {
 
 test('Universal Link: the key comes from the launch URL; peek shows the ready state; Open decrypts and shows the text with Copy', async () => {
   mockLinking.url = SECRET_URL;
+  // P2-2: the launch URL is forgotten once the peek has resolved (key imported), not before.
+  let resolvePeek: ((p: ReturnType<typeof peek>) => void) | null = null;
+  secrets.peekSecretLink.mockImplementationOnce(() => new Promise((r) => { resolvePeek = r; }));
   await renderScreen(<SecretViewerRoute />);
+  await waitFor(() => expect(secrets.peekSecretLink).toHaveBeenCalledWith(SECRET_URL));
+  expect(screen.getByText('Checking your link…')).toBeTruthy();
+  expect(mockSecurity.forgetLinkingURL).not.toHaveBeenCalled();
+  await act(async () => { resolvePeek!(peek()); });
   expect(await screen.findByTestId('sview.open')).toBeTruthy();
+  expect(mockSecurity.forgetLinkingURL).toHaveBeenCalledTimes(1);
   expect(secrets.peekSecretLink).toHaveBeenCalledWith(SECRET_URL);
   expect(secrets.openSecretLink).not.toHaveBeenCalled();   // peeking never burns
   expect(screen.getByText('Someone sent you a secret')).toBeTruthy();
@@ -80,6 +96,67 @@ test('Universal Link: the key comes from the launch URL; peek shows the ready st
   await fireEvent.press(screen.getByTestId('sview.copy'));
   await waitFor(() => expect(mockClipboard.setStringAsync).toHaveBeenCalledWith('The vault code is 9182.'));
   expect(treeText()).not.toContain(SECRET_KEY);
+  expect(mockSecurity.forgetLinkingURL).toHaveBeenCalledTimes(1);   // still once: the open does not repeat it
+});
+
+test('P2-2: a failed peek (gone, bad key) does not forget the launch URL; a hand-off viewer forgets it too once its peek resolves', async () => {
+  mockLinking.url = SECRET_URL;
+  secrets.peekSecretLink.mockRejectedValueOnce(Object.assign(new Error('failed: gone'), { code: 'gone' }));
+  await renderScreen(<SecretViewerRoute />);
+  expect(await screen.findByTestId('sview.error')).toBeTruthy();
+  expect(mockSecurity.forgetLinkingURL).not.toHaveBeenCalled();
+  await screen.unmount();
+  mockLinking.url = null;
+  stashHandoff('secret', SECRET_URL);
+  await renderScreen(<SecretViewerRoute />);
+  expect(await screen.findByTestId('sview.open')).toBeTruthy();
+  expect(mockSecurity.forgetLinkingURL).toHaveBeenCalledTimes(1);
+});
+
+describe('P2-8: "Open in browser" fallback', () => {
+  const geofenced = () => Object.assign(new Error('failed: geofence_location_required'), { code: 'geofence_location_required' });
+  const platform = (os: 'ios' | 'android') => { Object.defineProperty(Platform, 'OS', { value: os, configurable: true }); };
+  const originalOS = Platform.OS;
+  afterEach(() => platform(originalOS as 'ios' | 'android'));
+
+  test('Android: a Custom Tab (openBrowserAsync), never Linking.openURL (the verified App Link would loop back into the app); the note names the consequence', async () => {
+    platform('android');
+    const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+    mockLinking.url = SECRET_URL;
+    secrets.openSecretLink.mockRejectedValueOnce(geofenced());
+    await renderScreen(<SecretViewerRoute />);
+    await fireEvent.press(await screen.findByTestId('sview.open'));
+    const btn = await screen.findByTestId('sview.browser');
+    expect(screen.getByTestId('sview.browserNote').props.children).toBe('Opens in your browser. The full link, key included, is handed to the browser and will be in its history.');
+    await fireEvent.press(btn);
+    await waitFor(() => expect(mockBrowser.openBrowserAsync).toHaveBeenCalledWith(SECRET_URL));
+    expect(openURL).not.toHaveBeenCalled();
+  });
+
+  test('iOS: Linking.openURL hands the Universal Link to Safari; the Custom Tab API is not used', async () => {
+    platform('ios');
+    const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+    mockLinking.url = SECRET_URL;
+    secrets.openSecretLink.mockRejectedValueOnce(geofenced());
+    await renderScreen(<SecretViewerRoute />);
+    await fireEvent.press(await screen.findByTestId('sview.open'));
+    await fireEvent.press(await screen.findByTestId('sview.browser'));
+    await waitFor(() => expect(openURL).toHaveBeenCalledWith(SECRET_URL));
+    expect(mockBrowser.openBrowserAsync).not.toHaveBeenCalled();
+    expect(screen.getByTestId('sview.browserNote')).toBeTruthy();
+  });
+
+  test('a browser that cannot be opened is reported, nothing else changes', async () => {
+    platform('ios');
+    jest.spyOn(Linking, 'openURL').mockRejectedValue(new Error('no handler'));
+    mockLinking.url = SECRET_URL;
+    secrets.openSecretLink.mockRejectedValueOnce(geofenced());
+    await renderScreen(<SecretViewerRoute />);
+    await fireEvent.press(await screen.findByTestId('sview.open'));
+    await fireEvent.press(await screen.findByTestId('sview.browser'));
+    expect(await screen.findByText('Couldn’t open the browser.')).toBeTruthy();
+    expect(screen.getByTestId('sview.open').props.accessibilityState.disabled).toBe(false);
+  });
 });
 
 test('from a bubble or the scanner: the link arrives through the hand-off, read once; a wrong id is refused as incomplete', async () => {
@@ -245,7 +322,7 @@ test('Wi-Fi: network, password and a join QR; Copy copies the password; Close le
   expect(router.back).toHaveBeenCalled();
 });
 
-test('recipient lock (C4): email → code → token; open carries the token and the email, the watermark names the email', async () => {
+test('recipient lock (C4): email → code → token (a string, P2-7); open carries the token and the email, the watermark names the email', async () => {
   mockLinking.url = SECRET_URL;
   secrets.peekSecretLink.mockResolvedValueOnce(peek({ locked: true, lockHint: 'r***@example.test' }, { guard: true }));
   secrets.openSecretLink.mockResolvedValueOnce({ kind: 'text', text: 'for-rahul-only', header: { v: 1, type: 'text', guard: true } });

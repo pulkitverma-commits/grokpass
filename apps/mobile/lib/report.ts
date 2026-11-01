@@ -2,18 +2,10 @@
 // id and a reason word; no message, name, file or key is read, and nothing here can read them
 // anyway (the core never hands plaintext to this module). The call is authenticated with the
 // current session's bearer so the backend can tell which member reported (B5: POST /api/chat/report).
-import * as chatLib from './chat';
 import { getChat } from './chat';
 
-/** `getSupabase()` lands with core-crypto's C4; this branch predates it, so it is reached optionally. */
-type WithSupabase = { getSupabase?: () => { auth: { getSession(): Promise<{ data: { session: { access_token: string } | null } }> } } };
-
+/** The current session's access token through the core (the same Supabase session lib/chat holds); null when signed out. */
 async function bearer(): Promise<string | null> {
-  const getSupabase = (chatLib as unknown as WithSupabase).getSupabase;
-  if (typeof getSupabase === 'function') {
-    const { data } = await getSupabase().auth.getSession();
-    return data.session?.access_token ?? null;
-  }
   const session = await getChat().ensureSession(false);
   return session?.access_token ?? null;
 }

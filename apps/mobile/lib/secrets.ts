@@ -67,8 +67,9 @@ let clientIdCache: string | null = null;
 /**
  * Returns this install's quota id, creating it on first use. The id is not a secret (it travels in
  * every `create_secret` call) but it is this phone's identity for the free quota, so it is kept in
- * the keychain, this device only, and survives reinstall as the OS allows. If the keychain cannot be
- * read (phone still locked at launch) a fresh id is used for this process only.
+ * the keychain, this device only, and survives reinstall as the OS allows (until a sign-out or a
+ * reset wipes it: forgetClientId). If the keychain cannot be read (phone still locked at launch) a
+ * fresh id is used for this process only.
  */
 export async function getClientId(): Promise<string> {
   if (clientIdCache) return clientIdCache;
@@ -85,6 +86,16 @@ export async function getClientId(): Promise<string> {
 /** Test seam: forgets the cached id so the next call reads SecureStore again. */
 export function resetClientIdCache(): void {
   clientIdCache = null;
+}
+
+/**
+ * Removes this install's quota id from the keychain and from memory (review P2-9). Called by
+ * lib/chat on sign-out and on "Reset chats on this phone": the next secret starts a fresh quota
+ * identity instead of carrying one across accounts and resets. Never throws.
+ */
+export async function forgetClientId(): Promise<void> {
+  clientIdCache = null;
+  try { await SecureStore.deleteItemAsync(CLIENT_ID_KEY, accessibility); } catch { /* nothing stored, or the keychain is locked */ }
 }
 
 /**

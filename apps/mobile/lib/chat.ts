@@ -13,7 +13,12 @@
 //   email link (also completed by completeFromUrl; the link is bound to the address requested on this
 //   phone, review W1-1), guest (anonymous), sign out. setForeground(active) starts / stops the
 //   session auto-refresh with the AppState (the Expo-documented pattern: on React Native supabase-js
-//   has no `window` focus events, so the root layout drives it).
+//   has no `window` focus events, so the root layout drives it). onSignedIn(cb) is the VERIFIED
+//   sign-in signal (review P2-1): it fires once per sign-in this module completed itself (Apple,
+//   Google / email through completeFromUrl after the address check, guest) and never from Supabase's
+//   SIGNED_IN event, which also fires for the attacker's session an email link can carry during the
+//   W1-1 window. Anything that acts on "a user just signed in" (push re-registration) listens here;
+//   onChange is for rendering state only.
 // - push: this phone's push token. register() calls the core RPC and keeps the token sealed in the auth
 //   store; unregister() forgets it server-side first. signOut() and resetThisPhone() unregister before
 //   the session goes, so a token never outlives the account that registered it (review W1-2).
@@ -35,6 +40,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
 import { Platform } from 'react-native';
 import { clearPickerCaches } from './files';
+import { forgetClientId } from './secrets';
 
 export type AuthSession = { userId: string; email: string | null; isAnonymous: boolean };
 
@@ -185,21 +191,48 @@ export function parseAuthCallback(url: string): Record<string, string> | null {
   return out;
 }
 
+// Verified sign-in listeners (P2-1). Module memory, independent of the Supabase client: a reset
+// rebuilds the client but the screens' subscriptions stay.
+const signedInListeners = new Set<(s: AuthSession) => void>();
+
+/** Tells the onSignedIn listeners about the session just installed. Only the success paths call it. */
+function emitSignedIn(session: Session | null): void {
+  const s = toAuthSession(session);
+  if (!s) return;
+  for (const cb of [...signedInListeners]) {
+    try { cb(s); } catch { /* a listener's failure is its own */ }
+  }
+}
+
 export const auth = {
   async getSession(): Promise<AuthSession | null> {
     const { data } = await sb().auth.getSession();
     return toAuthSession(data.session);
   },
 
+  /** Supabase's own session events (rendering state). See onSignedIn for acting on a sign-in. */
   onChange(cb: (s: AuthSession | null) => void): () => void {
     const { data } = sb().auth.onAuthStateChange((_event, s) => cb(toAuthSession(s)));
     return () => data.subscription.unsubscribe();
   },
 
+  /**
+   * Fires after a sign-in THIS module completed and checked: signInWithApple, signInAsGuest, and
+   * completeFromUrl's success path (Google's PKCE code; an email link only after its session was
+   * found to belong to the address requested on this phone). Never fired from Supabase's SIGNED_IN
+   * event, so the attacker's session of a mismatched email link (W1-1) is never reported here, and a
+   * listener cannot act on it. Returns the unsubscribe function.
+   */
+  onSignedIn(cb: (s: AuthSession) => void): () => void {
+    signedInListeners.add(cb);
+    return () => { signedInListeners.delete(cb); };
+  },
+
   /** Sign in with Apple: the identity token from expo-apple-authentication and the raw nonce it was requested with. */
   async signInWithApple(identityToken: string, nonce: string): Promise<void> {
-    const { error } = await sb().auth.signInWithIdToken({ provider: 'apple', token: identityToken, nonce });
+    const { data, error } = await sb().auth.signInWithIdToken({ provider: 'apple', token: identityToken, nonce });
     if (error) throw new Error(error.message);
+    emitSignedIn(data.session);
   },
 
   /** Returns the provider URL to open in the system browser; the browser comes back to onepeek://auth. */
@@ -220,7 +253,8 @@ export const auth = {
    * phone into someone else's account). A `token_hash` is accepted only while sendEmailLink() has a
    * pending address on this phone (younger than the OTP lifetime), only for `type` magiclink / email,
    * and only if the session it yields belongs to that address; any other session is signed out again
-   * and the link refused. Returns whether a session now exists.
+   * and the link refused. Returns whether a session now exists; onSignedIn listeners are told only
+   * then (P2-1), after every check above.
    */
   async completeFromUrl(url: string): Promise<boolean> {
     const p = parseAuthCallback(url);
@@ -247,7 +281,9 @@ export const auth = {
       return false;
     }
     const { data } = await a.getSession();
-    return !!data.session;
+    if (!data.session) return false;
+    emitSignedIn(data.session);
+    return true;
   },
 
   /** Sends a magic link and remembers the address: completeFromUrl() accepts a `token_hash` only for it. */
@@ -260,6 +296,8 @@ export const auth = {
 
   async signInAsGuest(): Promise<void> {
     await getChat().ensureSession(true);
+    const { data } = await sb().auth.getSession();
+    emitSignedIn(data.session);
   },
 
   /**
@@ -281,12 +319,15 @@ export const auth = {
    * sealed session here; the user's browsers and other phones stay signed in (a global sign-out
    * from a phone would be surprising). auth-js removes the local session even when the revoke call
    * fails, so the phone is signed out in every case; a network error is reported after that. The
-   * push token goes first (it needs the session), best effort: sign-out never waits on it.
+   * push token goes first (it needs the session), best effort: sign-out never waits on it. The
+   * secrets quota id (lib/secrets CLIENT_ID_KEY) goes too (P2-9): it is not account-bound, but a
+   * sign-out should not leave an identifier that links the next account's secrets to this one's.
    */
   async signOut(): Promise<void> {
     pendingEmail = null;
     try { await push.unregister(); } catch { /* offline or not registered: the row is moved by the next owner (008) */ }
     const { error } = await sb().auth.signOut({ scope: 'local' });
+    await forgetClientId();
     if (error) throw new Error(error.message);
   },
 };
@@ -362,6 +403,9 @@ export async function resetThisPhone(): Promise<void> {
   const authStorage = b?.authStorage ?? createRnAuthStorage({ secureStore: SecureStore, sqlite: SQLite });
   await authStorage.wipe();
   getLockStore().clear();
+  // The secrets quota id (P2-9): a reset starts the free quota over rather than keep a device-wide
+  // identifier across the wipe. The server already tolerates a cleared browser doing the same.
+  await forgetClientId();
   // Plaintext copies the pickers and the viewer left in the cache (review W2-2 / W2-3): "Forgets every
   // chat and key stored here" has to include the files that were sent or opened from this phone.
   await clearPickerCaches();

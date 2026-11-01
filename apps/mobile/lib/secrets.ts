@@ -5,8 +5,7 @@
 // The spec is the website: app/page.tsx (create: `create_secret` RPC, link `${origin}/s/${id}#${keyB64}`),
 // app/s/[id]/page.tsx and app/api/open/route.ts (peek + open, decrypt in the client). The key never
 // leaves the URL fragment except into the core's decrypt call; nothing about the content reaches the server.
-import type { FileSource } from '@onepeek/core';
-import type { SecretHeader, WifiSecret } from '@onepeek/core';
+import type { FileSource, SecretHeader, WifiSecret } from '@onepeek/core';
 
 export type SecretInput = { kind: 'text'; text: string } | { kind: 'file'; file: FileSource };
 export type SecretOptions = {

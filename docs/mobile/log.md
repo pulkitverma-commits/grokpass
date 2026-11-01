@@ -4,6 +4,14 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- release (Phase 3) merged: App Store listing, privacy labels, review notes, export-compliance draft (every answer
+  marked for a human adviser), screenshot plan; Play listing, Data safety, content rating, permissions, target
+  audience; `beta-runbook.md`; privacy-policy additions; checklist Part C. Honest-copy decisions recorded in its
+  report (iOS never "blocks"; "not collected" for E2EE content flagged; IP-derived city on `/api/open` declared as
+  coarse location; no audit claim). Lead removed the microphone permission and usage string that expo-camera and
+  expo-image-picker added by default. Open for others: location notice in the app's secret viewer when the sender
+  opted in (mobile-ui), account-deletion page and policy additions on onepeek.io (web owner), review counterpart
+  account and the adviser questions (human).
 - security-reviewer full report `phase-3-full-report.md`: threat model, architecture walk, 22 claims with proof, parity
   table. **Two high:** F-1 sign-out keeps the chat keystore (the web wipes it; the next account on the phone can reach
   the previous account's rooms) → fix in the app now; F-2 safety numbers and "key changed" compare server-supplied

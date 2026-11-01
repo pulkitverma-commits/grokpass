@@ -177,6 +177,7 @@ export default function RoomScreen() {
     for (const mid of deadKey.split(',')) chat().dropMessage(roomId, mid).catch(() => {});
   }, [deadKey, roomId, chat]);
   const byId = useMemo(() => new Map(live.map((m) => [m.id, m])), [live]);
+  const parentOf = (m: Msg) => (m.replyTo ? byId.get(m.replyTo) : undefined);
   const rows = useMemo<Row[]>(() => live.map((m) => (m.alert ? { t: 'alert', m } : { t: 'msg', m })), [live]);
 
   /** Starts the recipient-side countdown (first hold in Secret rooms; on screen elsewhere). */
@@ -357,11 +358,12 @@ export default function RoomScreen() {
           ) : (
             <MessageBubble
               m={item.m}
-              parent={item.m.replyTo ? byId.get(item.m.replyTo) : undefined}
+              parent={parentOf(item.m)}
               secret={!!secret}
               held={heldNow === item.m.id}
               now={now}
               senderName={nameOf(item.m.sender)}
+              parentName={parentOf(item.m) ? nameOf(parentOf(item.m)!.sender) : undefined}
               fileBusy={fileBusy === item.m.id}
               onHoldStart={hold}
               onHoldEnd={release}

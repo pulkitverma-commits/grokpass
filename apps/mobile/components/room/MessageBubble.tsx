@@ -35,6 +35,8 @@ type Props = {
   held: boolean;
   now: number;
   senderName: string;
+  /** Display name of `parent`'s sender: the quote in a Secret room names them instead of quoting (W3-1). */
+  parentName?: string;
   fileBusy: boolean;
   onHoldStart: (m: BubbleMessage) => void;
   onHoldEnd: () => void;
@@ -42,12 +44,16 @@ type Props = {
   onReply: (m: BubbleMessage) => void;
 };
 
-function replyPreview(p: BubbleMessage, secret: boolean) {
-  if (p.file) return secret ? 'File' : p.file.name;
+// The quote inside a bubble. In a Secret room a parent that is not mine is never quoted (security
+// review W3-1): the quote would otherwise put the other person's text on screen without a hold, in
+// the sender's own bubble for the life of that message. Own parents and Quick/Business rooms quote.
+function replyPreview(p: BubbleMessage, secret: boolean, parentName: string) {
+  if (secret && !p.mine) return p.file ? 'File' : parentName ? `Hidden message from ${parentName}` : 'Hidden message';
+  if (p.file) return p.file.name;
   return p.body;
 }
 
-export const MessageBubble = memo(function MessageBubble({ m, parent, secret, held, now, senderName, fileBusy, onHoldStart, onHoldEnd, onOpenFile, onReply }: Props) {
+export const MessageBubble = memo(function MessageBubble({ m, parent, secret, held, now, senderName, parentName = '', fileBusy, onHoldStart, onHoldEnd, onOpenFile, onReply }: Props) {
   // Secret rooms guard someone else's text behind a hold; files show their row (the bytes stay encrypted until opened).
   const guarded = secret && !m.mine && !m.file;
   const hidden = guarded && !held;
@@ -96,7 +102,7 @@ export const MessageBubble = memo(function MessageBubble({ m, parent, secret, he
       {m.mine ? <MineGradient /> : null}
       {parent && !hidden ? (
         <View style={[styles.reply, m.mine && styles.replyMine]}>
-          <Text variant="meta" tone={m.mine ? 'inverse' : 'muted'} numberOfLines={2}>{replyPreview(parent, secret)}</Text>
+          <Text variant="meta" tone={m.mine ? 'inverse' : 'muted'} numberOfLines={2}>{replyPreview(parent, secret, parentName)}</Text>
         </View>
       ) : null}
       {body}

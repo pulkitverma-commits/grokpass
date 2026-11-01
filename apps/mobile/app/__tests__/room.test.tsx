@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports -- jest.mock factories must require() */
-import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
-import { Text } from 'react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { FlatList, Text, TextInput, View } from 'react-native';
 import RoomScreen from '../room/[id]';
 import { chat, message, mockFile, resetChatMock, room, THEM } from '../../test/chat-mock';
 import { resetRouter, router, setLocalParams } from '../../test/expo-router-mock';
@@ -49,19 +49,42 @@ const MEMBERS = [
 const files = () => jest.requireMock('@/lib/files') as { deletePicked: jest.Mock; pickPhoto: jest.Mock };
 
 /**
- * Everything the rendered tree shows or announces: string children of host nodes and the props a
- * screen reader or the keyboard would read. (A whole-tree JSON.stringify is not usable here: FlatList
- * hands its `data` to the host ScrollView as a prop, and host props can reach React fiber internals.)
+ * Everything the rendered tree shows, announces or hands to the keyboard: string children of host
+ * nodes and every string inside every prop, except a deny-list (W3-4). A prop not on the list is
+ * swept, so a future `title`, `accessibilityActions`, `defaultValue` or `aria-*` carrying a body
+ * fails the test instead of passing silently. Excluded on purpose:
+ * - `data`: FlatList hands its rows to the host ScrollView as a prop, so it holds every message body
+ *   by construction (and host props can reach React fiber internals); `data` never reaches native.
+ * - `style`: layout numbers and colours, never content.
+ * - functions (handlers) and `children` (walked as the node's children instead).
+ * - inside a prop that is a React element (e.g. `ListHeaderComponent`) only its `props` are read;
+ *   `_owner`/`_store` and any `_`-prefixed key are fiber internals, never content of their own.
+ * - `testID` and `key`: fixed ids (`msg.<id>`, `row.<id>`), asserted elsewhere to carry ids only.
+ * - enum-like host props that cannot carry content: `accessibilityRole`, `pointerEvents`,
+ *   `keyboardType`, `returnKeyType`, `textContentType`, `autoComplete`, `autoCapitalize`,
+ *   `importantForAutofill`, `ellipsizeMode`, `collapsable`, `nativeID`.
  */
+const TREE_TEXT_SKIP = new Set(['data', 'style', 'children', 'testID', 'key', 'accessibilityRole', 'pointerEvents', 'keyboardType', 'returnKeyType', 'textContentType', 'autoComplete', 'autoCapitalize', 'importantForAutofill', 'ellipsizeMode', 'collapsable', 'nativeID']);
 function treeText(): string {
   const out: string[] = [];
-  const SPOKEN = ['accessibilityLabel', 'accessibilityHint', 'accessibilityValue', 'placeholder', 'value', 'text'];
+  const seen = new WeakSet<object>();
+  // Strings anywhere inside a prop value (objects such as accessibilityState/Value, arrays, nested).
+  const collect = (v: unknown, depth: number) => {
+    if (typeof v === 'string') { out.push(v); return; }
+    if (v === null || v === undefined || typeof v !== 'object' || depth > 12) return;
+    if (seen.has(v)) return;
+    seen.add(v);
+    if (Array.isArray(v)) { v.forEach((x) => collect(x, depth + 1)); return; }
+    const o = v as Record<string, unknown>;
+    if ('$$typeof' in o) { collect(o.props, depth + 1); return; }   // a React element: its props only
+    for (const [k, x] of Object.entries(o)) if (!k.startsWith('_') && typeof x !== 'function') collect(x, depth + 1);
+  };
   const walk = (n: unknown) => {
     if (n === null || n === undefined || typeof n === 'boolean') return;
     if (typeof n === 'string' || typeof n === 'number') { out.push(String(n)); return; }
     if (Array.isArray(n)) { n.forEach(walk); return; }
     const node = n as { props?: Record<string, unknown>; children?: unknown[] };
-    for (const k of SPOKEN) { const v = node.props?.[k]; if (typeof v === 'string') out.push(v); else if (v && typeof v === 'object') out.push(JSON.stringify(v)); }
+    for (const [k, v] of Object.entries(node.props ?? {})) { if (TREE_TEXT_SKIP.has(k) || typeof v === 'function') continue; collect(v, 0); }
     node.children?.forEach(walk);
   };
   walk(screen.toJSON());
@@ -243,6 +266,82 @@ test('W2-1: own messages and Quick rooms keep the quoted preview; the reply id s
   await fireEvent.changeText(screen.getByTestId('room.composer'), 'On my way.');
   await fireEvent.press(screen.getByTestId('room.send'));
   await waitFor(() => expect(chat.send).toHaveBeenCalledWith(ROOM.id, 'On my way.', 60, 'm1', 'uuid-1'));
+});
+
+test('W3-1: a sent reply to a hidden Secret message names the sender in the bubble quote; the parent text is nowhere in the tree', async () => {
+  await open();
+  const bubble = await screen.findByTestId('msg.m1');
+  await act(async () => { fireEvent(bubble, 'pressIn'); });
+  await fireEvent.press(screen.getByTestId('reply.m1'));
+  await act(async () => { fireEvent(screen.getByTestId('msg.m1'), 'pressOut'); });
+  await waitFor(() => expect(screen.getByTestId('room.composer').props.editable).toBe(true));
+  await fireEvent.changeText(screen.getByTestId('room.composer'), 'On my way.');
+  await fireEvent.press(screen.getByTestId('room.send'));
+  await waitFor(() => expect(chat.send).toHaveBeenCalledWith(ROOM.id, 'On my way.', 30, 'm1', 'uuid-1'));
+  // The sent bubble is on screen with its reply quote, and the quote names Bea instead of quoting her.
+  expect(screen.getByTestId('msg.uuid-1')).toBeTruthy();
+  expect(screen.getByText('On my way.')).toBeTruthy();
+  expect(screen.getByText('Hidden message from Bea')).toBeTruthy();
+  expect(screen.queryByText(/locker/)).toBeNull();
+  const text = treeText();
+  expect(text).not.toContain('The locker code is 4471.');
+  expect(text).not.toContain('locker');
+  expect(text).toContain('Hidden message from Bea');
+  // Holding the parent does not change the quote: her text is read on her bubble only.
+  await act(async () => { fireEvent(screen.getByTestId('msg.m1'), 'pressIn'); });
+  expect(screen.getByText('Hidden message from Bea')).toBeTruthy();
+  expect(screen.getAllByText('The locker code is 4471.')).toHaveLength(1);
+  await act(async () => { fireEvent(screen.getByTestId('msg.m1'), 'pressOut'); });
+});
+
+test('W3-1: Quick rooms and own parents keep the quoted text in the sent bubble', async () => {
+  chat.myRooms.mockResolvedValue([room({ id: ROOM.id, kind: 'quick', name: 'Vault handover', ttl: 60 })]);
+  await open();
+  await screen.findByText('The locker code is 4471.');
+  await fireEvent.press(screen.getByTestId('reply.m1'));
+  await waitFor(() => expect(screen.getByTestId('room.composer').props.editable).toBe(true));
+  await fireEvent.changeText(screen.getByTestId('room.composer'), 'On my way.');
+  await fireEvent.press(screen.getByTestId('room.send'));
+  await waitFor(() => expect(screen.getByTestId('msg.uuid-1')).toBeTruthy());
+  // Parent bubble + the quote inside the sent bubble.
+  expect(screen.getAllByText('The locker code is 4471.')).toHaveLength(2);
+  expect(screen.queryByText(/Hidden message/)).toBeNull();
+  expect(treeText()).toContain('The locker code is 4471.');
+  await screen.unmount();
+  // Secret room, replying to my own message: the quote stays.
+  chat.myRooms.mockResolvedValue([ROOM]);
+  await open([message({ id: 'm2', mine: true, sender: 'dddddddd-0000-0000-0000-00000000000d', body: 'Meet at the north gate.' })]);
+  await screen.findByText('Meet at the north gate.');
+  await fireEvent.press(screen.getByTestId('reply.m2'));
+  await waitFor(() => expect(screen.getByTestId('room.composer').props.editable).toBe(true));
+  await fireEvent.changeText(screen.getByTestId('room.composer'), 'Ten minutes.');
+  await fireEvent.press(screen.getByTestId('room.send'));
+  await waitFor(() => expect(screen.getByTestId('msg.uuid-1')).toBeTruthy());
+  expect(screen.getAllByText('Meet at the north gate.')).toHaveLength(2);
+  expect(screen.queryByText(/Hidden message/)).toBeNull();
+});
+
+test('W3-4: treeText() sweeps every prop but the deny-list, so a content-bearing prop is caught', async () => {
+  // The sweep sees string children, nested object/array props and an unknown prop, and skips `data`,
+  // `style` and `testID`. An unknown prop stands in for whatever a future component may add.
+  const unknownProp = { title: 'prop-title-leak' } as Record<string, unknown>;
+  await render(
+    <View {...unknownProp} accessibilityActions={[{ name: 'x', label: 'action-label-leak' }]} accessibilityState={{ checked: false }} testID="id-not-content" style={{ width: 1 }}>
+      <FlatList data={['data-row-not-swept']} renderItem={() => null} />
+      <TextInput defaultValue="default-value-leak" placeholder="placeholder-leak" />
+      <Text>child-text</Text>
+    </View>,
+  );
+  const text = treeText();
+  // Nothing from React's own bookkeeping is swept, so an element-valued prop cannot smuggle fiber state.
+  expect(text).not.toContain('memoizedState');
+  expect(text).toContain('prop-title-leak');
+  expect(text).toContain('action-label-leak');
+  expect(text).toContain('default-value-leak');
+  expect(text).toContain('placeholder-leak');
+  expect(text).toContain('child-text');
+  expect(text).not.toContain('data-row-not-swept');
+  expect(text).not.toContain('id-not-content');
 });
 
 test('W2-7: the Secret-room composer refuses keyboard learning and autofill; Quick rooms are unchanged', async () => {

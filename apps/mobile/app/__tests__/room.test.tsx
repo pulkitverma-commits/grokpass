@@ -5,6 +5,8 @@ import RoomScreen from '../room/[id]';
 import { chat, message, mockFile, resetChatMock, room, THEM } from '../../test/chat-mock';
 import { resetRouter, router, setLocalParams } from '../../test/expo-router-mock';
 import { renderScreen } from '../../test/render';
+import { clearHandoffs, takeHandoff } from '../../lib/links';
+import { resetSecretsMock, secrets, SECRET_ID, SECRET_URL } from '../../test/secrets-mock';
 
 const ROOM = room({ id: 'aaaaaaaa-0000-0000-0000-000000000001', kind: 'secret', name: 'Vault handover', ttl: 30 });
 const mockPicked = { uri: 'file:///tmp/x', name: 'holiday.png', mime: 'image/png', size: 1258291, read: async () => new Uint8Array([1]) };
@@ -12,6 +14,9 @@ const mockSecurity = { inactive: false, locked: false, captured: false, biometri
 
 jest.mock('expo-router', () => require('../../test/expo-router-mock'));
 jest.mock('@/lib/chat', () => require('../../test/chat-mock').chatMock);
+jest.mock('@/lib/secrets', () => require('../../test/secrets-mock').secretsMock);
+jest.mock('expo-clipboard', () => ({ setStringAsync: jest.fn() }));
+jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { extra: {} } } }));
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 jest.mock('expo-crypto', () => ({ randomUUID: () => 'uuid-1' }));
 jest.mock('expo-image', () => { const { View } = require('react-native'); return { Image: (p: { testID?: string }) => <View testID={p.testID ?? 'image'} /> }; });
@@ -92,7 +97,7 @@ function treeText(): string {
 }
 
 beforeEach(() => {
-  resetChatMock(); resetRouter();
+  resetChatMock(); resetRouter(); resetSecretsMock(); clearHandoffs();
   files().deletePicked.mockClear(); files().pickPhoto.mockResolvedValue(mockPicked);
   mockSecurity.inactive = false; mockShot.cb = null;
   setLocalParams({ id: ROOM.id });
@@ -407,4 +412,51 @@ test('W2-4: the attach sheet says photos keep their embedded details', async () 
   await waitFor(() => expect(screen.getByTestId('room.composer').props.editable).toBe(true));
   await fireEvent.press(screen.getByTestId('room.attach'));
   expect((await screen.findByTestId('attach.exif')).props.children).toBe('Photos keep their embedded details, such as location, unless your phone removes them.');
+});
+
+test('U8 block: messages from a device on this phone’s block list are hidden; the list is read from the keystore', async () => {
+  chat.keystore.get.mockImplementation(async (k: string) => (k === `room:${ROOM.id}:blocked` ? [THEM] : {}));
+  await open([message({ id: 'm1' }), message({ id: 'm9', mine: true, sender: 'dddddddd-0000-0000-0000-00000000000d', body: 'Still here.' })]);
+  await screen.findByText('Still here.');
+  expect(screen.queryByTestId('msg.m1')).toBeNull();
+  expect(screen.queryByText('Hold to read')).toBeNull();
+  expect(treeText()).not.toContain('locker');
+  expect(screen.getByTestId('msg.m9')).toBeTruthy();
+});
+
+test('U8 secret link in a message: "Open secret" parks the full link and routes by id only; the link is not an accessibility label', async () => {
+  chat.myRooms.mockResolvedValue([room({ id: ROOM.id, kind: 'quick', name: 'Vault handover', ttl: 60 })]);
+  await open([message({ id: 'm5', body: `Here you go: ${SECRET_URL}` })]);
+  const btn = await screen.findByTestId('link.m5');
+  expect(btn.props.accessibilityLabel).not.toContain('onepeek.io');
+  await fireEvent.press(btn);
+  expect(router.push).toHaveBeenCalledWith(`/s/${SECRET_ID}`);
+  expect(takeHandoff('secret')).toBe(SECRET_URL);
+  // Plain text has no such button.
+  expect(screen.queryByTestId('link.m1')).toBeNull();
+});
+
+test('U8 attach → Send as a one-time secret: the sheet opens; "Send in this chat" sends the text through send(); the link path sends the full link as a message', async () => {
+  await open([]);
+  await waitFor(() => expect(screen.getByTestId('room.composer').props.editable).toBe(true));
+  await fireEvent.press(screen.getByTestId('room.attach'));
+  await fireEvent.press(await screen.findByTestId('attach.secret'));
+  expect(await screen.findByTestId('secret.sheet')).toBeTruthy();
+  expect(screen.queryByTestId('attach.sheet')).toBeNull();
+  await fireEvent.changeText(screen.getByTestId('secret.text'), 'The vault code is 9182.');
+  await fireEvent.press(screen.getByTestId('secret.sendChat'));
+  await waitFor(() => expect(chat.send).toHaveBeenCalledWith(ROOM.id, 'The vault code is 9182.', 30, undefined, 'uuid-1'));
+  await waitFor(() => expect(screen.queryByTestId('secret.sheet')).toBeNull());
+  expect(secrets.createSecretLink).not.toHaveBeenCalled();
+  // The composer draft was not touched by the secret send.
+  expect(screen.getByTestId('room.composer').props.value).toBe('');
+  // Link path: the message body is the full link, the screen never draws the key.
+  await fireEvent.press(screen.getByTestId('room.attach'));
+  await fireEvent.press(await screen.findByTestId('attach.secret'));
+  await fireEvent.changeText(await screen.findByTestId('secret.text'), 'second');
+  await fireEvent.press(screen.getByTestId('secret.link'));
+  await waitFor(() => expect(secrets.createSecretLink).toHaveBeenCalledTimes(1));
+  await fireEvent.press(await screen.findByTestId('secret.sendLink'));
+  await waitFor(() => expect(chat.send).toHaveBeenLastCalledWith(ROOM.id, SECRET_URL, 30, undefined, 'uuid-1'));
+  await waitFor(() => expect(screen.queryByTestId('secret.sheet')).toBeNull());
 });

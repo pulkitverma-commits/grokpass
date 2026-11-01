@@ -2,7 +2,7 @@
 // PushRefresher (review W2-8): a registered phone re-registers its fresh token on start and on rotation.
 import { render, screen, waitFor } from '@testing-library/react-native';
 import { PushRefresher } from '../PushRefresher';
-import { push, resetChatMock } from '../../test/chat-mock';
+import { auth, push, resetChatMock } from '../../test/chat-mock';
 
 type Listener = (t: { data: string }) => void;
 const mockN = {
@@ -18,8 +18,12 @@ jest.mock('expo-notifications', () => ({
   addPushTokenListener: (cb: Listener) => { mockN.listener = cb; return { remove: mockN.remove }; },
 }));
 
+let signIn: ((s: unknown) => void) | null = null;
+
 beforeEach(() => {
   resetChatMock();
+  signIn = null;
+  auth.onChange.mockImplementation((cb: unknown) => { signIn = cb as (s: unknown) => void; return () => { signIn = null; }; });
   mockN.getPermissionsAsync.mockClear().mockResolvedValue({ granted: true });
   mockN.getDevicePushTokenAsync.mockClear();
   mockN.listener = null;
@@ -89,4 +93,30 @@ test('a failing register is swallowed (nothing thrown, nothing rendered)', async
   await waitFor(() => expect(push.register).toHaveBeenCalledTimes(1));
   await flush();
   expect(screen.toJSON()).toBeNull();
+});
+
+test('W2-8 follow-up: a sign-in re-registers the current token even when it has not changed; sign-out does nothing', async () => {
+  push.current.mockResolvedValue(true);
+  await render(<PushRefresher />);
+  await waitFor(() => expect(push.register).toHaveBeenCalledTimes(1));
+  expect(signIn).not.toBeNull();
+  signIn!({ userId: 'u-2', email: 'next@example.test', isAnonymous: false });
+  await waitFor(() => expect(push.register).toHaveBeenCalledTimes(2));
+  expect(push.register).toHaveBeenLastCalledWith('ios', 'FRESH-TOKEN-0123456789abcdef');
+  expect(mockN.getPermissionsAsync).toHaveBeenCalledTimes(2);   // still no prompt: permission is read, never requested
+  signIn!(null);
+  await flush();
+  expect(push.register).toHaveBeenCalledTimes(2);
+  await screen.unmount();
+  expect(signIn).toBeNull();
+});
+
+test('a sign-in on a phone that never turned notifications on registers nothing', async () => {
+  push.current.mockResolvedValue(false);
+  await render(<PushRefresher />);
+  await waitFor(() => expect(signIn).not.toBeNull());
+  signIn!({ userId: 'u-2', email: null, isAnonymous: true });
+  await flush();
+  expect(push.register).not.toHaveBeenCalled();
+  expect(mockN.getDevicePushTokenAsync).not.toHaveBeenCalled();
 });

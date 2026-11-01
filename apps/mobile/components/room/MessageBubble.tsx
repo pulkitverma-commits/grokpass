@@ -12,6 +12,7 @@ import { Text } from '../Text';
 import { MineGradient } from './MineGradient';
 import { fileSize } from '@/lib/files';
 import { timerText } from '@/lib/format';
+import { secretLinkFrom } from '@/lib/links';
 
 export type BubbleMessage = {
   id: string;
@@ -42,6 +43,8 @@ type Props = {
   onHoldEnd: () => void;
   onOpenFile: (m: BubbleMessage) => void;
   onReply: (m: BubbleMessage) => void;
+  /** A onepeek.io secret link inside the message: opens the viewer. The link string itself stays in the body. */
+  onOpenLink?: (url: string) => void;
 };
 
 // The quote inside a bubble. In a Secret room a parent that is not mine is never quoted (security
@@ -53,13 +56,15 @@ function replyPreview(p: BubbleMessage, secret: boolean, parentName: string) {
   return p.body;
 }
 
-export const MessageBubble = memo(function MessageBubble({ m, parent, secret, held, now, senderName, parentName = '', fileBusy, onHoldStart, onHoldEnd, onOpenFile, onReply }: Props) {
+export const MessageBubble = memo(function MessageBubble({ m, parent, secret, held, now, senderName, parentName = '', fileBusy, onHoldStart, onHoldEnd, onOpenFile, onReply, onOpenLink }: Props) {
   // Secret rooms guard someone else's text behind a hold; files show their row (the bytes stay encrypted until opened).
   const guarded = secret && !m.mine && !m.file;
   const hidden = guarded && !held;
   const left = m.expiresAt === null ? null : m.expiresAt - now;
   const soon = left !== null && left < 10_000;
   const f = m.file;
+  // Only "this message carries a secret link" is on screen; the link (and its key) is not, until the viewer.
+  const link = !f && onOpenLink ? secretLinkFrom(m.body) : null;
 
   const fileTitle = f
     ? f.viewOnce ? (m.mine ? 'View-once file' : m.viewed ? 'Opened' : f.mime.startsWith('image/') ? 'View-once photo' : 'View-once file')
@@ -135,6 +140,12 @@ export const MessageBubble = memo(function MessageBubble({ m, parent, secret, he
         ) : (
           <>
             <Text variant="meta" tone={soon ? 'danger' : 'muted'} mono testID={`timer.${m.id}`}>{timerText(m.ttl, m.expiresAt, now)}</Text>
+            {link ? (
+              <Pressable onPress={() => onOpenLink?.(link.url)} accessibilityRole="button" accessibilityLabel="Open the one-time secret in this message" hitSlop={12} style={styles.replyBtn} testID={`link.${m.id}`}>
+                <Icon name="key" size={14} color={colors.accent} />
+                <Text variant="meta" tone="accent">Open secret</Text>
+              </Pressable>
+            ) : null}
             {!hidden ? (
               <Pressable onPress={() => onReply(m)} accessibilityRole="button" accessibilityLabel="Reply to this message" hitSlop={12} style={styles.replyBtn} testID={`reply.${m.id}`}>
                 <Icon name="reply" size={14} color={colors.muted} />

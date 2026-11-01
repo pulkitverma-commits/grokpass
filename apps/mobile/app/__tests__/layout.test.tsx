@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports -- jest.mock factories must require() */
 // Root layout: the AuthGate invariant (review W2-9) and the launch-time cache sweep (W2-2 / W2-3).
 import { act, render, waitFor } from '@testing-library/react-native';
+import { AppState } from 'react-native';
 import RootLayout from '../_layout';
 import { auth, resetChatMock } from '../../test/chat-mock';
 import { resetRouter, router, setSegments } from '../../test/expo-router-mock';
@@ -22,14 +23,23 @@ jest.mock('@onepeek/core/src/rn', () => ({ installRnCrypto: jest.fn() }));
 jest.mock('@/security', () => ({ SecurityProvider: ({ children }: { children: React.ReactNode }) => children, useShareIntent: () => {} }));
 jest.mock('../../components/LockedScreen', () => ({ LockedScreen: () => null }));
 
-/** The `auth.onChange` callback the layout registered, so a test can report a session change. */
+/**
+ * Every `auth.onChange` subscriber (the layout's session hook and PushRefresher both subscribe), so a
+ * test reports a session change the way the real auth client does: to all of them.
+ */
+let listeners: ((s: Session | null) => void)[] = [];
 let emit: ((s: Session | null) => void) | null = null;
 
 beforeEach(() => {
   resetChatMock(); resetRouter();
   mockFiles.clearPickerCaches.mockClear();
-  emit = null;
-  auth.onChange.mockImplementation((cb: unknown) => { emit = cb as (s: Session | null) => void; return () => { emit = null; }; });
+  emit = null; listeners = [];
+  auth.onChange.mockImplementation((cb: unknown) => {
+    const fn = cb as (s: Session | null) => void;
+    listeners.push(fn);
+    emit = (s) => { for (const l of listeners) l(s); };
+    return () => { listeners = listeners.filter((l) => l !== fn); if (!listeners.length) emit = null; };
+  });
 });
 
 async function mount(segments: string[], session: Session | null) {
@@ -72,4 +82,23 @@ test('invariant (W2-9): on `auth` no redirect fires when a session appears, chan
 test('the picker and viewer caches are swept once on launch (W2-2 / W2-3)', async () => {
   await mount(['index'], SESSION);
   await waitFor(() => expect(mockFiles.clearPickerCaches).toHaveBeenCalledTimes(1));
+});
+
+test('carry-over: auth.setForeground follows AppState when lib/chat exports it, and is left alone when it does not', async () => {
+  const handlers: ((s: string) => void)[] = [];
+  const spy = jest.spyOn(AppState, 'addEventListener').mockImplementation((_t, cb) => { handlers.push(cb as (s: string) => void); return { remove: jest.fn() }; });
+  const setForeground = jest.fn();
+  (auth as unknown as { setForeground?: jest.Mock }).setForeground = setForeground;
+  try {
+    await mount(['index'], SESSION);
+    await waitFor(() => expect(setForeground).toHaveBeenCalled());
+    setForeground.mockClear();
+    await act(async () => { handlers.forEach((h) => h('background')); });
+    expect(setForeground).toHaveBeenLastCalledWith(false);
+    await act(async () => { handlers.forEach((h) => h('active')); });
+    expect(setForeground).toHaveBeenLastCalledWith(true);
+  } finally {
+    delete (auth as unknown as { setForeground?: jest.Mock }).setForeground;
+    spy.mockRestore();
+  }
 });

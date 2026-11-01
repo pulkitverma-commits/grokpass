@@ -1,19 +1,19 @@
-// One-time secret entry point (Phase 2, U8). A placeholder route so the Chats screen's affordance
-// has somewhere honest to go.
-import { StyleSheet, View } from 'react-native';
+// One-time secret from the Chats home (design 07 without a chat): text or a file becomes a
+// onepeek.io link through lib/secrets. There is no chat to send into here, so the composer offers
+// the link only; "Send link in this chat" lives in the room's version.
+import { useRouter } from 'expo-router';
+import { useSecureScreen } from '@/security';
 import { Header } from '../components/Header';
 import { Screen } from '../components/Screen';
-import { Text } from '../components/Text';
-import { spacing } from '../theme';
+import { SecretComposer } from '../components/SecretComposer';
 
 export default function SecretScreen() {
+  const router = useRouter();
+  useSecureScreen('secret:new');
+  const done = () => { if (router.canGoBack()) router.back(); else router.replace('/'); };
   return (
-    <Screen header={<Header title="One-time secret" />} testID="secret.screen">
-      <View style={styles.body}>
-        <Text variant="sub" tone="muted" center>Sending one-time secrets from the app is coming in a later build. For now, create one at onepeek.io.</Text>
-      </View>
+    <Screen scroll header={<Header close title="One-time secret" />} testID="secret.screen">
+      <SecretComposer target={null} onDone={done} />
     </Screen>
   );
 }
-
-const styles = StyleSheet.create({ body: { flex: 1, justifyContent: 'center', gap: spacing.md } });

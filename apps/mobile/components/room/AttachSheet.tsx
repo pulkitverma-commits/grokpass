@@ -22,9 +22,11 @@ type Props = {
   onPickPhoto: () => void;
   onPickFile: () => void;
   onSend: (viewOnce: boolean) => void;
+  /** Opens the "Send as a one-time secret" sheet instead (design 07). */
+  onSecret: () => void;
 };
 
-export function AttachSheet({ open, onClose, secret, ttl, picked, error, onPickPhoto, onPickFile, onSend }: Props) {
+export function AttachSheet({ open, onClose, secret, ttl, picked, error, onPickPhoto, onPickFile, onSend, onSecret }: Props) {
   const [viewOnce, setViewOnce] = useState(secret);
   // Each time the sheet opens it starts from the room's default (view once in Secret rooms).
   const [wasOpen, setWasOpen] = useState(open);
@@ -41,6 +43,14 @@ export function AttachSheet({ open, onClose, secret, ttl, picked, error, onPickP
           <Text variant="title">File</Text>
         </Pressable>
       </View>
+      <Pressable onPress={onSecret} accessibilityRole="button" accessibilityLabel="Send as a one-time secret" accessibilityHint="Text or a file that opens once, in this chat or as a onepeek.io link" style={({ pressed }) => [styles.secretRow, pressed && styles.pressed]} testID="attach.secret">
+        <Icon name="key" size={20} color={colors.accent} />
+        <View style={styles.fileMain}>
+          <Text variant="title">Send as a one-time secret</Text>
+          <Text variant="meta" tone="muted">Opens once, then it’s gone. In this chat or as a link.</Text>
+        </View>
+        <Icon name="chevronRight" size={18} color={colors.faint} />
+      </Pressable>
       {picked ? (
         <View style={styles.pickedRow} accessible accessibilityLabel={`Selected file, ${fileSize(picked.size)}`} testID="attach.picked">
           <View style={styles.fileIcon}><Icon name={(picked.mime ?? '').startsWith('image/') ? 'image' : 'file'} size={20} color={colors.accent} /></View>
@@ -74,6 +84,7 @@ const styles = StyleSheet.create({
   sources: { flexDirection: 'row', gap: spacing.sm },
   source: { flex: 1, minHeight: touchTarget + 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, borderRadius: radii.md, backgroundColor: colors.fill, borderWidth: 1, borderColor: colors.line },
   pressed: { opacity: 0.85 },
+  secretRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.sm, minHeight: touchTarget + 12, paddingHorizontal: spacing.md, borderRadius: radii.md, borderWidth: 1, borderStyle: 'dashed', borderColor: colors.ghostBorder },
   pickedRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.md, padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.fill },
   fileIcon: { width: 40, height: 40, borderRadius: radii.sm, backgroundColor: colors.accentSoft, alignItems: 'center', justifyContent: 'center' },
   fileMain: { flex: 1, gap: 2 },

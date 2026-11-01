@@ -8,7 +8,10 @@
 // the composer's reply preview of someone else's message is content-free (sender name only) and the
 // reply itself is dropped by a screenshot or when the app goes inactive, so no Secret text is ever on
 // screen while nothing is held (review W2-1). A picked file's plaintext copy is deleted once the send
-// has settled or the pick is dropped (review W2-2).
+// has settled or the pick is dropped (review W2-2). Phase 2: "Send as a one-time secret" from the
+// attach sheet (in this chat, or as a onepeek.io link whose full string goes only to the send), a
+// tapped secret link opens the viewer through lib/links' hand-off (never a route param), and members
+// blocked on this phone (a local list in the keystore) have their messages hidden here.
 import * as Crypto from 'expo-crypto';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -26,12 +29,14 @@ import { AttachSheet } from '../../components/room/AttachSheet';
 import { Composer } from '../../components/room/Composer';
 import { FileViewer, type Opened } from '../../components/room/FileViewer';
 import { MessageBubble, type BubbleMessage } from '../../components/room/MessageBubble';
-import { RoomMenu, type Member, type MenuRoom, type MenuView } from '../../components/room/RoomMenu';
+import { RoomMenu, blockedKey, type Member, type MenuRoom, type MenuView } from '../../components/room/RoomMenu';
+import { SecretComposer, type InChatSecret } from '../../components/SecretComposer';
 import { Sheet } from '../../components/Sheet';
 import { Segmented } from '../../components/Segmented';
 import { colors, radii, spacing, touchTarget } from '../../theme';
 import { MAX_ATTACHMENT_BYTES, deletePicked, pickDocument, pickPhoto, fileSource, type Picked } from '@/lib/files';
 import { KIND_SHORT, TIMERS, errorCode, friendlyError, keyChanged, memberName, roomTitle, ttlLabel } from '@/lib/format';
+import { secretLinkFrom, stashHandoff } from '@/lib/links';
 import type { LocalMessage } from '@onepeek/core';
 
 type Msg = LocalMessage;
@@ -84,6 +89,8 @@ export default function RoomScreen() {
   const [menu, setMenu] = useState<MenuView>(null);
   const [timerOpen, setTimerOpen] = useState(false);
   const [attachOpen, setAttachOpen] = useState(false);
+  const [secretOpen, setSecretOpen] = useState(false);
+  const [blocked, setBlocked] = useState<string[]>([]);
   const [picked, setPicked] = useState<Picked | null>(null);
   const [attachErr, setAttachErr] = useState('');
   const [fileBusy, setFileBusy] = useState<string | null>(null);
@@ -124,6 +131,8 @@ export default function RoomScreen() {
         await chat().commitRemovals(roomId);
       }
       setMembers(await chat().members(roomId));
+      const b = await chat().keystore.get<unknown>(blockedKey(roomId));
+      setBlocked(Array.isArray(b) ? b.filter((x): x is string => typeof x === 'string') : []);
       await showStored();
     } catch (e) {
       if (errorCode(e) === 'not_signed_in') router.replace('/welcome');
@@ -170,7 +179,7 @@ export default function RoomScreen() {
 
   // Expired messages leave the screen (filtered out of `live`) and the device (dropMessage); the
   // state list is pruned by the next showStored().
-  const live = useMemo(() => msgs.filter((m) => m.expiresAt === null || m.expiresAt > now), [msgs, now]);
+  const live = useMemo(() => msgs.filter((m) => (m.expiresAt === null || m.expiresAt > now) && !blocked.includes(m.sender)), [msgs, now, blocked]);
   const deadKey = msgs.filter((m) => m.expiresAt !== null && m.expiresAt <= now).map((m) => m.id).join(',');
   useEffect(() => {
     if (!deadKey) return;
@@ -208,13 +217,18 @@ export default function RoomScreen() {
   async function send() {
     const body = text.trim();
     if (!body || !joined) return;
+    setText('');
+    await sendBody(body, replyTo, true);
+  }
+
+  /** Sends `body` with the composer's timer. `restore`: on failure the draft comes back to the composer. */
+  async function sendBody(body: string, reply: Msg | null, restore = false) {
     setErr('');
-    const reply = replyTo;
     const msgId = Crypto.randomUUID();
     const draft: Msg = { id: msgId, seq: Number.MAX_SAFE_INTEGER, mine: true, sender: me, body, ttl, sentAt: Date.now(), expiresAt: null, replyTo: reply?.id, pending: true };
     outgoing.current.set(msgId, draft);
     setMsgs((cur) => [...cur, draft]);
-    setText(''); setReplyTo(null);
+    setReplyTo(null);
     try {
       const m = (await guard(() => chat().send(roomId, body, ttl, reply?.id, msgId))) as Msg | undefined;
       outgoing.current.delete(msgId);
@@ -223,9 +237,9 @@ export default function RoomScreen() {
     } catch (e) {
       outgoing.current.delete(msgId);
       setMsgs((cur) => cur.filter((x) => x.id !== msgId));
-      setText((t) => t || body);
-      setReplyTo((r) => r ?? reply);
+      if (restore) { setText((t) => t || body); setReplyTo((r) => r ?? reply); }
       setErr(friendlyError(errorCode(e)));
+      throw e;
     }
   }
 
@@ -242,14 +256,35 @@ export default function RoomScreen() {
   async function sendPicked(viewOnce: boolean) {
     if (!picked) return;
     const p = picked;
-    setAttachOpen(false); setPicked(null); setErr(''); setFileBusy('sending');
+    setAttachOpen(false); setPicked(null);
+    await sendFileNow(p, viewOnce);
+  }
+
+  async function sendFileNow(p: Picked, viewOnce: boolean) {
+    setErr(''); setFileBusy('sending');
     try {
       const m = (await guard(() => chat().sendFile(roomId, fileSource(p), ttl, viewOnce))) as Msg;
       setMsgs((cur) => [...cur, m]);
       void chat().notifyRoom(roomId);
     } catch (e) {
       setErr(friendlyError(errorCode(e)));
+      throw e;
     } finally { setFileBusy(null); deletePicked(p); }
+  }
+
+  /** "Send in this chat" from the secret sheet: text rides the room's own hold-to-read; files go view once. */
+  async function sendSecretInChat(s: InChatSecret) {
+    if (!joined) throw Object.assign(new Error('failed: no_local_state'), { code: 'no_local_state' });
+    if (s.kind === 'file') await sendFileNow(s.picked, true);
+    else await sendBody(s.text.trim(), null);
+  }
+
+  /** A onepeek.io secret link inside a message: the full link is parked for the viewer, the id goes in the route. */
+  function openSecretLink(url: string) {
+    const s = secretLinkFrom(url);
+    if (!s) return;
+    stashHandoff('secret', s.url);
+    router.push(`/s/${s.id}`);
   }
 
   /** Closes the attach sheet and drops the picker's copy of anything chosen but not sent. */
@@ -369,6 +404,7 @@ export default function RoomScreen() {
               onHoldEnd={release}
               onOpenFile={openFile}
               onReply={(m) => setReplyTo(byId.get(m.id) ?? null)}
+              onOpenLink={openSecretLink}
             />
           )}
         />
@@ -379,7 +415,7 @@ export default function RoomScreen() {
       <Composer
         text={text}
         onChangeText={setText}
-        onSend={send}
+        onSend={() => { send().catch(() => {}); }}
         onAttach={() => { setAttachErr(''); setPicked((prev) => { deletePicked(prev); return null; }); setAttachOpen(true); }}
         onTimer={() => setTimerOpen(true)}
         ttl={ttl}
@@ -397,12 +433,23 @@ export default function RoomScreen() {
         <Text variant="meta" tone="muted" style={styles.timerHint}>Applies to the next messages you send. The room default is in the menu.</Text>
       </Sheet>
 
-      <AttachSheet open={attachOpen} onClose={dropPicked} secret={!!secret} ttl={ttl} picked={picked} error={attachErr} onPickPhoto={() => pick('photo')} onPickFile={() => pick('file')} onSend={sendPicked} />
+      <AttachSheet open={attachOpen} onClose={dropPicked} secret={!!secret} ttl={ttl} picked={picked} error={attachErr} onPickPhoto={() => pick('photo')} onPickFile={() => pick('file')} onSend={(v) => { sendPicked(v).catch(() => {}); }} onSecret={() => { dropPicked(); setSecretOpen(true); }} />
+
+      <Sheet open={secretOpen} onClose={() => setSecretOpen(false)} testID="secret.sheet">
+        {secretOpen ? (
+          <SecretComposer
+            target={{ roomId, ttl, secret: !!secret }}
+            onSendInChat={sendSecretInChat}
+            onSendLinkInChat={(link) => sendBody(link, null)}
+            onDone={() => setSecretOpen(false)}
+          />
+        ) : null}
+      </Sheet>
 
       <FileViewer item={viewer} secret={!!secret} viewerName={myName} deviceCode={deviceCode} onClose={() => setViewer(null)} />
 
       {room ? (
-        <RoomMenu view={menu} setView={setMenu} room={room} title={title} members={members} me={me} ttl={ttl} setTtl={setTtl} onChange={() => { void refresh(); }} onGone={() => { setMenu(null); leaveToChats(); }} />
+        <RoomMenu view={menu} setView={setMenu} room={room} title={title} members={members} me={me} ttl={ttl} setTtl={setTtl} blocked={blocked} onChange={() => { void refresh(); }} onGone={() => { setMenu(null); leaveToChats(); }} />
       ) : null}
     </Screen>
   );

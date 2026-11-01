@@ -18,14 +18,17 @@
 //      member's device id and carry the listed key; otherwise it is not admitted (and members()
 //      shows it with keyMismatch).
 //   2. applyRows, `welcome` row (joiner): joinRoom checks the Welcome's signer and every leaf of the
-//      tree against the listing (mls.keyCheck); the signer must be the listed owner device with the
-//      listed key, and that owner must be in the group with it (F2-1). Otherwise nothing is kept,
-//      the device is flagged and, unless a genuine Welcome applies later in the page, sync() rejects
-//      with ChatError('member_key_mismatch') (lastSeq stays before the refused Welcome).
+//      tree against the listing (mls.keyCheck); the signer must be the owner: the device and key
+//      pinned in the invite link (F2-7, ./invite.ts), or, for a link made before the pin, the listed
+//      owner. Otherwise nothing is kept, the device is flagged, lastSeq moves on (a genuine Welcome
+//      later still applies, F2-9) and sync() rejects with ChatError('member_key_mismatch') until
+//      this device has joined.
 //   3. applyRows, commit rows (every member): receive() checks the committer's new leaf and every
-//      added key package against the listing, and only the listed owner device may commit (only
-//      the owner's app commits in this design: adds, removals; no self-updates). A refusal leaves the
-//      commit unapplied, flags the device and rejects sync() (rows before it are saved).
+//      added key package against the listing, and only the owner (pinned, else listed) may commit
+//      (only the owner's app commits in this design: adds, removals; no self-updates). A change
+//      from anyone else is skipped and recorded (`changedGroup`) and sync carries on (F2-8); a key
+//      or format refusal of the owner's own commit leaves it unapplied, flags the device and rejects
+//      sync() (rows before it are saved).
 //   4. members() / safetyNumberWith() / markVerified(): every call compares each tree leaf with the
 //      current listing (catches a listing changed after the fact), and lists every leaf the server
 //      does not list as `unlisted` (it can read the chat). A mismatched member has
@@ -41,6 +44,7 @@
 
 import { randomToken, newKey, importKey, encryptBytes, decryptBytes } from '../crypto';
 import * as mls from './mls';
+import { encodePin, ownerPin, parseInviteFragment, keyHash, type OwnerPin } from './invite';
 import type { ChatPlatform, FileSource, OpenedFile, RealtimeChannelLike, SupabaseLike, SupabaseSession } from './ports';
 
 export type RoomKind = 'quick' | 'secret' | 'business';
@@ -65,6 +69,12 @@ export type LocalMessage = {
 export type RoomSummary = {
   id: string; kind: RoomKind; role: 'owner' | 'member'; memberState: 'pending' | 'active';
   ttl: number; mode: ExpiryMode; expiresAt: string; name: string | null;
+  /**
+   * F2-7: true when this device knows the owner from outside the server (it is the owner, or it
+   * joined with a link that pinned the owner's device and key). false: joined from a link without a
+   * pin (made before the pin existed), so who runs the chat is the server's word.
+   */
+  ownerPinned: boolean;
 };
 
 export type DeviceRecord = { id: string; signing: mls.SigningKey; userId: string };
@@ -81,7 +91,9 @@ type RoomLocal = {
    */
   mismatch?: Record<string, MismatchFlag | true>;
 };
-type MismatchFlag = { key: string | null; seq: number; at: number };
+type MismatchFlag = { key: string | null; seq: number; at: number; kind?: 'welcome' | 'commit'; reason?: mls.KeyMismatchReason };
+/** `room:<id>:ownerPin`: the owner as the invite link pinned it (F2-7), or `pin: null` for a link without one. */
+type StoredPin = { pin: OwnerPin | null };
 
 // ---- bytea over PostgREST: sent and received as "\x<hex>"
 export function toBytea(b: Uint8Array) {
@@ -292,6 +304,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     const kp = await mls.newKeyPackage(dev.id, dev.signing);
     const state = await mls.createRoom(roomId, kp);
     await saveState(roomId, state);
+    await ks.put(roomKey(roomId, 'ownerPin'), { pin: await ownerPin(dev.id, dev.signing.publicKey) } satisfies StoredPin);
     const nickname = opts.nickname?.trim().slice(0, 40) || null;
     await setRoomLocal(roomId, { name: opts.name?.trim() || null, nicknames: nickname ? { [dev.id]: nickname } : {} });
     // Sent now like a joiner's, under the room lock. Nobody else is in the group yet, so this copy
@@ -307,7 +320,8 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     const out: RoomSummary[] = [];
     for (const r of rows) {
       const local = await roomLocal(r.id);
-      out.push({ id: r.id, kind: r.kind, role: r.role, memberState: r.member_state, ttl: r.default_ttl_s, mode: r.expiry_mode, expiresAt: r.expires_at, name: local.name });
+      const pinned = r.role === 'owner' || !!(await ks.get<StoredPin>(roomKey(r.id, 'ownerPin')))?.pin;
+      out.push({ id: r.id, kind: r.kind, role: r.role, memberState: r.member_state, ttl: r.default_ttl_s, mode: r.expiry_mode, expiresAt: r.expires_at, name: local.name, ownerPinned: pinned });
     }
     return out;
   }
@@ -316,13 +330,20 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     await setRoomLocal(roomId, { name: name.trim().slice(0, 60) || null });
   }
 
-  /** Creates an invite. The token travels only in the link's #fragment, never in a request URL. */
+  /**
+   * Creates an invite. The token travels only in the link's #fragment, never in a request URL, and so
+   * does the owner pin after it (`#<token>.1<pin>`, F2-7, see ./invite.ts): this device's id and a
+   * hash of its signing key, which the joiner holds the Welcome and every commit to. Only the token
+   * is sent to the server.
+   */
   async function createInvite(roomId: string, opts: { expiresIn: number; maxUses: number; approval: boolean }) {
+    const dev = await ensureDevice();
+    const pin = encodePin(await ownerPin(dev.id, dev.signing.publicKey));
     const token = randomToken(32);
     const id = await rpc<string>('chat_create_invite', {
       p_room: roomId, p_token: token, p_expires_s: opts.expiresIn, p_max_uses: opts.maxUses, p_requires_approval: opts.approval,
     });
-    return { id, link: `${env.origin()}/chat/join#${token}` };
+    return { id, link: `${env.origin()}/chat/join#${token}.${pin}` };
   }
 
   async function listInvites(roomId: string) {
@@ -333,14 +354,23 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     await rpc('chat_revoke_invite', { p_invite: id });
   }
 
-  async function peekInvite(token: string) {
+  /** `invite`: the link's fragment, with or without the owner pin (old links are just the token). */
+  function inviteParts(invite: string) {
+    const parts = parseInviteFragment(invite);
+    if (!parts) throw new ChatError('invite_invalid');
+    return parts;
+  }
+
+  async function peekInvite(invite: string) {
+    const { token } = inviteParts(invite);
     await ensureSession(true);
     const rows = await rpc<{ needs_code: boolean; kind: RoomKind }[]>('chat_peek_invite', { p_token: token });
     return rows[0] ?? null;
   }
 
   /** Joins with an invite. Signs in as a guest when needed. Returns the room id (membership is pending until admitted). */
-  async function redeemInvite(token: string, nickname: string, accessCode?: string) {
+  async function redeemInvite(invite: string, nickname: string, accessCode?: string) {
+    const { token, pin } = inviteParts(invite);
     await ensureSession(true);
     const dev = await ensureDevice();
     const kp = await mls.newKeyPackage(dev.id, dev.signing);
@@ -349,6 +379,9 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     });
     const r = rows[0];
     if (!r || r.error || !r.joined_room) throw new ChatError(r?.error || 'invite_invalid');
+    // Kept sealed on this device; a second redeem of another link for the same room keeps the pin it has.
+    const had = await ks.get<StoredPin>(roomKey(r.joined_room, 'ownerPin'));
+    if (!had?.pin) await ks.put(roomKey(r.joined_room, 'ownerPin'), { pin } satisfies StoredPin);
     await ks.put(roomKey(r.joined_room, 'pending'), { publicBytes: kp.publicBytes, privatePackage: kp.privatePackage, nickname: nickname.trim().slice(0, 40) } satisfies PendingJoin);
     return r.joined_room;
   }
@@ -367,6 +400,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
    * - `inGroup`: it has a leaf in this device's copy of the group (can read new messages);
    * - `keyMismatch`: the tree (or a pending key package) disagrees with the listing now, or a refused
    *   Welcome/commit named a device that still has no leaf here;
+   * - `changedGroup`: it sent a commit or proposal although it isn't the owner; skipped (F2-8);
    * - `keyHistory`: a refused Welcome/commit once named it, but its key in the group and the listing
    *   agree now ("the server once showed a different key for them; compare again").
    * A flag on this device itself means the server's listing was wrong about it; it never blocks.
@@ -379,7 +413,11 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     const leaves = state ? mls.memberLeaves(state) : [];
     const keysOf = (id: string) => leaves.filter(l => l.deviceId === id).map(l => l.signaturePublicKey);
     const conflicting = (keys: Uint8Array[]) => keys.some(k => !mls.sameKey(k, keys[0]));
-    const flagged = (id: string) => id !== dev.id && !!local.mismatch?.[id];
+    // A device that tried to change the group without being the owner (F2-8) is recorded as
+    // `changedGroup`, not as a key problem.
+    const flagOf = (id: string) => (id === dev.id ? undefined : local.mismatch?.[id]);
+    const flagged = (id: string) => { const f = flagOf(id); return !!f && (f === true || f.reason !== 'committer'); };
+    const changedGroup = (id: string) => { const f = flagOf(id); return !!f && f !== true && f.reason === 'committer'; };
     const base = (id: string) => ({ nickname: local.nicknames[id] ?? null, verified: local.verified[id] ?? null });
     const listedIds = new Set(rows.map(m => m.device_id));
     const list = rows.map(m => {
@@ -392,7 +430,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
         deviceId: m.device_id, role: m.role, state: m.state,
         signaturePub: treeKey ?? listed, hasKeyPackage: !!m.key_package, ...base(m.device_id),
         keyMismatch: live || (flagged(m.device_id) && !treeKey),
-        keyHistory: !live && !!treeKey && flagged(m.device_id),
+        keyHistory: !live && !!treeKey && flagged(m.device_id), changedGroup: changedGroup(m.device_id),
         inGroup: !!treeKey, unlisted: false,
       };
     });
@@ -401,7 +439,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
       const keys = keysOf(id);
       list.push({
         deviceId: id, role: 'member', state: 'active', signaturePub: keys[0], hasKeyPackage: false, ...base(id),
-        keyMismatch: conflicting(keys), keyHistory: false, inGroup: true, unlisted: true,
+        keyMismatch: conflicting(keys), keyHistory: false, changedGroup: changedGroup(id), inGroup: true, unlisted: true,
       });
     }
     return { dev, list, state, local, treeKey: (id: string) => leaves.find(l => l.deviceId === id)?.signaturePublicKey ?? null };
@@ -729,7 +767,11 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     const res: SyncResult = { joined: false, removed: false, newMessages: 0, newAlerts: 0 };
     // Another sync may have applied some of these while we were downloading.
     const rows = fetched.filter(r => Number(r.seq) > local.lastSeq);
-    if (!rows.length) return res;
+    if (!rows.length) {
+      // F2-9: a refused Welcome was passed over; while no genuine one has applied, keep saying so.
+      if (await refusedWelcomePending(roomId, local)) throw new ChatError('member_key_mismatch');
+      return res;
+    }
     let state = await loadState(roomId);
     let lastSeq = local.lastSeq;          // seq of the last row applied or deliberately ignored
     let savedSeq = local.lastSeq;         // what the keystore holds
@@ -738,48 +780,54 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     const nicknames = { ...local.nicknames };
     const listing = lazyListing(roomId);
     // F-2 checks 2 and 3: what a refused Welcome/commit named (device id -> offending key, if known).
-    const refused = new Map<string, string | null>();
-    let refusedSeq = 0;
-    let stopped = false;                  // a refused commit: nothing after it can apply
-    let holdSeq = false;                  // a refused Welcome and no join yet: keep lastSeq before it
+    const refused = new Map<string, MismatchFlag>();   // per device: the row (seq) that named it (F2-9)
+    let stopped = false;                  // a refused owner commit: nothing after it can apply
     let fetchFailure: unknown = null;     // the listing could not be fetched (F2-3)
     const applied: number[] = [];         // seqs of Welcomes/commits applied (their old flags clear)
     const goneLeaves = new Set<string>(); // devices whose leaf a commit removed (their flags clear)
-    const ownerRow = async () => (await listing.rows()).find(m => m.role === 'owner') ?? null;
-    const refuse = (seq: number, e: mls.KeyMismatchError) => {
-      refusedSeq = seq;
-      if (!e.deviceIds.length) refused.set('<unknown>', null);
-      e.deviceIds.forEach((id, i) => refused.set(id, e.keys[i] ? toBytea(e.keys[i]!) : null));
+    const refuse = (seq: number, e: mls.KeyMismatchError, kind: 'welcome' | 'commit') => {
+      const at = Date.now();
+      if (!e.deviceIds.length) refused.set('<unknown>', { key: null, seq, at, kind, reason: e.reason });
+      e.deviceIds.forEach((id, i) => refused.set(id, { key: e.keys[i] ? toBytea(e.keys[i]!) : null, seq, at, kind, reason: e.reason }));
     };
+    // Who the owner is (F2-7): the pin from the invite link (or this device's own, for the owner);
+    // only for a room joined from a link without a pin, the server's listing.
+    const pin = (await ks.get<StoredPin>(roomKey(roomId, 'ownerPin')))?.pin ?? null;
+    const listedOwner = async () => (await listing.rows()).find(m => m.role === 'owner') ?? null;
+    async function isOwner(deviceId: string, key: Uint8Array) {
+      if (pin) return deviceId === pin.deviceId && (await keyHash(key)) === pin.keyHash;
+      const owner = await listedOwner();
+      return !!owner && owner.device_id === deviceId && mls.sameKey(key, fromBytea(owner.signature_pub));
+    }
 
     for (const row of rows) {
       const seq = Number(row.seq);
       const bytes = fromBytea(row.ciphertext);
       if (row.kind === 'welcome') {
         const pending = await ks.get<PendingJoin>(roomKey(roomId, 'pending'));
-        if (state || !pending) { if (!holdSeq) lastSeq = seq; continue; }
+        if (state || !pending) { lastSeq = seq; continue; }
         let joined: Awaited<ReturnType<typeof mls.joinRoom>>;
         try {
           const r = await mls.joinRoomWithSigner(bytes, mls.restoreKeyPackage(pending.publicBytes, pending.privatePackage), listing.lookup);
           joined = r.state;
-          // F-2 check 2 (F2-1): the Welcome must be signed by the listed owner device with the listed
-          // key (an honest owner always signs its own), and that owner must be in the group with it.
-          const owner = await ownerRow();
-          const ownerKeys = owner ? mls.memberLeaves(joined).filter(l => l.deviceId === owner.device_id) : [];
-          if (!owner || r.signer.deviceId !== owner.device_id || !mls.sameKey(r.signer.signaturePublicKey, fromBytea(owner.signature_pub))) {
+          // F-2 check 2 (F2-1, F2-7): the Welcome must be signed by the owner (the pinned device and
+          // key; the listed owner only for a link without a pin), and every leaf the owner has in the
+          // group must be that key. An honest owner always signs its own Welcomes.
+          if (!(await isOwner(r.signer.deviceId, r.signer.signaturePublicKey))) {
             throw new mls.KeyMismatchError([r.signer.deviceId], 'signer', [r.signer.signaturePublicKey]);
           }
-          if (!ownerKeys.length || ownerKeys.some(l => !mls.sameKey(l.signaturePublicKey, fromBytea(owner.signature_pub)))) {
-            throw new mls.KeyMismatchError([owner.device_id], 'key');
+          const ownerLeaves = mls.memberLeaves(joined).filter(l => l.deviceId === r.signer.deviceId);
+          if (ownerLeaves.some(l => !mls.sameKey(l.signaturePublicKey, r.signer.signaturePublicKey))) {
+            throw new mls.KeyMismatchError([r.signer.deviceId], 'key');
           }
         } catch (e) {
           if (listing.failure()) { fetchFailure = listing.failure(); break; }
-          // Refused: nothing kept; a later genuine Welcome in this page can still apply.
-          if (e instanceof mls.KeyMismatchError) { refuse(seq, e); holdSeq = true; continue; }
+          // Refused: nothing kept, lastSeq moves on (F2-9: a genuine Welcome later, in this page or
+          // any later one, still applies); the flag keeps sync() rejecting until this device joins.
+          if (e instanceof mls.KeyMismatchError) { refuse(seq, e, 'welcome'); lastSeq = seq; continue; }
           continue;  // not a welcome we can open: skipped like any undecryptable row
         }
         applied.push(seq);
-        holdSeq = false;
         // A welcome is written at once, with its lastSeq: the nickname announcement below loads
         // and saves the state itself, and the pending key package must not outlive the join.
         state = joined;
@@ -802,16 +850,24 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
         }
         continue;
       }
-      if (!state) { if (!holdSeq) lastSeq = seq; continue; }  // traffic from before we joined: not ours to read
+      if (!state) { lastSeq = seq; continue; }  // traffic from before we joined: not ours to read
       let got: Awaited<ReturnType<typeof mls.receive>>;
       const before: ReturnType<typeof mls.memberLeaves> = mls.memberLeaves(state);
       try {
-        // F-2 check 3: keys against the listing, and only the listed owner device may commit (F2-1:
-        // in this design only the owner's app commits adds and removals; there are no self-updates).
-        got = await mls.receive(state, bytes, dev.id, listing.lookup, async (id) => (await ownerRow())?.device_id === id);
+        // F-2 check 3: only the owner may change the group (F2-1: in this design only the owner's
+        // app commits adds and removals; there are no self-updates or proposals), then its changes'
+        // keys against the listing.
+        got = await mls.receive(state, bytes, dev.id, listing.lookup, isOwner);
       } catch (e) {
         if (listing.failure()) { fetchFailure = listing.failure(); break; }
-        if (e instanceof mls.KeyMismatchError) { refuse(seq, e); stopped = true; break; }
+        if (e instanceof mls.KeyMismatchError) {
+          refuse(seq, e, 'commit');
+          // F2-8: a change from anyone but the owner is skipped and recorded; the group stays at the
+          // epoch the owner's next commit builds on, so the room carries on. A key or format refusal
+          // of the owner's own commit stops this member (lastSeq stays before it).
+          if (e.reason === 'committer') { lastSeq = seq; continue; }
+          stopped = true; break;
+        }
         continue;  // undecryptable (older epoch, tampered, replayed): skipped, see above
       }
       if (got.kind === 'commit') {
@@ -856,13 +912,20 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
       if (goneLeaves.has(id) || (seqOf && applied.includes(seqOf))) continue;
       flags[id] = f;
     }
-    for (const [id, key] of refused) flags[id] = { key, seq: refusedSeq, at: Date.now() };
+    for (const [id, f] of refused) flags[id] = f;
     if (JSON.stringify(flags) !== JSON.stringify(prev)) await setRoomLocal(roomId, { mismatch: flags });
-    // A refused commit stops this member (lastSeq stays before it, so every sync refuses it again);
-    // a refused Welcome does too unless a genuine one applied after it.
-    if (stopped || (refused.size && !res.joined)) throw new ChatError('member_key_mismatch');
+    // A refused owner commit stops this member (lastSeq stays before it, so every sync refuses it
+    // again). A refused Welcome keeps sync() rejecting while this device has not joined.
+    if (stopped || (!state && refusedWelcomeIn(flags))) throw new ChatError('member_key_mismatch');
     if (fetchFailure) throw fetchFailure;
     return res;
+  }
+
+  function refusedWelcomeIn(flags: RoomLocal['mismatch']) {
+    return Object.values(flags ?? {}).some(f => f !== true && f.kind === 'welcome');
+  }
+  async function refusedWelcomePending(roomId: string, local: RoomLocal) {
+    return refusedWelcomeIn(local.mismatch) && !(await ks.get<Uint8Array>(roomKey(roomId, 'state')));
   }
 
   /**

@@ -62,8 +62,19 @@ export const UNLISTED_NOTE = 'Not listed by the server: this device can still re
 export const KEY_HISTORY_NOTE = 'The server once showed a different key for them; compare again.';
 export const KEY_STOP_NOTICE = 'This chat stopped updating because a member’s key doesn’t match. Don’t trust it until you’ve checked with them.';
 export function readersLine(n: number) { return `${n} ${n === 1 ? 'device can' : 'devices can'} read this chat`; }
-export function verifyHint(name: string) { return `Compare these numbers in person or on a call. If they match, the key this chat holds for ${name} is really theirs.`; }
-export function scanMatchLine(name: string) { return `The numbers match. The key this chat holds for ${name} is really theirs.`; }
+/** Re-review F2-7: the owner is pinned (this phone runs the chat, or joined with a link carrying the owner's key)… */
+export function verifyHint(name: string, ownerPinned = true) {
+  return ownerPinned
+    ? `Compare these numbers in person or on a call. If they match, the key this chat holds for ${name} is really theirs.`
+    : `Compare these numbers in person or on a call. If they match on both screens, your messages reach ${name}’s real device. Everyone who can read this chat is in the member list: check that both screens show the same devices, and verify each one you don’t recognise.`;
+}
+export function scanMatchLine(name: string, ownerPinned = true) {
+  return ownerPinned
+    ? `The numbers match. The key this chat holds for ${name} is really theirs.`
+    : `The numbers match. The key this chat holds for ${name} is really theirs. Check the member list for devices you don’t recognise.`;
+}
+/** Shown in a room joined from a link without the owner pin (made before F2-7). */
+export const UNPINNED_NOTICE = 'This invite didn’t carry the owner’s key, so the app can’t confirm who runs this chat. Ask for a new invite.';
 /** Devices with a leaf in this phone's copy of the group (`inGroup`; an older core without it: active members). */
 export function readersOf(members: { state: string; inGroup?: boolean }[]) { return members.filter((m) => m.inGroup ?? m.state === 'active').length; }
 
@@ -93,10 +104,15 @@ export function friendlyError(code: string) {
   }
 }
 
-/** Invite tokens travel only in the link's #fragment. Pulls one out of a pasted link or a deep-link URL. */
+/**
+ * Invite tokens travel only in the link's #fragment. Pulls the fragment out of a pasted link or a
+ * deep-link URL: the token, plus `.1<owner pin>` for links made since F2-7 (the core sends only the
+ * token to the server and keeps the pin). A link with the token alone still works; a pin that isn't
+ * well formed is left off, and the room then shows the "didn't carry the owner's key" notice.
+ */
 export function inviteTokenFrom(text: string | null | undefined): string | null {
   if (!text) return null;
-  const m = /#([A-Za-z0-9_-]{32,128})(?:[^A-Za-z0-9_-]|$)/.exec(text.trim());
+  const m = /#([A-Za-z0-9_-]{32,128}(?:\.1[A-Za-z0-9_-]{64})?)(?![A-Za-z0-9_-])/.exec(text.trim());
   return m ? m[1]! : null;
 }
 

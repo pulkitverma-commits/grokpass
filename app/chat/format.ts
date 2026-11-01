@@ -28,9 +28,12 @@ export function shortId(id: string) {
 export const UNLISTED_NOTE = 'Not listed by the server: this device can still read the chat';
 export const KEY_HISTORY_NOTE = 'The server once showed a different key for them; compare again.';
 export function readersLine(n: number) { return `${n} ${n === 1 ? 'device can' : 'devices can'} read this chat`; }
+/** Re-review F2-7: the same sentence with or without the owner pinned (the device check is always asked for). */
 export function verifyLine(name: string) {
-  return `Compare these numbers in person or on a call. If they match on both screens, your messages reach ${name}’s real device. Everyone who can read this chat is in the member list.`;
+  return `Compare these numbers in person or on a call. If they match on both screens, your messages reach ${name}’s real device. Everyone who can read this chat is in the member list: check that both screens show the same devices, and verify each one you don’t recognise.`;
 }
+/** Shown in a room joined from a link without the owner pin (made before F2-7). */
+export const UNPINNED_NOTICE = 'This invite didn’t carry the owner’s key, so the app can’t confirm who runs this chat. Ask for a new invite.';
 
 export function friendlyError(code: string) {
   switch (code) {

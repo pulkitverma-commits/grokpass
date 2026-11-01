@@ -16,15 +16,15 @@ jest.mock('@/security', () => ({ ...jest.requireActual('@/security/constants'), 
 const mockFetch = jest.fn(async () => ({ ok: true, status: 200 }));
 
 const ME = 'dddddddd-0000-0000-0000-00000000000d';
-const ROOM = room({ id: 'aaaaaaaa-0000-0000-0000-000000000001', kind: 'secret', name: 'Vault handover', ttl: 30 });
+const ROOM = room({ id: 'aaaaaaaa-0000-0000-0000-000000000001', kind: 'secret', name: 'Vault handover', ttl: 30, ownerPinned: true });
 const MEMBERS: Member[] = [
   { deviceId: ME, role: 'owner', state: 'active', signaturePub: new Uint8Array([1]), hasKeyPackage: true, nickname: 'Pulkit', verified: null },
   { deviceId: THEM, role: 'member', state: 'active', signaturePub: new Uint8Array([2]), hasKeyPackage: true, nickname: 'Bea', verified: null },
 ];
 
-function Harness({ initial, onGone = jest.fn(), onChange = jest.fn(), role = 'owner' as 'owner' | 'member', blocked = [] as string[] }: { initial: MenuView; onGone?: () => void; onChange?: () => void; role?: 'owner' | 'member'; blocked?: string[] }) {
+function Harness({ initial, onGone = jest.fn(), onChange = jest.fn(), role = 'owner' as 'owner' | 'member', blocked = [] as string[], ownerPinned = true }: { initial: MenuView; onGone?: () => void; onChange?: () => void; role?: 'owner' | 'member'; blocked?: string[]; ownerPinned?: boolean }) {
   const [view, setView] = useState<MenuView>(initial);
-  return <RoomMenu view={view} setView={setView} room={{ ...ROOM, role }} title="Vault handover" members={MEMBERS} me={ME} ttl={30} setTtl={jest.fn()} blocked={blocked} onChange={onChange} onGone={onGone} />;
+  return <RoomMenu view={view} setView={setView} room={{ ...ROOM, role, ownerPinned }} title="Vault handover" members={MEMBERS} me={ME} ttl={30} setTtl={jest.fn()} blocked={blocked} onChange={onChange} onGone={onGone} />;
 }
 
 beforeEach(() => { resetChatMock(); resetRouter(); mockPanic.mockClear(); mockFetch.mockClear().mockResolvedValue({ ok: true, status: 200 }); (globalThis as { fetch: unknown }).fetch = mockFetch; });
@@ -70,6 +70,12 @@ test('safety number comes from safetyNumberWith, in groups of five with a QR; ma
   await fireEvent.press(screen.getByTestId('verify.mark'));
   await waitFor(() => expect(chat.markVerified).toHaveBeenCalledWith(ROOM.id, THEM));
   expect(onChange).toHaveBeenCalled();
+});
+
+test('F2-7: in a room joined from a link without the owner pin, the verify view uses the cautious wording', async () => {
+  await renderScreen(<Harness initial="verify" role="member" ownerPinned={false} />);
+  expect(await screen.findByTestId('verify.number')).toBeTruthy();
+  expect(screen.getByText('Compare these numbers in person or on a call. If they match on both screens, your messages reach Bea’s real device. Everyone who can read this chat is in the member list: check that both screens show the same devices, and verify each one you don’t recognise.')).toBeTruthy();
 });
 
 test('F-2: a member whose key does not match the chat: the verify view shows the mismatch message and no number to mark verified', async () => {

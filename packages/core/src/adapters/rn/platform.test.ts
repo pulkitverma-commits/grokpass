@@ -33,15 +33,18 @@ describe('rn env', () => {
     expect(env.origin()).toBe('https://onepeek.io');
 
     const calls: { fn: string; args: Record<string, unknown> }[] = [];
-    const sb = fakeSupabase((fn, args) => { calls.push({ fn, args }); return 'invite-1'; });
+    const sb = fakeSupabase((fn, args) => { calls.push({ fn, args }); return fn === 'chat_register_device' ? '0f0e0d0c-0b0a-4908-8706-050403020100' : 'invite-1'; });
     const platform = createRnPlatform({ supabase: sb, keystore: nullKeystore, secureStore: createSecureStoreMock().module, siteUrl: 'https://onepeek.io/', apiBaseUrl: 'https://onepeek.io', deviceLabel: 'iPhone 15' });
     const client = createChatClient(platform);
     const inv = await client.createInvite('room-1', { expiresIn: 3600, maxUses: 1, approval: false });
     expect(inv.id).toBe('invite-1');
     expect(inv.link.startsWith('https://onepeek.io/chat/join#')).toBe(true);
-    const token = inv.link.split('#')[1];
+    // F2-7: `#<token>.1<owner pin>`; only the token goes to the server.
+    const [token, pin] = inv.link.split('#')[1].split('.');
     expect(token.length).toBeGreaterThanOrEqual(32);
-    expect(calls[0].args.p_token).toBe(token);
+    expect(pin).toMatch(/^1[A-Za-z0-9_-]{64}$/);
+    expect(calls.find(c => c.fn === 'chat_create_invite')!.args.p_token).toBe(token);
+    expect(JSON.stringify(calls)).not.toContain(pin);
     expect(JSON.stringify(calls)).not.toContain('onepeek.io');  // the origin never reaches the server
   });
 

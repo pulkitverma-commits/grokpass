@@ -36,7 +36,7 @@ export type Member = {
   keyMismatch?: boolean; keyHistory?: boolean; inGroup?: boolean; unlisted?: boolean;
 };
 
-export type MenuRoom = { id: string; kind: 'quick' | 'secret' | 'business'; role: 'owner' | 'member'; ttl: number; mode: 'on_open' | 'on_send'; expiresAt: string; name: string | null };
+export type MenuRoom = { id: string; kind: 'quick' | 'secret' | 'business'; role: 'owner' | 'member'; ttl: number; mode: 'on_open' | 'on_send'; expiresAt: string; name: string | null; ownerPinned?: boolean };
 
 type Props = {
   view: MenuView;
@@ -69,7 +69,7 @@ export function RoomMenu({ view, setView, room, title, members, me, ttl, setTtl,
       {view === 'members' ? <Members room={room} members={members} me={me} isOwner={isOwner} blocked={blocked} onChange={onChange} /> : null}
       {view === 'report' ? <Report room={room} onDone={close} /> : null}
       {view === 'invite' ? <Invite room={room} /> : null}
-      {view === 'verify' ? <Verify roomId={room.id} members={active.filter((m) => m.deviceId !== me)} readers={readersOf(members)} onChange={onChange} onClose={close} /> : null}
+      {view === 'verify' ? <Verify roomId={room.id} members={active.filter((m) => m.deviceId !== me)} readers={readersOf(members)} ownerPinned={room.ownerPinned === true} onChange={onChange} onClose={close} /> : null}
       {view === 'timer' ? <Timer room={room} ttl={ttl} setTtl={setTtl} isOwner={isOwner} onSaved={() => { onChange(); close(); }} /> : null}
       {view === 'rename' ? <Rename room={room} onSaved={() => { onChange(); close(); }} /> : null}
       {view === 'leave' ? (
@@ -289,7 +289,7 @@ function Invite({ room }: { room: MenuRoom }) {
 
 // ---------------------------------------------------------------------------- verify (safety number)
 
-function Verify({ roomId, members, readers, onChange, onClose }: { roomId: string; members: Member[]; readers: number; onChange: () => void; onClose: () => void }) {
+function Verify({ roomId, members, readers, ownerPinned, onChange, onClose }: { roomId: string; members: Member[]; readers: number; ownerPinned: boolean; onChange: () => void; onClose: () => void }) {
   const { chat, guard } = useChat();
   const router = useRouter();
   const [who, setWho] = useState<Member | null>(members.length === 1 ? members[0]! : null);
@@ -322,7 +322,7 @@ function Verify({ roomId, members, readers, onChange, onClose }: { roomId: strin
   return (
     <View style={styles.stack}>
       <Text variant="title" tone="heading">Verify {name}</Text>
-      <Text variant="sub" tone="muted">{verifyHint(name)}</Text>
+      <Text variant="sub" tone="muted">{verifyHint(name, ownerPinned)}</Text>
       {who.unlisted ? <Notice tone="error" text={`${UNLISTED_NOTE}.`} /> : null}
       {who.keyHistory ? <Notice tone="info" text={KEY_HISTORY_NOTE} /> : null}
       {num ? (

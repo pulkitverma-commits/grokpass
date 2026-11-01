@@ -22,7 +22,7 @@ import { classify, stashHandoff } from '@/lib/links';
 type Found =
   | { kind: 'invite'; url: string }
   | { kind: 'secret'; url: string; id: string }
-  | { kind: 'verify'; match: { deviceId: string; name: string } | null; checking: boolean }
+  | { kind: 'verify'; match: { deviceId: string; name: string; pinned: boolean } | null; checking: boolean }
   | { kind: 'none' };
 
 const WHAT = 'Scans invites, one-time secrets and safety numbers. The camera image never leaves this phone.';
@@ -48,9 +48,11 @@ export default function ScanScreen() {
     try {
       const me = (await chat().ensureDevice()).id;
       const members = (await chat().members(roomId)).filter((m) => m.state === 'active' && m.deviceId !== me);
+      // F2-7: only a room whose owner is pinned gets the plain wording (anything else: the cautious one).
+      const pinned = (await chat().myRooms()).find((r) => r.id === roomId)?.ownerPinned === true;
       for (const m of members) {
         const n = await chat().safetyNumberWith(roomId, m.deviceId);
-        if (n === digits) { setFound({ kind: 'verify', match: { deviceId: m.deviceId, name: memberName(m.nickname, m.deviceId) }, checking: false }); return; }
+        if (n === digits) { setFound({ kind: 'verify', match: { deviceId: m.deviceId, name: memberName(m.nickname, m.deviceId), pinned }, checking: false }); return; }
       }
       setFound({ kind: 'verify', match: null, checking: false });
     } catch (e) {
@@ -141,7 +143,7 @@ export default function ScanScreen() {
                 <ResultHead icon="shield" title="Safety number" sub="Comparing with the people in this chat…" />
               ) : found.match ? (
                 <>
-                  <ResultHead icon="check" title={`Matches ${found.match.name}`} sub={scanMatchLine(found.match.name)} accent />
+                  <ResultHead icon="check" title={`Matches ${found.match.name}`} sub={scanMatchLine(found.match.name, found.match.pinned)} accent />
                   <Button title={busy ? 'Saving…' : 'They match — mark verified'} busy={busy} onPress={markVerified} testID="scan.verify" />
                 </>
               ) : (

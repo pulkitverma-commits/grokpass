@@ -167,14 +167,21 @@ async function sweep(devices: Device[], extra: Forbidden[] = [], tokens: string[
   }
   const phones = devices.filter(d => d.kind === 'phone');
   const wraps = phones.map(d => forbidden(`${d.name} wrapping key`, wrapKeyBytes(d)));
-  const tokenList = tokens.map(t => forbidden('invite token', t));
+  // F2-7: a link's fragment is `<token>.1<owner pin>`; neither part may leak, and only the token is an RPC input.
+  const bareTokens = tokens.map(t => t.split('.')[0]);
+  const pins = tokens.map(t => t.split('.')[1]).filter((p): p is string => !!p);
+  const tokenList = [...bareTokens.map(t => forbidden('invite token', t)), ...pins.map(p => forbidden('owner pin', p))];
   const codeList = [forbidden('access code', ACCESS_CODE), forbidden('wrong access code', WRONG_CODE)];
 
   // 1. The SQL log. The token and the code are legitimately the *input* of a few RPCs (hashed
   //    server-side); redact them there and assert they appear nowhere else.
   const redacted = h.allSql.map(({ fn, args }) => {
     const a = { ...args };
-    if ('p_token' in a) { expect(TOKEN_RPCS, `p_token passed to ${fn}`).toContain(fn); a.p_token = '<token>'; }
+    if ('p_token' in a) {
+      expect(TOKEN_RPCS, `p_token passed to ${fn}`).toContain(fn);
+      expect(String(a.p_token), `${fn} got a bare token, never the owner pin`).toMatch(/^[A-Za-z0-9_-]{32,128}$/);
+      a.p_token = '<token>';
+    }
     if ('p_access_code' in a) { expect(CODE_RPCS, `p_access_code passed to ${fn}`).toContain(fn); a.p_access_code = '<code>'; }
     return { fn, args: a };
   });
@@ -183,7 +190,7 @@ async function sweep(devices: Device[], extra: Forbidden[] = [], tokens: string[
   // 2. The database.
   const dump = await h.dumpDb();
   expectClean(dump, [...secrets, ...wraps, ...tokenList, ...codeList], 'the DB dump');
-  for (const t of tokens) {
+  for (const t of bareTokens) {
     const hashes = (await h.db.query<{ h: string }>(`select encode(token_hash, 'hex') h from public.chat_invites`)).rows.map(r => r.h);
     expect(hashes).not.toContain(hex(t));
   }
@@ -239,7 +246,7 @@ describeInterop.each(ROLES)('Web <-> mobile interop: %s', (_label, ownerKind, gu
     expect(roomId).toMatch(UUID);
     // #2: the link's origin is the platform's injected origin, not read from any global.
     const { link } = await owner.run(c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
-    expect(link).toMatch(new RegExp(`^${owner.origin.replace(/[./]/g, '\\$&')}/chat/join#[A-Za-z0-9_-]{40,}$`));
+    expect(link).toMatch(new RegExp(`^${owner.origin.replace(/[./]/g, '\\$&')}/chat/join#[A-Za-z0-9_-]{40,}\\.1[A-Za-z0-9_-]{64}$`));
     const token = tokenOf(link);
     // #3
     expect(await guest.run(c => c.peekInvite(token))).toEqual({ needs_code: true, kind: 'secret' });

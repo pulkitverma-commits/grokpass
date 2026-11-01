@@ -573,6 +573,13 @@ describe('accessibility (qa A1, A2, §12 key-changed row)', () => {
     expect(screen.getByText('Bea wasn’t let in. This member’s key doesn’t match the chat. Don’t trust this chat until you’ve checked with them.')).toBeTruthy();
   });
 
+  test('F2-7: a room joined from a link without the owner pin shows the persistent notice; a pinned one does not', async () => {
+    chat.myRooms.mockResolvedValue([room({ id: ROOM.id, role: 'member', name: 'Vault handover', ownerPinned: false })]);
+    await open([]);
+    expect(await screen.findByTestId('room.unpinned')).toBeTruthy();
+    expect(screen.getByText('This invite didn’t carry the owner’s key, so the app can’t confirm who runs this chat. Ask for a new invite.')).toBeTruthy();
+  });
+
   test('F2-1: a device the server does not list gets its own row', async () => {
     chat.members.mockResolvedValue([MEMBERS[0]!, { ...MEMBERS[1]!, unlisted: true, inGroup: true }] as never);
     await open([]);

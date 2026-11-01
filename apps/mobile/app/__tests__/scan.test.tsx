@@ -3,7 +3,7 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 import ScanScreen from '../scan';
 import { clearHandoffs, takeHandoff } from '../../lib/links';
-import { chat, resetChatMock, THEM } from '../../test/chat-mock';
+import { chat, resetChatMock, room, THEM } from '../../test/chat-mock';
 import { resetRouter, router, setLocalParams } from '../../test/expo-router-mock';
 import { renderScreen } from '../../test/render';
 import { resetSecretsMock, SECRET_ID, SECRET_URL } from '../../test/secrets-mock';
@@ -78,6 +78,7 @@ test('anything else is "Not a OnePeek code"; Scan again resumes scanning', async
 
 test('a safety number from the room: compared with each other member; a match offers "mark verified"', async () => {
   setLocalParams({ room: 'aaaaaaaa-0000-0000-0000-000000000001' });
+  chat.myRooms.mockResolvedValue([room({ id: 'aaaaaaaa-0000-0000-0000-000000000001', ownerPinned: true })]);
   chat.members.mockResolvedValue([
     { deviceId: 'dddddddd-0000-0000-0000-00000000000d', state: 'active', hasKeyPackage: true, role: 'owner', nickname: 'Pulkit', signaturePub: new Uint8Array([1]), verified: null } as never,
     { deviceId: THEM, state: 'active', hasKeyPackage: true, role: 'member', nickname: 'Bea', signaturePub: new Uint8Array([2]), verified: null } as never,
@@ -126,6 +127,17 @@ test('F-2: a member whose key does not match the chat: the scan result shows the
   expect(await screen.findByText('This member’s key doesn’t match the chat. Don’t trust this chat until you’ve checked with them.')).toBeTruthy();
   expect(screen.queryByTestId('scan.verify')).toBeNull();
   expect(chat.markVerified).not.toHaveBeenCalled();
+});
+
+test('F2-7: a match in a room whose owner is not pinned uses the cautious wording', async () => {
+  setLocalParams({ room: 'aaaaaaaa-0000-0000-0000-000000000001' });
+  chat.myRooms.mockResolvedValue([room({ id: 'aaaaaaaa-0000-0000-0000-000000000001', role: 'member', ownerPinned: false })]);
+  chat.safetyNumberWith.mockResolvedValue(DIGITS);
+  chat.members.mockResolvedValue([{ deviceId: THEM, state: 'active', hasKeyPackage: true, role: 'member', nickname: 'Bea', signaturePub: new Uint8Array([2]), verified: null } as never]);
+  await renderScreen(<ScanScreen />);
+  await screen.findByTestId('scan.camera');
+  await scan(`onepeek-verify:${DIGITS}`);
+  expect(await screen.findByText('The numbers match. The key this chat holds for Bea is really theirs. Check the member list for devices you don’t recognise.')).toBeTruthy();
 });
 
 test('torch toggles the camera prop; Close leaves', async () => {

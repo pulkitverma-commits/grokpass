@@ -63,13 +63,22 @@ Plain statements of what Secret Chat does not do. The public page (/secret-chat)
 15. **What a matching safety number proves, and what it doesn't.** Safety numbers are computed from the
    signing keys inside the encrypted group (the MLS tree), so a server that swaps a member's key can no
    longer make two screens show the same number. The apps also compare each member's key in the group
-   with the key the server lists for that device: the owner won't admit a key package that doesn't
-   match; a member refuses a Welcome that the listed owner didn't sign with its listed key, a commit
-   from anyone but the owner's device, and a Welcome or commit that brings in a key that doesn't match
-   (the chat then stops updating for that member and says so); and a member whose key changes on the
-   server afterwards is shown as a key mismatch and can't be marked verified. Every device in the
-   encrypted group is in the member list, and the verify screen says how many devices can read the chat.
+   with the key the server lists for that device, and invite links pin the owner: a link carries,
+   after the token in its `#` fragment (which never reaches a server), the owner's device id and a
+   hash of its signing key. The joiner accepts a Welcome only if that pinned device signed it with
+   that key, whatever the server says about who the owner is. The owner won't admit a key package that
+   doesn't match its listing; a member refuses a Welcome or an owner's commit that brings in a key
+   that doesn't match (the chat then stops updating for that member and says so); a commit or proposal
+   from anyone but the owner's device is skipped and recorded, and the chat carries on; and a member
+   whose key changes on the server afterwards is shown as a key mismatch and can't be marked verified.
+   Every device in the encrypted group is in the member list, and the verify screen says how many
+   devices can read the chat: check that both screens show the same devices.
    What remains open:
+   - **Invite links made before the owner pin.** They still work. A room joined with one learns who
+     the owner is from the server's listing, so a malicious server could run a second group posing as
+     the owner. Such a room says "This invite didn’t carry the owner’s key, so the app can’t confirm
+     who runs this chat. Ask for a new invite." Comparing the member lists on both screens (and
+     verifying each device you don't recognise) is then the only check; a new invite fixes it.
    - **Before admission.** A person who has used an invite but isn't let in yet has no key in the group,
      so there is no safety number to compare until the owner admits them; until then their key is only
      the one the server lists.
@@ -81,7 +90,7 @@ Plain statements of what Secret Chat does not do. The public page (/secret-chat)
    - **Who sent a message.** Which member a message or nickname is shown under is still the server's
      word (security review F-3): the encryption proves a current member wrote it and nobody changed it,
      not which member.
-   - **A refused key stops the chat for that member.** When a Welcome or commit is refused, that device
+   - **A refused key stops the chat for that member.** When a Welcome or an owner's commit is refused, that device
      stays at the last state it trusted and the chat can't continue there until the server delivers it
      with a listing that agrees. The warning is a record, not a permanent block: it clears when the
      refused change later applies with an agreeing listing, when that device leaves the group, or when

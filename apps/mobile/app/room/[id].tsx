@@ -35,7 +35,7 @@ import { Sheet } from '../../components/Sheet';
 import { Segmented } from '../../components/Segmented';
 import { colors, radii, spacing, touchTarget } from '../../theme';
 import { MAX_ATTACHMENT_BYTES, deletePicked, pickDocument, pickPhoto, fileSource, type Picked } from '@/lib/files';
-import { KEY_STOP_NOTICE, KIND_SHORT, TIMERS, UNLISTED_NOTE, errorCode, friendlyError, keyChanged, memberName, roomTitle, ttlLabel } from '@/lib/format';
+import { KEY_STOP_NOTICE, KIND_SHORT, TIMERS, UNLISTED_NOTE, UNPINNED_NOTICE, errorCode, friendlyError, keyChanged, memberName, roomTitle, ttlLabel } from '@/lib/format';
 import { secretLinkFrom, stashHandoff } from '@/lib/links';
 import type { LocalMessage } from '@onepeek/core';
 
@@ -396,6 +396,7 @@ export default function RoomScreen() {
           ListHeaderComponent={
             <View style={styles.intro}>
               <Text variant="meta" tone="muted" center style={styles.introBox}>{secret ? INTRO_SECRET : INTRO_QUICK}</Text>
+              {room?.ownerPinned === false ? <Text variant="meta" tone="danger" center style={styles.introBox} testID="room.unpinned">{UNPINNED_NOTICE}</Text> : null}
               {keyStop ? <Text variant="meta" tone="danger" center style={styles.introBox} accessibilityLiveRegion="polite" testID="room.keyStop">{KEY_STOP_NOTICE}</Text> : null}
               {members.filter((m) => (m.state === 'active' || m.keyMismatch) && keyChanged(m)).map((m) => (
                 <Pressable key={m.deviceId} onPress={() => setMenu('verify')} accessibilityRole="button"

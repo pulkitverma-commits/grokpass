@@ -289,26 +289,46 @@ export type Incoming =
  */
 export async function receive(
   state: ClientState, bytes: Uint8Array, ownDeviceId: string, directory?: KeyDirectory,
-  /** Commits only: whether this device may commit (the chat client accepts the listed owner only). */
-  acceptCommitter?: (deviceId: string) => Promise<boolean>,
+  /**
+   * Commits and proposals only: whether this device (its leaf before the change) may change the
+   * group. The chat client accepts the pinned (or listed) owner only. Asked before any key or
+   * format check, so a refusal here says who sent it: `KeyMismatchError(.., 'committer')`, and a
+   * key/format refusal afterwards is always about a change from an accepted committer.
+   */
+  acceptCommitter?: (deviceId: string, signaturePublicKey: Uint8Array) => Promise<boolean>,
 ): Promise<Incoming> {
   const m = decodeOne(bytes);
   if (m.wireformat !== 'mls_private_message') throw new Error('not_private_message');
+  const cs = await suite();
+  if (acceptCommitter) {
+    // Pass 1, nothing checked but decryption: learn what this is and who sent it. Its result is
+    // dropped (and its consumed secrets are not zeroed: they belong to `state`, used again below).
+    let sender: number | undefined;
+    let changes = false;
+    const peek = await processPrivateMessage({ ...state, clientConfig: configWith({ async validateCredential() { return true; } }) }, m.privateMessage, emptyPskIndex, cs,
+      (incoming) => {
+        changes = true;
+        sender = incoming.kind === 'commit' ? incoming.senderLeafIndex : incoming.proposal.senderLeafIndex;
+        return 'accept';
+      });
+    if (peek.kind === 'applicationMessage' && !changes) {
+      // An application message: no credential is involved, so pass 1 is the answer.
+      peek.consumed.forEach(zeroOutUint8Array);
+      return { kind: 'message', state: { ...peek.newState, clientConfig: state.clientConfig }, payload: parsePayload(peek.message), senderDeviceId: null };
+    }
+    {
+      const who = sender === undefined ? undefined : memberLeaves(state).find(l => l.leafIndex === sender);
+      if (!who || !(await acceptCommitter(who.deviceId, who.signaturePublicKey))) throw new KeyMismatchError(who ? [who.deviceId] : [], 'committer', who ? [who.signaturePublicKey] : []);
+    }
+  }
   const check = keyCheck(directory);
-  let committerLeaf: number | undefined;
   let r: Awaited<ReturnType<typeof processPrivateMessage>>;
   try {
-    r = await processPrivateMessage({ ...state, clientConfig: configWith(check.service) }, m.privateMessage, emptyPskIndex, await suite(),
-      (incoming) => { if (incoming.kind === 'commit') committerLeaf = incoming.senderLeafIndex; return 'accept'; });
+    r = await processPrivateMessage({ ...state, clientConfig: configWith(check.service) }, m.privateMessage, emptyPskIndex, cs);
   } catch (e) {
     throw check.failure() ?? e;
   }
   r.consumed.forEach(zeroOutUint8Array);
-  if (r.kind !== 'applicationMessage' && acceptCommitter) {
-    // Who committed, by their leaf in the tree before this commit. The new state is dropped unless accepted.
-    const before = committerLeaf === undefined ? undefined : memberLeaves(state).find(l => l.leafIndex === committerLeaf);
-    if (!before || !(await acceptCommitter(before.deviceId))) throw new KeyMismatchError(before ? [before.deviceId] : [], 'committer');
-  }
   const newState = { ...r.newState, clientConfig: state.clientConfig };
   if (r.kind === 'applicationMessage') {
     const payload = parsePayload(r.message);

@@ -8,7 +8,7 @@ import QrCode from '../../../components/QrCode';
 import { SHOT_EVENT, panicExit } from '../../ChatShell';
 import * as chat from '@/lib/chat/client';
 import type { LocalMessage, RoomSummary } from '@/lib/chat/client';
-import { KEY_HISTORY_NOTE, KIND_NAME, TIMERS, UNLISTED_NOTE, countdown, friendlyError, readersLine, shortId, ttlLabel, verifyLine } from '../../format';
+import { KEY_HISTORY_NOTE, KIND_NAME, TIMERS, UNLISTED_NOTE, UNPINNED_NOTICE, countdown, friendlyError, readersLine, shortId, ttlLabel, verifyLine } from '../../format';
 
 type Member = Awaited<ReturnType<typeof chat.members>>[number];
 type Sheet = null | 'menu' | 'invite' | 'timer' | 'members' | 'verify' | 'burn' | 'leave' | 'file';
@@ -316,6 +316,7 @@ export default function ConversationPage() {
         <p className="c-notice">{secret
           ? 'Press and hold a message to read it. Screenshot shortcuts blur the chat and everyone is told. No website can stop a camera, so share carefully.'
           : 'Messages are encrypted on each device and disappear on a timer. Screenshot shortcuts blur the chat and everyone is told.'}</p>
+        {room && !room.ownerPinned && <p className="c-notice" style={{ color: 'var(--c-danger)' }}>{UNPINNED_NOTICE}</p>}
         {keyWarnings.map(m => (
           <p key={m.deviceId} className="c-notice" style={{ color: 'var(--c-danger)' }}>
             {m.keyMismatch ? `${nameOf(m.deviceId)}: ${friendlyError('member_key_mismatch')}` : m.unlisted ? `${nameOf(m.deviceId)}: ${UNLISTED_NOTE}.` : `${nameOf(m.deviceId)}’s security key changed.`} <button className="c-link" onClick={() => setSheet('verify')}>Verify again</button>

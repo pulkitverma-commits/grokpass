@@ -11,6 +11,7 @@ export {
   createChatClient, ChatError, toBytea, fromBytea, keyChanged, MAX_ATTACHMENT_BYTES,
   type ChatClient, type RoomKind, type ExpiryMode, type LocalMessage, type RoomSummary, type SyncResult, type DeviceRecord,
 } from './chat/client';
+export { parseInviteFragment, INVITE_FRAGMENT_RE, type OwnerPin } from './chat/invite';
 export { createWebKeyStore } from './adapters/web/keystore';
 export { createWebPlatform, withBlobUploads, webEnv, webLock, fileSource, toBlob } from './adapters/web/platform';
 

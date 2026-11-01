@@ -117,7 +117,8 @@ describe('Secret Chat end to end (two browsers)', () => {
 
     const roomId = await on(alice, c => c.createRoom({ kind: 'secret', ttl: 30, mode: 'on_open', lifetime: 3600, accessCode: 'blue-river-42', name: 'Launch' }));
     const { link } = await on(alice, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
-    expect(link).toMatch(/^https:\/\/onepeek\.test\/chat\/join#[A-Za-z0-9_-]{40,}$/);
+    // F2-7: the owner pin rides in the fragment after the token.
+    expect(link).toMatch(/^https:\/\/onepeek\.test\/chat\/join#[A-Za-z0-9_-]{40,}\.1[A-Za-z0-9_-]{64}$/);
 
     // The invite token never appears in a server-side lookup other than as an argument to be hashed.
     expect(await on(guest, c => c.peekInvite(tokenOf(link)))).toEqual({ needs_code: true, kind: 'secret' });
@@ -248,8 +249,34 @@ describe('Secret Chat end to end (two browsers)', () => {
     expect(ms.filter(a.c.keyChanged).map(m => m.deviceId)).toEqual([bDev]);   // the page's warning list
     expect(ms.filter(m => m.inGroup)).toHaveLength(2);
     expect(fmt.UNLISTED_NOTE).toBe('Not listed by the server: this device can still read the chat');
-    expect(fmt.verifyLine('Bo')).toBe('Compare these numbers in person or on a call. If they match on both screens, your messages reach Bo’s real device. Everyone who can read this chat is in the member list.');
+    expect(fmt.verifyLine('Bo')).toBe('Compare these numbers in person or on a call. If they match on both screens, your messages reach Bo’s real device. Everyone who can read this chat is in the member list: check that both screens show the same devices, and verify each one you don’t recognise.');
     expect(fmt.KEY_HISTORY_NOTE).toBe('The server once showed a different key for them; compare again.');
+  });
+
+  it('F2-7: a link made before the owner pin (token only) still joins on the web; the room is marked unpinned and the page shows the notice', async () => {
+    const fmt = await import('../../app/chat/format');
+    const a = await browser('a5', '34000000-0000-4000-8000-000000000034');
+    const b = await browser('b5', '44000000-0000-4000-8000-000000000044');
+    const roomId = await on(a, c => c.createRoom({ kind: 'secret', ttl: 300, mode: 'on_open', lifetime: 3600 }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    const fragment = tokenOf(link);
+    const bare = fragment.split('.')[0];
+    expect(a.c.parseInviteFragment(fragment)!.pin).not.toBeNull();
+    expect(a.c.parseInviteFragment(bare)).toEqual({ token: bare, pin: null });   // the join page's check
+    lastSql = [];
+    await on(b, c => c.redeemInvite(bare, 'Old'));
+    await on(a, c => c.admitPending(roomId));
+    expect((await on(b, c => c.sync(roomId))).joined).toBe(true);
+    expect((await on(b, c => c.myRooms())).find(r => r.id === roomId)!.ownerPinned).toBe(false);
+    expect((await on(a, c => c.myRooms())).find(r => r.id === roomId)!.ownerPinned).toBe(true);
+    expect(fmt.UNPINNED_NOTICE).toBe('This invite didn’t carry the owner’s key, so the app can’t confirm who runs this chat. Ask for a new invite.');
+    // A pinned link: the pin never reaches the server.
+    const { link: pinned } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    const c3 = await browser('c5', '45000000-0000-4000-8000-000000000045');
+    lastSql = [];
+    await on(c3, c => c.redeemInvite(tokenOf(pinned), 'New'));
+    expect(JSON.stringify(lastSql)).not.toContain(tokenOf(pinned).split('.')[1]);
+    expect(lastSql.find(x => x.fn === 'chat_redeem_invite')!.args.p_token).toBe(tokenOf(pinned).split('.')[0]);
   });
 
   it('removed members are locked out; Burn Chat wipes server and local state', async () => {

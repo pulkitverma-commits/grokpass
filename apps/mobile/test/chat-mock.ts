@@ -2,7 +2,7 @@
 //   jest.mock('@/lib/chat', () => require('../../test/chat-mock').chatMock);
 // Every function is a jest.fn() so each test sets the behaviour it needs. Nothing here talks to a
 // network, a keystore or Supabase.
-export type MockRoom = { id: string; kind: 'quick' | 'secret' | 'business'; role: 'owner' | 'member'; memberState: 'pending' | 'active'; ttl: number; mode: 'on_open' | 'on_send'; expiresAt: string; name: string | null };
+export type MockRoom = { id: string; kind: 'quick' | 'secret' | 'business'; role: 'owner' | 'member'; memberState: 'pending' | 'active'; ttl: number; mode: 'on_open' | 'on_send'; expiresAt: string; name: string | null; ownerPinned?: boolean };
 
 export const room = (over: Partial<MockRoom> = {}): MockRoom => ({
   id: '11111111-2222-3333-4444-555555555555', kind: 'secret', role: 'owner', memberState: 'active', ttl: 30, mode: 'on_open',

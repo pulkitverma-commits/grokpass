@@ -22,6 +22,14 @@ beforeEach(() => { resetChatMock(); resetRouter(); mockLink.url = null; mockSecu
 
 const STALE_TOKEN = 's'.repeat(40) + 'OLD';
 
+test('F2-7: a link with the owner pin hands token.pin to the core (which sends only the token); the pin is never drawn', async () => {
+  const PINNED = `${TOKEN}.1${'p'.repeat(64)}`;
+  mockLink.url = `https://onepeek.io/chat/join#${PINNED}`;
+  await renderScreen(<JoinDeepLinkRoute />);
+  await waitFor(() => expect(chat.peekInvite).toHaveBeenCalledWith(PINNED));
+  expect(JSON.stringify(screen.toJSON())).not.toContain('p'.repeat(64));
+});
+
 test('P3-2: a stash from the scanner or the share sheet is used when no link opened the screen, and read once', async () => {
   stashHandoff('invite', `https://onepeek.io/chat/join#${TOKEN}`);
   await renderScreen(<JoinDeepLinkRoute />);

@@ -4,6 +4,15 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- native-security (N6) merged: Android share receive (intent filters + local Kotlin module `modules/share-intent`
+  copying shared items into `<cache>/share-intent/`, consumed once, swept), `useShareIntent()` routing to `/share`
+  (lead wired `ShareIntentBridge` in the root layout), strict `parseOnePeekLink` (secret / invite / verify / auth),
+  `forgetLinkingURL()` so the fragment leaves the native initial-URL cache after the key is imported, App Group reader
+  for iOS, `withShareExtension` plugin: App Group entitlement always on, the hand-rolled Share Extension target
+  **experimental and off** (`ONEPEEK_SHARE_EXTENSION=1`). Fragment audit in README N6c: expo-router never puts the
+  hash into navigation state. Recommendation accepted: install `expo-share-intent@9.0.0` for iOS once the running
+  agents finish (shared node_modules), keep the plugin's extension half off. Mobile 327 tests. Native code compiles
+  only on EAS (MANUAL-CHECKS S21–S27).
 - backend (B5) merged: migration `009_chat_reports` (+down; table service-role only, no policies), RPC `report_chat`
   (member check via 006's `chat_is_member`, reason enum, 20/day cap, upsert per room+reporter), route
   `POST /api/chat/report` with the caller's bearer (anon key + session; exactly `{ p_room, p_reason }` forwarded).

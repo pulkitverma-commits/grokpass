@@ -22,7 +22,7 @@ import { SectionLabel } from '../SectionLabel';
 import { Segmented } from '../Segmented';
 import { Sheet } from '../Sheet';
 import { Text } from '../Text';
-import { KIND_NAME, LIFETIMES, TIMERS, countdown, errorCode, friendlyError, keyChanged, memberName, ttlLabel } from '@/lib/format';
+import { KEY_HISTORY_NOTE, KIND_NAME, LIFETIMES, TIMERS, UNLISTED_NOTE, countdown, errorCode, friendlyError, keyChanged, memberName, readersLine, readersOf, ttlLabel, verifyHint } from '@/lib/format';
 import { REPORT_REASONS, reportRoom, type ReportReason } from '@/lib/report';
 
 export type MenuView = null | 'menu' | 'members' | 'invite' | 'verify' | 'timer' | 'rename' | 'leave' | 'burn' | 'report';
@@ -33,9 +33,10 @@ export const blockedKey = (roomId: string) => `room:${roomId}:blocked`;
 export type Member = {
   deviceId: string; role: 'owner' | 'member'; state: 'pending' | 'active';
   signaturePub: Uint8Array; hasKeyPackage: boolean; nickname: string | null; verified: string | null;
+  keyMismatch?: boolean; keyHistory?: boolean; inGroup?: boolean; unlisted?: boolean; changedGroup?: boolean;
 };
 
-export type MenuRoom = { id: string; kind: 'quick' | 'secret' | 'business'; role: 'owner' | 'member'; ttl: number; mode: 'on_open' | 'on_send'; expiresAt: string; name: string | null };
+export type MenuRoom = { id: string; kind: 'quick' | 'secret' | 'business'; role: 'owner' | 'member'; ttl: number; mode: 'on_open' | 'on_send'; expiresAt: string; name: string | null; ownerPinned?: boolean };
 
 type Props = {
   view: MenuView;
@@ -68,7 +69,7 @@ export function RoomMenu({ view, setView, room, title, members, me, ttl, setTtl,
       {view === 'members' ? <Members room={room} members={members} me={me} isOwner={isOwner} blocked={blocked} onChange={onChange} /> : null}
       {view === 'report' ? <Report room={room} onDone={close} /> : null}
       {view === 'invite' ? <Invite room={room} /> : null}
-      {view === 'verify' ? <Verify roomId={room.id} members={active.filter((m) => m.deviceId !== me)} onChange={onChange} onClose={close} /> : null}
+      {view === 'verify' ? <Verify roomId={room.id} members={active.filter((m) => m.deviceId !== me)} readers={readersOf(members)} ownerPinned={room.ownerPinned === true} onChange={onChange} onClose={close} /> : null}
       {view === 'timer' ? <Timer room={room} ttl={ttl} setTtl={setTtl} isOwner={isOwner} onSaved={() => { onChange(); close(); }} /> : null}
       {view === 'rename' ? <Rename room={room} onSaved={() => { onChange(); close(); }} /> : null}
       {view === 'leave' ? (
@@ -170,7 +171,7 @@ function Members({ room, members, me, isOwner, blocked, onChange }: { room: Menu
           const changed = keyChanged(m);
           const name = memberName(m.nickname, m.deviceId) + (m.deviceId === me ? ' (you)' : '') + (m.role === 'owner' ? ' · owner' : '');
           const isBlocked = blocked.includes(m.deviceId);
-          const status = isBlocked ? 'Blocked on this phone' : changed ? 'Key changed' : m.verified ? 'Verified' : 'Not verified';
+          const status = isBlocked ? 'Blocked on this phone' : m.keyMismatch ? 'Key mismatch' : m.unlisted ? UNLISTED_NOTE : changed ? 'Key changed' : m.verified ? 'Verified' : 'Not verified';
           const who = memberName(m.nickname, m.deviceId);
           return (
             <ListRow key={m.deviceId} leading={<Icon name={isBlocked ? 'ban' : m.verified && !changed ? 'check' : 'user'} size={20} color={isBlocked || changed ? colors.danger : m.verified ? colors.secure : colors.muted} />}
@@ -248,6 +249,7 @@ function Invite({ room }: { room: MenuRoom }) {
   const [invites, setInvites] = useState<{ rows: InviteRow[]; at: number }>({ rows: [], at: 0 });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [pinned, setPinned] = useState(true);
   const load = useCallback(() => { chat().listInvites(room.id).then((rows) => setInvites({ rows, at: Date.now() })).catch(() => {}); }, [chat, room.id]);
   useEffect(() => { load(); }, [load]);
 
@@ -255,7 +257,7 @@ function Invite({ room }: { room: MenuRoom }) {
     setBusy(true); setErr('');
     try {
       const r = await guard(() => chat().createInvite(room.id, { expiresIn: expires, maxUses: uses, approval: room.kind === 'business' }));
-      setLink(r.link); load();
+      setLink(r.link); setPinned(r.ownerPinned !== false); load();
     } catch (e) { setErr(friendlyError(errorCode(e))); }
     finally { setBusy(false); }
   }
@@ -281,14 +283,14 @@ function Invite({ room }: { room: MenuRoom }) {
           </View>
         </>
       ) : null}
-      {link ? <InviteSheet open link={link} kind={room.kind} expiresLabel={LIFETIMES.find((l) => l.s === expires)?.label ?? '1 day'} usesLabel={uses === 1 ? 'once' : `${uses} times`} onDone={() => setLink('')} /> : null}
+      {link ? <InviteSheet open link={link} kind={room.kind} expiresLabel={LIFETIMES.find((l) => l.s === expires)?.label ?? '1 day'} usesLabel={uses === 1 ? 'once' : `${uses} times`} ownerPinned={pinned} onDone={() => setLink('')} /> : null}
     </View>
   );
 }
 
 // ---------------------------------------------------------------------------- verify (safety number)
 
-function Verify({ roomId, members, onChange, onClose }: { roomId: string; members: Member[]; onChange: () => void; onClose: () => void }) {
+function Verify({ roomId, members, readers, ownerPinned, onChange, onClose }: { roomId: string; members: Member[]; readers: number; ownerPinned: boolean; onChange: () => void; onClose: () => void }) {
   const { chat, guard } = useChat();
   const router = useRouter();
   const [who, setWho] = useState<Member | null>(members.length === 1 ? members[0]! : null);
@@ -300,7 +302,8 @@ function Verify({ roomId, members, onChange, onClose }: { roomId: string; member
   useEffect(() => {
     if (!who) return;
     let alive = true;
-    chat().safetyNumberWith(roomId, who.deviceId).then((n) => alive && setNum(n)).catch(() => alive && setErr('The safety number couldn’t be calculated.'));
+    chat().safetyNumberWith(roomId, who.deviceId).then((n) => alive && setNum(n))
+      .catch((e) => alive && setErr(errorCode(e) === 'member_key_mismatch' ? friendlyError('member_key_mismatch') : 'The safety number couldn’t be calculated.'));
     return () => { alive = false; };
   }, [who, roomId, chat]);
 
@@ -310,7 +313,7 @@ function Verify({ roomId, members, onChange, onClose }: { roomId: string; member
       <View style={styles.card}>
         {members.map((m) => (
           <ListRow key={m.deviceId} leading={<Icon name="shield" size={20} color={colors.muted} />} title={memberName(m.nickname, m.deviceId)}
-            subtitle={m.verified ? (keyChanged(m) ? 'Key changed' : 'Verified') : 'Not verified'} chevron onPress={() => select(m)} testID="verify.member" />
+            subtitle={m.keyMismatch ? 'Key mismatch' : m.unlisted ? 'Not listed by the server' : m.verified ? (keyChanged(m) ? 'Key changed' : 'Verified') : 'Not verified'} chevron onPress={() => select(m)} testID="verify.member" />
         ))}
       </View>
     );
@@ -320,12 +323,15 @@ function Verify({ roomId, members, onChange, onClose }: { roomId: string; member
   return (
     <View style={styles.stack}>
       <Text variant="title" tone="heading">Verify {name}</Text>
-      <Text variant="sub" tone="muted">Compare these numbers in person or on a call. If they match, you’re both seeing the same keys the server gave each of you. This does not yet prove the server didn’t substitute a key.</Text>
+      <Text variant="sub" tone="muted">{verifyHint(name, ownerPinned)}</Text>
+      {who.unlisted ? <Notice tone="error" text={`${UNLISTED_NOTE}.`} /> : null}
+      {who.keyHistory ? <Notice tone="info" text={KEY_HISTORY_NOTE} /> : null}
       {num ? (
         <View style={styles.digits} accessible accessibilityLabel={`Safety number ${groups.join(' ')}`} testID="verify.number">
           {groups.map((g, i) => <Text key={i} variant="h2" mono style={styles.digit}>{g}</Text>)}
         </View>
       ) : <Text variant="sub" tone="muted" center accessibilityLiveRegion="polite">Calculating…</Text>}
+      {num ? <Text variant="meta" tone="muted" center testID="verify.readers">{readersLine(readers)}</Text> : null}
       {num ? (
         <View style={styles.qrWrap} accessible accessibilityLabel="Safety number as a QR code">
           <View style={styles.qrBox}><QRCode value={`onepeek-verify:${num}`} size={150} color="#000" backgroundColor="#fff" /></View>

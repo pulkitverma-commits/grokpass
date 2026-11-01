@@ -16,15 +16,15 @@ jest.mock('@/security', () => ({ ...jest.requireActual('@/security/constants'), 
 const mockFetch = jest.fn(async () => ({ ok: true, status: 200 }));
 
 const ME = 'dddddddd-0000-0000-0000-00000000000d';
-const ROOM = room({ id: 'aaaaaaaa-0000-0000-0000-000000000001', kind: 'secret', name: 'Vault handover', ttl: 30 });
+const ROOM = room({ id: 'aaaaaaaa-0000-0000-0000-000000000001', kind: 'secret', name: 'Vault handover', ttl: 30, ownerPinned: true });
 const MEMBERS: Member[] = [
   { deviceId: ME, role: 'owner', state: 'active', signaturePub: new Uint8Array([1]), hasKeyPackage: true, nickname: 'Pulkit', verified: null },
   { deviceId: THEM, role: 'member', state: 'active', signaturePub: new Uint8Array([2]), hasKeyPackage: true, nickname: 'Bea', verified: null },
 ];
 
-function Harness({ initial, onGone = jest.fn(), onChange = jest.fn(), role = 'owner' as 'owner' | 'member', blocked = [] as string[] }: { initial: MenuView; onGone?: () => void; onChange?: () => void; role?: 'owner' | 'member'; blocked?: string[] }) {
+function Harness({ initial, onGone = jest.fn(), onChange = jest.fn(), role = 'owner' as 'owner' | 'member', blocked = [] as string[], ownerPinned = true }: { initial: MenuView; onGone?: () => void; onChange?: () => void; role?: 'owner' | 'member'; blocked?: string[]; ownerPinned?: boolean }) {
   const [view, setView] = useState<MenuView>(initial);
-  return <RoomMenu view={view} setView={setView} room={{ ...ROOM, role }} title="Vault handover" members={MEMBERS} me={ME} ttl={30} setTtl={jest.fn()} blocked={blocked} onChange={onChange} onGone={onGone} />;
+  return <RoomMenu view={view} setView={setView} room={{ ...ROOM, role, ownerPinned }} title="Vault handover" members={MEMBERS} me={ME} ttl={30} setTtl={jest.fn()} blocked={blocked} onChange={onChange} onGone={onGone} />;
 }
 
 beforeEach(() => { resetChatMock(); resetRouter(); mockPanic.mockClear(); mockFetch.mockClear().mockResolvedValue({ ok: true, status: 200 }); (globalThis as { fetch: unknown }).fetch = mockFetch; });
@@ -61,13 +61,30 @@ test('safety number comes from safetyNumberWith, in groups of five with a QR; ma
   expect(await screen.findByTestId('verify.number')).toBeTruthy();
   expect(screen.getAllByText('12345')).toHaveLength(6);
   expect(screen.getByTestId('qr')).toBeTruthy();
-  // F-2: the numbers compare keys the server supplied; the copy says so and claims nothing more.
-  expect(screen.getByText('Compare these numbers in person or on a call. If they match, you’re both seeing the same keys the server gave each of you. This does not yet prove the server didn’t substitute a key.')).toBeTruthy();
+  // F-2 fixed in the core: the numbers come from the keys inside the encrypted group, and the copy says that much.
+  expect(screen.getByText('Compare these numbers in person or on a call. If they match, the key this chat holds for Bea is really theirs.')).toBeTruthy();
+  expect(screen.getByTestId('verify.readers').props.children).toBe('2 devices can read this chat');
+  expect(screen.queryByText(/does not yet prove/)).toBeNull();
   expect(screen.queryByText(/intercept/i)).toBeNull();
   expect(screen.getByText('They match — mark verified')).toBeTruthy();
   await fireEvent.press(screen.getByTestId('verify.mark'));
   await waitFor(() => expect(chat.markVerified).toHaveBeenCalledWith(ROOM.id, THEM));
   expect(onChange).toHaveBeenCalled();
+});
+
+test('F2-7: in a room joined from a link without the owner pin, the verify view uses the cautious wording', async () => {
+  await renderScreen(<Harness initial="verify" role="member" ownerPinned={false} />);
+  expect(await screen.findByTestId('verify.number')).toBeTruthy();
+  expect(screen.getByText('Compare these numbers in person or on a call. If they match on both screens, your messages reach Bea’s real device. Everyone who can read this chat is in the member list: check that both screens show the same devices, and verify each one you don’t recognise.')).toBeTruthy();
+});
+
+test('F-2: a member whose key does not match the chat: the verify view shows the mismatch message and no number to mark verified', async () => {
+  chat.safetyNumberWith.mockRejectedValueOnce(Object.assign(new Error('member_key_mismatch'), { code: 'member_key_mismatch' }));
+  await renderScreen(<Harness initial="verify" />);
+  expect(await screen.findByText('This member’s key doesn’t match the chat. Don’t trust this chat until you’ve checked with them.')).toBeTruthy();
+  expect(screen.queryByTestId('verify.number')).toBeNull();
+  await fireEvent.press(screen.getByTestId('verify.mark'));
+  expect(chat.markVerified).not.toHaveBeenCalled();
 });
 
 test('members: the owner can remove someone after confirming; removeMember gets the device id', async () => {
@@ -86,6 +103,14 @@ test('timer: the owner saves a room default through setTimer', async () => {
   await fireEvent.press(await screen.findByTestId('timer.mode.sent'));
   await fireEvent.press(screen.getByTestId('timer.save'));
   await waitFor(() => expect(chat.setTimer).toHaveBeenCalledWith(ROOM.id, 30, 'on_send'));
+});
+
+test('F2-10: an invite the core could not pin (this member joined with an older link) says so in the invite sheet', async () => {
+  chat.createInvite.mockResolvedValueOnce({ id: 'inv-2', link: 'https://onepeek.io/chat/join#' + 'T'.repeat(43), ownerPinned: false } as never);
+  await renderScreen(<Harness initial="invite" role="member" />);
+  await fireEvent.press(await screen.findByTestId('invite.create'));
+  expect(await screen.findByTestId('invite.unpinned')).toBeTruthy();
+  expect(screen.getByText('This invite can’t carry the owner’s key because you joined with an older link.')).toBeTruthy();
 });
 
 test('invite: creates with the chosen expiry and uses, lists and revokes existing invites', async () => {

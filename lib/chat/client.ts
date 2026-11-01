@@ -13,6 +13,7 @@ import { createWebPlatform, fileSource, toBlob } from '../../packages/core/src/a
 import { keystore as ks } from './keystore';
 
 export { ChatError, toBytea, fromBytea, keyChanged, MAX_ATTACHMENT_BYTES, SYNC_PAGE_SIZE, SYNC_MAX_PAGES, RESUBSCRIBE_DELAYS_MS } from '../../packages/core/src/chat/client';
+export { parseInviteFragment, INVITE_FRAGMENT_RE } from '../../packages/core/src/chat/invite';
 export type { RoomKind, ExpiryMode, LocalMessage, RoomSummary, SyncResult, DeviceRecord, ChatClient } from '../../packages/core/src/chat/client';
 export type { ChatPlatform, FileSource, OpenedFile, KeyStore, SupabaseLike, ChatEnv, LockStore } from '../../packages/core/src/chat/ports';
 

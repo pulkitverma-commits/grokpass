@@ -563,6 +563,40 @@ describe('accessibility (qa A1, A2, §12 key-changed row)', () => {
     } finally { announce.mockRestore(); }
   });
 
+  test('F2-6: a sync refused for a key mismatch shows a persistent notice; a mismatched pending member gets the mismatch row with its own label', async () => {
+    chat.sync.mockRejectedValue(Object.assign(new Error('member_key_mismatch'), { code: 'member_key_mismatch' }));
+    chat.members.mockResolvedValue([MEMBERS[0]!, { ...MEMBERS[1]!, state: 'pending' as const, keyMismatch: true }] as never);
+    await open([]);
+    expect(await screen.findByText('This chat stopped updating because a member’s key doesn’t match. Don’t trust it until you’ve checked with them.')).toBeTruthy();
+    const row = await screen.findByTestId('room.keyMismatch');
+    expect(row.props.accessibilityLabel).toBe('A member’s key doesn’t match the chat. Open Verify people.');
+    expect(screen.getByText('Bea wasn’t let in. This member’s key doesn’t match the chat. Don’t trust this chat until you’ve checked with them.')).toBeTruthy();
+  });
+
+  test('F2-7: a room joined from a link without the owner pin shows the persistent notice; a pinned one does not', async () => {
+    chat.myRooms.mockResolvedValue([room({ id: ROOM.id, role: 'member', name: 'Vault handover', ownerPinned: false })]);
+    await open([]);
+    expect(await screen.findByTestId('room.unpinned')).toBeTruthy();
+    expect(screen.getByText('This invite didn’t carry the owner’s key, so the app can’t confirm who runs this chat. Ask for a new invite.')).toBeTruthy();
+  });
+
+  test('third pass (c): a Welcome refused because it was not from the pinned owner says so; F2-11: an owner the stored pin no longer recognises is surfaced', async () => {
+    chat.sync.mockRejectedValue(Object.assign(new Error('invite_owner_mismatch'), { code: 'invite_owner_mismatch' }));
+    chat.members.mockResolvedValue([{ ...MEMBERS[0]!, changedGroup: true }, MEMBERS[1]!] as never);
+    await open([]);
+    expect(await screen.findByText('We couldn’t confirm this chat: the device letting you in isn’t the owner your invite named. Don’t trust this chat. Check with the person who invited you, and ask the owner for a new invite.')).toBeTruthy();
+    expect(screen.getByTestId('room.ownerUnrecognised')).toBeTruthy();
+    expect(screen.getByText('Your copy of this chat no longer recognises its owner. Don’t trust it until you’ve checked with them.')).toBeTruthy();
+  });
+
+  test('F2-1: a device the server does not list gets its own row', async () => {
+    chat.members.mockResolvedValue([MEMBERS[0]!, { ...MEMBERS[1]!, unlisted: true, inGroup: true }] as never);
+    await open([]);
+    const row = await screen.findByTestId('room.unlisted');
+    expect(row.props.accessibilityLabel).toBe('A device the server doesn’t list can read this chat. Open Verify people.');
+    expect(screen.getByText('Bea: Not listed by the server: this device can still read the chat.')).toBeTruthy();
+  });
+
   test('the key-changed row has a fixed label without the nickname', async () => {
     const changed = [MEMBERS[0]!, { ...MEMBERS[1]!, verified: '\\x99' }];   // verified a key that is no longer theirs
     chat.members.mockResolvedValue(changed);

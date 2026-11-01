@@ -60,3 +60,52 @@ Plain statements of what Secret Chat does not do. The public page (/secret-chat)
    sent (forward secrecy: a key is never reused, even after a crash or retry), so a send that then fails, for
    example offline, consumes a ratchet generation that no one ever receives, and recipients simply skip it
    when they decrypt the next message; this is by design, not a bug to fix.
+15. **What a matching safety number proves, and what it doesn't.** Safety numbers are computed from the
+   signing keys inside the encrypted group (the MLS tree), so a server that swaps a member's key can no
+   longer make two screens show the same number. The apps also compare each member's key in the group
+   with the key the server lists for that device, and invite links pin the owner: a link carries,
+   after the token in its `#` fragment (which never reaches a server), the owner's device id and a
+   hash of its signing key. The joiner accepts a Welcome only if that pinned device signed it with
+   that key, whatever the server says about who the owner is. The owner won't admit a key package that
+   doesn't match its listing; a member refuses a Welcome or an owner's commit that brings in a key
+   that doesn't match (the chat then stops updating for that member and says so); a commit or proposal
+   from anyone but the owner's device is skipped and recorded, and the chat carries on; and a member
+   whose key changes on the server afterwards is shown as a key mismatch and can't be marked verified.
+   Every device in the encrypted group is in the member list, and the verify screen says how many
+   devices can read the chat: check that both screens show the same devices.
+   When the Welcome arrives, the pinned device must also be the device the server lists as the
+   owner; a link that pins anyone else is refused ("We couldn’t confirm this chat: the device letting
+   you in isn’t the owner your invite named. …").
+   What remains open:
+   - **Who may send a Welcome or commit, server side.** The server accepts a Welcome or commit row
+     from any active member (`chat_send`); only the apps refuse ones not from the owner. Recommended
+     (a human decision, no migration in this change): restrict `p_kind in ('welcome','commit')` in
+     `chat_send` to the room's owner device, except the member removals it already allows.
+   - **Invite links made before the owner pin.** They still work. A room joined with one learns who
+     the owner is from the server's listing, so a malicious server could run a second group posing as
+     the owner. Such a room says "This invite didn’t carry the owner’s key, so the app can’t confirm
+     who runs this chat. Ask for a new invite." Comparing the member lists on both screens (and
+     verifying each device you don't recognise) is then the only check. A new invite from the owner,
+     or from a member whose own room shows no such notice, fixes it: every invite carries the room
+     owner's pin (never the pin of the member who made it), and a member who joined with an older
+     link makes unpinned invites and is told so ("This invite can’t carry the owner’s key because you
+     joined with an older link."). A link whose pin is damaged is refused as invalid, not joined
+     unpinned. **Sunset:** links with the token alone are accepted until 2027-02-01 (proposed; three
+     months after pinned links shipped), after which the apps will refuse them as invalid.
+   - **Before admission.** A person who has used an invite but isn't let in yet has no key in the group,
+     so there is no safety number to compare until the owner admits them; until then their key is only
+     the one the server lists.
+   - **Devices the server doesn't list.** A device that is still in the encrypted group but that the
+     server doesn't list (one that left or was revoked before the owner's app removed it, or one a
+     malicious server hides) is shown in the member list as "Not listed by the server: this device can
+     still read the chat", and it can read the chat until it is removed. Its key is checked by format
+     only; compare its safety number, or have the owner remove it.
+   - **Who sent a message.** Which member a message or nickname is shown under is still the server's
+     word (security review F-3): the encryption proves a current member wrote it and nobody changed it,
+     not which member.
+   - **A refused key stops the chat for that member.** When a Welcome or an owner's commit is refused, that device
+     stays at the last state it trusted and the chat can't continue there until the server delivers it
+     with a listing that agrees. The warning is a record, not a permanent block: it clears when the
+     refused change later applies with an agreeing listing, when that device leaves the group, or when
+     the member is verified again on a key that agrees; until then a member whose key agrees again shows
+     "The server once showed a different key for them; compare again."

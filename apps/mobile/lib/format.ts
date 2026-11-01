@@ -57,6 +57,33 @@ export function errorCode(e: unknown): string {
   return e && typeof e === 'object' && 'code' in e && typeof (e as { code: unknown }).code === 'string' ? (e as { code: string }).code : '';
 }
 
+/** Security review f2-tree-keys.md (F2-1, F2-2, F2-5, F2-6): copy for member keys. */
+export const UNLISTED_NOTE = 'Not listed by the server: this device can still read the chat';
+export const KEY_HISTORY_NOTE = 'The server once showed a different key for them; compare again.';
+export const KEY_STOP_NOTICE = 'This chat stopped updating because a member’s key doesn’t match. Don’t trust it until you’ve checked with them.';
+export function readersLine(n: number) { return `${n} ${n === 1 ? 'device can' : 'devices can'} read this chat`; }
+/** Re-review F2-7: the owner is pinned (this phone runs the chat, or joined with a link carrying the owner's key)… */
+export function verifyHint(name: string, ownerPinned = true) {
+  return ownerPinned
+    ? `Compare these numbers in person or on a call. If they match, the key this chat holds for ${name} is really theirs.`
+    : `Compare these numbers in person or on a call. If they match on both screens, your messages reach ${name}’s real device. Everyone who can read this chat is in the member list: check that both screens show the same devices, and verify each one you don’t recognise.`;
+}
+export function scanMatchLine(name: string, ownerPinned = true) {
+  return ownerPinned
+    ? `The numbers match. The key this chat holds for ${name} is really theirs.`
+    : `The numbers match. The key this chat holds for ${name} is really theirs. Check the member list for devices you don’t recognise.`;
+}
+/** Third pass F2-10: an invite made by a member who joined with an older (unpinned) link. */
+export const INVITE_UNPINNED_NOTE = 'This invite can’t carry the owner’s key because you joined with an older link.';
+/** Third pass F2-11: the stored owner pin no longer matches the device that changes the group. */
+export const OWNER_UNRECOGNISED_NOTICE = 'Your copy of this chat no longer recognises its owner. Don’t trust it until you’ve checked with them.';
+/** Sync codes the room screen shows as a persistent notice. */
+export const KEY_SYNC_CODES = ['member_key_mismatch', 'invite_owner_mismatch'];
+/** Shown in a room joined from a link without the owner pin (made before F2-7). */
+export const UNPINNED_NOTICE = 'This invite didn’t carry the owner’s key, so the app can’t confirm who runs this chat. Ask for a new invite.';
+/** Devices with a leaf in this phone's copy of the group (`inGroup`; an older core without it: active members). */
+export function readersOf(members: { state: string; inGroup?: boolean }[]) { return members.filter((m) => m.inGroup ?? m.state === 'active').length; }
+
 export function friendlyError(code: string) {
   switch (code) {
     case 'access_code_wrong': return 'That access code isn’t right.';
@@ -73,6 +100,8 @@ export function friendlyError(code: string) {
     case 'view_once_sent': return 'You sent this as view once, so it can’t be opened on your side.';
     case 'gone': return 'That file has already been opened or has expired.';
     case 'no_local_state': return 'You haven’t been let into this chat yet. Wait for the owner, then try again.';
+    case 'invite_owner_mismatch': return 'We couldn’t confirm this chat: the device letting you in isn’t the owner your invite named. Don’t trust this chat. Check with the person who invited you, and ask the owner for a new invite.';
+    case 'member_key_mismatch': return 'This member’s key doesn’t match the chat. Don’t trust this chat until you’ve checked with them.';
     case 'keystore_unavailable': return 'This phone’s chat keys are missing.';
     case 'report_failed': return 'The report couldn’t be sent. Try again.';
     case 'quota_exceeded': return 'You’ve used this month’s free secrets. See onepeek.io/pricing.';
@@ -82,10 +111,16 @@ export function friendlyError(code: string) {
   }
 }
 
-/** Invite tokens travel only in the link's #fragment. Pulls one out of a pasted link or a deep-link URL. */
+/**
+ * Invite tokens travel only in the link's #fragment. Pulls the fragment out of a pasted link or a
+ * deep-link URL: the token, plus `.1<owner pin>` for links made since F2-7 (the core sends only the
+ * token to the server and keeps the pin). A link with the token alone still works (a full stop
+ * right after it, as in a sentence, is punctuation); a `.` followed by anything that isn't a v1 pin
+ * is a damaged link and gives null, like the core's `invite_invalid` (third pass (b)).
+ */
 export function inviteTokenFrom(text: string | null | undefined): string | null {
   if (!text) return null;
-  const m = /#([A-Za-z0-9_-]{32,128})(?:[^A-Za-z0-9_-]|$)/.exec(text.trim());
+  const m = /#([A-Za-z0-9_-]{32,128}(?:\.1[A-Za-z0-9_-]{64})?)(?![A-Za-z0-9_-]|\.[A-Za-z0-9_-])/.exec(text.trim());
   return m ? m[1]! : null;
 }
 
@@ -98,8 +133,12 @@ export function maskLink(link: string) {
   return link.replace(/#.*/, '#••••••');
 }
 
-/** The core's `keyChanged`: a verified member whose signing key no longer matches what was verified. */
-export function keyChanged(m: { verified: string | null; signaturePub: Uint8Array }) {
+/**
+ * The core's `keyChanged`: a verified member whose signing key in the encrypted chat no longer matches
+ * what was verified, or any member whose key in the chat and on the server disagree (`keyMismatch`).
+ */
+export function keyChanged(m: { verified: string | null; signaturePub: Uint8Array; keyMismatch?: boolean; unlisted?: boolean }) {
+  if (m.keyMismatch || m.unlisted) return true;
   if (!m.verified) return false;
   let hex = '\\x';
   for (let i = 0; i < m.signaturePub.length; i++) hex += m.signaturePub[i]!.toString(16).padStart(2, '0');

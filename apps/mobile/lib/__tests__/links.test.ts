@@ -1,12 +1,28 @@
 // lib/links: classification of scanned / shared / tapped text, and the one-shot hand-off.
+import { inviteTokenFrom } from '../format';
 import { classify, clearHandoffs, HANDOFF_TTL_MS, inviteLinkFrom, secretLinkFrom, stashHandoff, takeHandoff, verifyDigitsFrom } from '../links';
 
 jest.mock('../secrets', () => ({ isSecretLink: jest.fn((u: string) => !u.includes('reject-me')) }));
 
 const KEY = 'A'.repeat(43);
 const TOKEN = 'T'.repeat(43);
+const PIN = '1' + 'p'.repeat(64);   // F2-7 owner pin after the token
 
 beforeEach(() => clearHandoffs());
+
+test('F2-7: invite links with the owner pin keep it (token.pin); old links without it still parse; a damaged pin is no link at all', () => {
+  const pinned = `https://onepeek.io/chat/join#${TOKEN}.${PIN}`;
+  expect(inviteLinkFrom(`open ${pinned} please`)).toEqual({ url: pinned, token: `${TOKEN}.${PIN}` });
+  expect(classify(`onepeek://chat/join#${TOKEN}.${PIN}`)).toEqual({ kind: 'invite', url: `onepeek://chat/join#${TOKEN}.${PIN}`, token: `${TOKEN}.${PIN}` });
+  expect(inviteLinkFrom(`https://onepeek.io/chat/join#${TOKEN}`)?.token).toBe(TOKEN);
+  expect(inviteLinkFrom(`https://onepeek.io/chat/join#${TOKEN}.`)?.token).toBe(TOKEN);           // sentence full stop
+  expect(inviteLinkFrom(`https://onepeek.io/chat/join#${TOKEN}.1short`)).toBeNull();               // damaged: invite_invalid, not an unpinned join
+  expect(inviteLinkFrom(`https://onepeek.io/chat/join#${TOKEN}.${PIN.slice(0, 40)}`)).toBeNull();     // cut short by a messenger
+  expect(classify(`https://onepeek.io/chat/join#${TOKEN}.2${'p'.repeat(64)}`).kind).toBe('none');    // unknown version
+  expect(inviteTokenFrom(`https://onepeek.io/chat/join#${TOKEN}.1short`)).toBeNull();
+  expect(inviteTokenFrom(`https://onepeek.io/chat/join#${TOKEN}.${PIN}`)).toBe(`${TOKEN}.${PIN}`);
+  expect(inviteTokenFrom(`https://onepeek.io/chat/join#${TOKEN}`)).toBe(TOKEN);
+});
 
 test('secret links: https (with www) and the app scheme, inside surrounding text; the id is returned without the key', () => {
   expect(secretLinkFrom(`https://onepeek.io/s/abcdefgh#${KEY}`)).toEqual({ url: `https://onepeek.io/s/abcdefgh#${KEY}`, id: 'abcdefgh' });

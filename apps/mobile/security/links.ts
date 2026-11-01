@@ -10,8 +10,10 @@
 //            https://www.onepeek.io/s/<id>#<key>    (supabase/migrations/003: A-Z a-z 2-9 without I O l 0 1)
 //            onepeek://s/<id>#<key>                 key: 32 bytes base64url, no padding = exactly 43 chars
 //                                                   (packages/core/src/crypto.ts toB64Url / importKey)
-//   invite   https://onepeek.io/chat/join#<token>   token: base64url, 32..128 chars (lib/format.ts inviteTokenFrom;
-//            onepeek://chat/join#<token>            randomToken(24) gives 32)
+//   invite   https://onepeek.io/chat/join#<token>[.<pin>]   token: base64url, 32..128 chars (randomToken(32) gives 43);
+//            onepeek://chat/join#<token>[.<pin>]            pin (F2-7, packages/core/src/chat/invite.ts): `1` + 64 base64url
+//                                                           chars (owner device id + SHA-256 of its signing key).
+//                                                           Old links carry the token alone; any other `.` suffix is null.
 //   verify   onepeek-verify:<60 digits>             the safety-number QR (components/room/RoomMenu.tsx; mls.ts safetyNumber)
 //   auth     onepeek://auth[?...][#...]             the OAuth / email-link callback; parameters are NOT parsed here
 //                                                   (lib/chat.ts parseAuthCallback does that)
@@ -28,13 +30,13 @@ import { clearIntentData } from '@/modules/share-intent';
 
 export type OnePeekLink =
   | { kind: 'secret'; id: string; key: string }
-  | { kind: 'invite'; token: string }
+  | { kind: 'invite'; token: string; pin?: string }
   | { kind: 'verify'; digits: string }
   | { kind: 'auth' };
 
 const SECRET_ID = /^[A-HJ-NP-Za-km-z2-9]{10}$/;
 const SECRET_KEY = /^[A-Za-z0-9_-]{43}$/;
-const INVITE_TOKEN = /^[A-Za-z0-9_-]{32,128}$/;
+const INVITE_FRAGMENT = /^([A-Za-z0-9_-]{32,128})(?:\.(1[A-Za-z0-9_-]{64}))?$/;
 const VERIFY_DIGITS = /^[0-9]{60}$/;
 const WEB_HOSTS = new Set(['onepeek.io', 'www.onepeek.io']);
 const MAX_URL = 2048;
@@ -62,8 +64,9 @@ function fromPath(path: string, fragment: string | null): OnePeekLink | null {
     return { kind: 'secret', id, key: fragment };
   }
   if (p === '/chat/join') {
-    if (fragment === null || !INVITE_TOKEN.test(fragment)) return null;
-    return { kind: 'invite', token: fragment };
+    const m = fragment === null ? null : INVITE_FRAGMENT.exec(fragment);
+    if (!m) return null;
+    return m[2] ? { kind: 'invite', token: m[1]!, pin: m[2] } : { kind: 'invite', token: m[1]! };
   }
   return null;
 }

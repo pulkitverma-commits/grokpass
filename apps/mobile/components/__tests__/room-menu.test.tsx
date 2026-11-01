@@ -61,13 +61,23 @@ test('safety number comes from safetyNumberWith, in groups of five with a QR; ma
   expect(await screen.findByTestId('verify.number')).toBeTruthy();
   expect(screen.getAllByText('12345')).toHaveLength(6);
   expect(screen.getByTestId('qr')).toBeTruthy();
-  // F-2: the numbers compare keys the server supplied; the copy says so and claims nothing more.
-  expect(screen.getByText('Compare these numbers in person or on a call. If they match, you’re both seeing the same keys the server gave each of you. This does not yet prove the server didn’t substitute a key.')).toBeTruthy();
+  // F-2 fixed in the core: the numbers come from the keys inside the encrypted group, and the copy says that much.
+  expect(screen.getByText('Compare these numbers in person or on a call. If they match, these are the keys inside your encrypted chat.')).toBeTruthy();
+  expect(screen.queryByText(/does not yet prove/)).toBeNull();
   expect(screen.queryByText(/intercept/i)).toBeNull();
   expect(screen.getByText('They match — mark verified')).toBeTruthy();
   await fireEvent.press(screen.getByTestId('verify.mark'));
   await waitFor(() => expect(chat.markVerified).toHaveBeenCalledWith(ROOM.id, THEM));
   expect(onChange).toHaveBeenCalled();
+});
+
+test('F-2: a member whose key does not match the chat: the verify view shows the mismatch message and no number to mark verified', async () => {
+  chat.safetyNumberWith.mockRejectedValueOnce(Object.assign(new Error('member_key_mismatch'), { code: 'member_key_mismatch' }));
+  await renderScreen(<Harness initial="verify" />);
+  expect(await screen.findByText('This member’s key doesn’t match the chat. Don’t trust this chat until you’ve checked with them.')).toBeTruthy();
+  expect(screen.queryByTestId('verify.number')).toBeNull();
+  await fireEvent.press(screen.getByTestId('verify.mark'));
+  expect(chat.markVerified).not.toHaveBeenCalled();
 });
 
 test('members: the owner can remove someone after confirming; removeMember gets the device id', async () => {

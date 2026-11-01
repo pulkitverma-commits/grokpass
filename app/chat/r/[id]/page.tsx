@@ -73,6 +73,7 @@ export default function ConversationPage() {
       if (r.joined) void refresh();
     } catch (e) {
       if (e instanceof chat.ChatError && e.code === 'not_signed_in') router.replace('/chat');
+      if (e instanceof chat.ChatError && e.code === 'member_key_mismatch') setErr(friendlyError(e.code));
     }
   }, [roomId, router, showStored]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -97,6 +98,7 @@ export default function ConversationPage() {
       await showStored();
     } catch (e) {
       if (e instanceof chat.ChatError && e.code === 'not_signed_in') router.replace('/chat');
+      if (e instanceof chat.ChatError && e.code === 'member_key_mismatch') setErr(friendlyError(e.code));
     }
   }, [roomId, router, showStored]);
 
@@ -313,7 +315,7 @@ export default function ConversationPage() {
           : 'Messages are encrypted on each device and disappear on a timer. Screenshot shortcuts blur the chat and everyone is told.'}</p>
         {keyWarnings.map(m => (
           <p key={m.deviceId} className="c-notice" style={{ color: 'var(--c-danger)' }}>
-            {nameOf(m.deviceId)}’s security key changed. <button className="c-link" onClick={() => setSheet('verify')}>Verify again</button>
+            {m.keyMismatch ? `${nameOf(m.deviceId)}: ${friendlyError('member_key_mismatch')}` : `${nameOf(m.deviceId)}’s security key changed.`} <button className="c-link" onClick={() => setSheet('verify')}>Verify again</button>
           </p>
         ))}
         {synced && !joined && <p className="c-notice">Waiting for the owner to let you in. Messages will appear once you’re admitted.</p>}
@@ -594,14 +596,19 @@ function MembersSheet({ room, members, me, nameOf, isOwner, onChange }: { room: 
 function VerifySheet({ roomId, members, nameOf, onChange }: { roomId: string; members: Member[]; nameOf: (d: string) => string; onChange: () => void }) {
   const [who, setWho] = useState<Member | null>(members.length === 1 ? members[0] : null);
   const [num, setNum] = useState('');
-  useEffect(() => { if (who) chat.safetyNumberWith(roomId, who.deviceId).then(setNum); }, [who, roomId]);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    if (!who) return;
+    setNum(''); setErr('');
+    chat.safetyNumberWith(roomId, who.deviceId).then(setNum, e => setErr(friendlyError(e instanceof chat.ChatError ? e.code : '')));
+  }, [who, roomId]);
 
   if (!members.length) return <><h2>Verify people</h2><p className="c-sub">Nobody else is in this chat yet.</p></>;
   if (!who) return (
     <>
       <h2>Verify people</h2>
       <ul className="c-menu">{members.map(m => <li key={m.deviceId}><button onClick={() => setWho(m)}><Icon name="shield" />{nameOf(m.deviceId)}
-        <small>{m.verified ? (chat.keyChanged(m) ? 'Key changed' : 'Verified') : 'Not verified'}</small></button></li>)}</ul>
+        <small>{m.keyMismatch ? 'Key mismatch' : m.verified ? (chat.keyChanged(m) ? 'Key changed' : 'Verified') : 'Not verified'}</small></button></li>)}</ul>
     </>
   );
   const groups = num.match(/.{5}/g) ?? [];
@@ -609,7 +616,7 @@ function VerifySheet({ roomId, members, nameOf, onChange }: { roomId: string; me
     <>
       <h2>Verify {nameOf(who.deviceId)}</h2>
       <p className="c-sub">Compare these numbers in person or on a call. If they match on both screens, nobody is intercepting this chat.</p>
-      {num ? <div className="c-digits" aria-label="Safety number">{groups.map((g, i) => <span key={i}>{g}</span>)}</div> : <p className="c-empty">Calculating…</p>}
+      {num ? <div className="c-digits" aria-label="Safety number">{groups.map((g, i) => <span key={i}>{g}</span>)}</div> : err ? <p className="c-error">{err}</p> : <p className="c-empty">Calculating…</p>}
       <div className="c-qr"><QrCode value={`onepeek-verify:${num}`} size={150} /></div>
       <button className="c-btn block" disabled={!num} onClick={async () => { await chat.markVerified(roomId, who.deviceId); onChange(); setWho(null); }}>They match — mark verified</button>
     </>

@@ -29,7 +29,7 @@ import {
   defaultLifetimeConfig,
   defaultKeyPackageEqualityConfig,
   defaultPaddingConfig,
-  defaultAuthenticationService,
+  type AuthenticationService,
   type CiphersuiteImpl,
   type ClientConfig,
   type ClientState,
@@ -40,23 +40,85 @@ import {
 
 export const CIPHERSUITE = 'MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519' as const;
 
-// Pad application messages to hide exact lengths. Credentials are accepted here; identity is
-// checked by the app (device registry + safety numbers), not by ts-mls' default auth service.
-const clientConfig: ClientConfig = {
-  keyRetentionConfig: defaultKeyRetentionConfig,
-  lifetimeConfig: defaultLifetimeConfig,
-  keyPackageEqualityConfig: defaultKeyPackageEqualityConfig,
-  paddingConfig: defaultPaddingConfig,
-  authService: defaultAuthenticationService,
-};
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+/**
+ * Where the server says a device's signing key is (`chat_room_members.signature_pub`, which is the
+ * key the device registered with `chat_register_device`). `null`: the server lists no such device in
+ * this room (not yet asked, left, revoked, or a removal the owner has not committed yet).
+ */
+export type KeyDirectory = (deviceId: string) => Promise<Uint8Array | null>;
+
+/** Thrown by joinRoom/receive when a leaf's signature key disagrees with the server's listing for that device. */
+export class KeyMismatchError extends Error {
+  constructor(readonly deviceIds: string[]) { super('member_key_mismatch'); }
+}
+
+/** What the chat client's identities look like: the server-issued device UUID, lowercase. */
+const DEVICE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** The bare adapter (unit tests, the Phase 0 spike) also accepts short opaque ids such as `device-a`. */
+const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const strictDec = new TextDecoder('utf-8', { fatal: true });
+
+export function sameKey(a: Uint8Array, b: Uint8Array) {
+  if (a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i];
+  return d === 0;
+}
+
+/**
+ * The authentication service ts-mls consults for every credential it meets: the Welcome's signer and
+ * every leaf of the tree on join, the committer's new leaf and every added key package on a commit.
+ *
+ * - The credential must be `basic` and its identity a well-formed device id (a UUID when a directory
+ *   is given, which is how the chat client always calls it).
+ * - With a directory: when the server lists that device, the leaf's signature key must equal the
+ *   listed key; a disagreement is refused and recorded in `mismatched`.
+ * - Non-blocking where there is no listing (`directory` returns null): such a leaf is accepted on
+ *   the format check alone. That covers devices the server no longer lists (left, revoked, removal
+ *   not committed yet) and, by construction, any device a malicious server chooses to leave out of
+ *   the listing; those keys are only checked by comparing safety numbers out of band.
+ */
+export function keyCheck(directory?: KeyDirectory) {
+  const mismatched: string[] = [];
+  const service: AuthenticationService = {
+    async validateCredential(credential, signaturePublicKey) {
+      if (credential.credentialType !== 'basic') return false;
+      let id: string;
+      try { id = strictDec.decode(credential.identity); } catch { return false; }
+      if (!(directory ? DEVICE_UUID : DEVICE_ID).test(id)) return false;
+      if (!directory) return true;
+      const listed = await directory(id);
+      if (!listed) return true;
+      if (sameKey(listed, signaturePublicKey)) return true;
+      if (!mismatched.includes(id)) mismatched.push(id);
+      return false;
+    },
+  };
+  return { service, mismatched };
+}
+
+function configWith(authService: AuthenticationService): ClientConfig {
+  // Pad application messages to hide exact lengths.
+  return {
+    keyRetentionConfig: defaultKeyRetentionConfig,
+    lifetimeConfig: defaultLifetimeConfig,
+    keyPackageEqualityConfig: defaultKeyPackageEqualityConfig,
+    paddingConfig: defaultPaddingConfig,
+    authService,
+  };
+}
+
+// The stored-state default: format check only. Calls that meet other members' keys (joinRoom,
+// receive) take a KeyDirectory and use a listing-aware service for that call.
+const clientConfig: ClientConfig = configWith(keyCheck().service);
 
 let implPromise: Promise<CiphersuiteImpl> | null = null;
 export function suite(): Promise<CiphersuiteImpl> {
   return (implPromise ??= getCiphersuiteImpl(getCiphersuiteFromName(CIPHERSUITE)));
 }
-
-const enc = new TextEncoder();
-const dec = new TextDecoder();
 
 /** A device's one-time join material. `publicBytes` is uploaded; `privatePackage` never leaves the device. */
 export type DeviceKeyPackage = { publicPackage: KeyPackage; privatePackage: PrivateKeyPackage; publicBytes: Uint8Array };
@@ -90,6 +152,22 @@ export function restoreKeyPackage(publicBytes: Uint8Array, privatePackage: Priva
 
 export function welcomeSignature(state: ClientState, deviceId: string) {
   return memberLeaves(state).find(m => m.deviceId === deviceId)?.signaturePublicKey ?? null;
+}
+
+/**
+ * Device id and signature key a KeyPackage claims (from its leaf node, which the package's own
+ * signature covers). `null` when the bytes are not a basic-credential KeyPackage.
+ */
+export function keyPackageInfo(bytes: Uint8Array): { deviceId: string; signaturePublicKey: Uint8Array } | null {
+  try {
+    const m = decodeOne(bytes);
+    if (m.wireformat !== 'mls_key_package') return null;
+    const cred = m.keyPackage.leafNode.credential;
+    if (cred.credentialType !== 'basic') return null;
+    return { deviceId: strictDec.decode(cred.identity), signaturePublicKey: m.keyPackage.leafNode.signaturePublicKey };
+  } catch {
+    return null;
+  }
 }
 
 export async function createRoom(roomId: string, own: DeviceKeyPackage): Promise<ClientState> {
@@ -134,10 +212,22 @@ async function commit(state: ClientState, extraProposals: Proposal[]) {
   };
 }
 
-export async function joinRoom(welcome: Uint8Array, own: DeviceKeyPackage): Promise<ClientState> {
+/**
+ * Joins from a Welcome. With a directory, the Welcome's signer and every leaf of the tree are checked
+ * against the server's listing (keyCheck); a disagreement throws KeyMismatchError and no state is
+ * returned.
+ */
+export async function joinRoom(welcome: Uint8Array, own: DeviceKeyPackage, directory?: KeyDirectory): Promise<ClientState> {
   const m = decodeOne(welcome);
   if (m.wireformat !== 'mls_welcome') throw new Error('not_welcome');
-  return joinGroup(m.welcome, own.publicPackage, own.privatePackage, emptyPskIndex, await suite(), undefined, undefined, clientConfig);
+  const check = keyCheck(directory);
+  try {
+    const joined = await joinGroup(m.welcome, own.publicPackage, own.privatePackage, emptyPskIndex, await suite(), undefined, undefined, configWith(check.service));
+    return { ...joined, clientConfig };
+  } catch (e) {
+    if (check.mismatched.length) throw new KeyMismatchError(check.mismatched);
+    throw e;
+  }
 }
 
 /** Plaintext payload carried inside an MLS application message. */
@@ -158,18 +248,31 @@ export type Incoming =
   | { kind: 'message'; state: ClientState; payload: ChatPayload; senderDeviceId: string | null }
   | { kind: 'commit'; state: ClientState; removedSelf: boolean };
 
-/** Decrypts an application message or applies a commit. Throws on tampering, replay or wrong epoch. */
-export async function receive(state: ClientState, bytes: Uint8Array, ownDeviceId: string): Promise<Incoming> {
+/**
+ * Decrypts an application message or applies a commit. Throws on tampering, replay or wrong epoch.
+ * With a directory, a commit's new committer leaf and added key packages are checked against the
+ * server's listing (keyCheck); a disagreement throws KeyMismatchError and the commit is not applied.
+ * Application messages never consult the directory.
+ */
+export async function receive(state: ClientState, bytes: Uint8Array, ownDeviceId: string, directory?: KeyDirectory): Promise<Incoming> {
   const m = decodeOne(bytes);
   if (m.wireformat !== 'mls_private_message') throw new Error('not_private_message');
-  const r = await processPrivateMessage(state, m.privateMessage, emptyPskIndex, await suite());
+  const check = keyCheck(directory);
+  let r: Awaited<ReturnType<typeof processPrivateMessage>>;
+  try {
+    r = await processPrivateMessage({ ...state, clientConfig: configWith(check.service) }, m.privateMessage, emptyPskIndex, await suite());
+  } catch (e) {
+    if (check.mismatched.length) throw new KeyMismatchError(check.mismatched);
+    throw e;
+  }
   r.consumed.forEach(zeroOutUint8Array);
+  const newState = { ...r.newState, clientConfig: state.clientConfig };
   if (r.kind === 'applicationMessage') {
     const payload = parsePayload(r.message);
-    return { kind: 'message', state: r.newState, payload, senderDeviceId: null };
+    return { kind: 'message', state: newState, payload, senderDeviceId: null };
   }
-  const removedSelf = r.newState.groupActiveState.kind !== 'active' || !memberLeaves(r.newState).some(l => l.deviceId === ownDeviceId);
-  return { kind: 'commit', state: r.newState, removedSelf };
+  const removedSelf = newState.groupActiveState.kind !== 'active' || !memberLeaves(newState).some(l => l.deviceId === ownDeviceId);
+  return { kind: 'commit', state: newState, removedSelf };
 }
 
 function parsePayload(bytes: Uint8Array): ChatPayload {
@@ -187,6 +290,18 @@ export function memberLeaves(state: ClientState) {
       if (cred.credentialType === 'basic') out.push({ leafIndex: i / 2, deviceId: dec.decode(cred.identity), signaturePublicKey: node.leaf.signaturePublicKey });
     }
   });
+  return out;
+}
+
+/**
+ * Each member device's signature public key as the encrypted group holds it: identity from the
+ * leaf's basic credential, key from the leaf node. This, not the server's listing, is what safety
+ * numbers are computed from. If one device id had two leaves the first one is returned here; the
+ * chat client treats differing keys under one id as a mismatch (see memberLeaves).
+ */
+export function leafSignatureKeys(state: ClientState): Map<string, Uint8Array> {
+  const out = new Map<string, Uint8Array>();
+  for (const l of memberLeaves(state)) if (!out.has(l.deviceId)) out.set(l.deviceId, l.signaturePublicKey);
   return out;
 }
 

@@ -86,8 +86,9 @@ test('a safety number from the room: compared with each other member; a match of
   await screen.findByTestId('scan.camera');
   await scan(`onepeek-verify:${DIGITS}`);
   expect(await screen.findByText('Matches Bea')).toBeTruthy();
-  // F-2: honest wording; the compared keys come from the server, so no "nobody is intercepting".
-  expect(screen.getByText('The numbers match. You’re seeing the same keys the server gave each of you. This does not yet prove the server didn’t substitute a key.')).toBeTruthy();
+  // F-2 fixed in the core: the compared keys are the ones inside the encrypted group.
+  expect(screen.getByText('The numbers match. These are the keys inside your encrypted chat.')).toBeTruthy();
+  expect(screen.queryByText(/does not yet prove/)).toBeNull();
   expect(screen.queryByText(/intercept/i)).toBeNull();
   expect(screen.getByText('They match — mark verified')).toBeTruthy();
   expect(chat.safetyNumberWith).toHaveBeenCalledWith('aaaaaaaa-0000-0000-0000-000000000001', THEM);
@@ -113,6 +114,18 @@ test('a safety number that matches nobody says so; without a room it explains wh
   await scan(`onepeek-verify:${DIGITS}`);
   expect(await screen.findByText('Open Verify people in a chat’s menu and scan from there to compare.')).toBeTruthy();
   expect(chat.safetyNumberWith).toHaveBeenCalledTimes(1);
+});
+
+test('F-2: a member whose key does not match the chat: the scan result shows the mismatch message and offers no "mark verified"', async () => {
+  setLocalParams({ room: 'aaaaaaaa-0000-0000-0000-000000000001' });
+  chat.members.mockResolvedValue([{ deviceId: THEM, state: 'active', hasKeyPackage: true, role: 'member', nickname: 'Bea', signaturePub: new Uint8Array([2]), verified: null, keyMismatch: true } as never]);
+  chat.safetyNumberWith.mockRejectedValue(Object.assign(new Error('member_key_mismatch'), { code: 'member_key_mismatch' }));
+  await renderScreen(<ScanScreen />);
+  await screen.findByTestId('scan.camera');
+  await scan(`onepeek-verify:${DIGITS}`);
+  expect(await screen.findByText('This member’s key doesn’t match the chat. Don’t trust this chat until you’ve checked with them.')).toBeTruthy();
+  expect(screen.queryByTestId('scan.verify')).toBeNull();
+  expect(chat.markVerified).not.toHaveBeenCalled();
 });
 
 test('torch toggles the camera prop; Close leaves', async () => {

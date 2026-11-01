@@ -32,7 +32,7 @@ export const blockedKey = (roomId: string) => `room:${roomId}:blocked`;
 
 export type Member = {
   deviceId: string; role: 'owner' | 'member'; state: 'pending' | 'active';
-  signaturePub: Uint8Array; hasKeyPackage: boolean; nickname: string | null; verified: string | null;
+  signaturePub: Uint8Array; hasKeyPackage: boolean; nickname: string | null; verified: string | null; keyMismatch?: boolean;
 };
 
 export type MenuRoom = { id: string; kind: 'quick' | 'secret' | 'business'; role: 'owner' | 'member'; ttl: number; mode: 'on_open' | 'on_send'; expiresAt: string; name: string | null };
@@ -170,7 +170,7 @@ function Members({ room, members, me, isOwner, blocked, onChange }: { room: Menu
           const changed = keyChanged(m);
           const name = memberName(m.nickname, m.deviceId) + (m.deviceId === me ? ' (you)' : '') + (m.role === 'owner' ? ' · owner' : '');
           const isBlocked = blocked.includes(m.deviceId);
-          const status = isBlocked ? 'Blocked on this phone' : changed ? 'Key changed' : m.verified ? 'Verified' : 'Not verified';
+          const status = isBlocked ? 'Blocked on this phone' : m.keyMismatch ? 'Key mismatch' : changed ? 'Key changed' : m.verified ? 'Verified' : 'Not verified';
           const who = memberName(m.nickname, m.deviceId);
           return (
             <ListRow key={m.deviceId} leading={<Icon name={isBlocked ? 'ban' : m.verified && !changed ? 'check' : 'user'} size={20} color={isBlocked || changed ? colors.danger : m.verified ? colors.secure : colors.muted} />}
@@ -300,7 +300,8 @@ function Verify({ roomId, members, onChange, onClose }: { roomId: string; member
   useEffect(() => {
     if (!who) return;
     let alive = true;
-    chat().safetyNumberWith(roomId, who.deviceId).then((n) => alive && setNum(n)).catch(() => alive && setErr('The safety number couldn’t be calculated.'));
+    chat().safetyNumberWith(roomId, who.deviceId).then((n) => alive && setNum(n))
+      .catch((e) => alive && setErr(errorCode(e) === 'member_key_mismatch' ? friendlyError('member_key_mismatch') : 'The safety number couldn’t be calculated.'));
     return () => { alive = false; };
   }, [who, roomId, chat]);
 
@@ -310,7 +311,7 @@ function Verify({ roomId, members, onChange, onClose }: { roomId: string; member
       <View style={styles.card}>
         {members.map((m) => (
           <ListRow key={m.deviceId} leading={<Icon name="shield" size={20} color={colors.muted} />} title={memberName(m.nickname, m.deviceId)}
-            subtitle={m.verified ? (keyChanged(m) ? 'Key changed' : 'Verified') : 'Not verified'} chevron onPress={() => select(m)} testID="verify.member" />
+            subtitle={m.keyMismatch ? 'Key mismatch' : m.verified ? (keyChanged(m) ? 'Key changed' : 'Verified') : 'Not verified'} chevron onPress={() => select(m)} testID="verify.member" />
         ))}
       </View>
     );
@@ -320,7 +321,7 @@ function Verify({ roomId, members, onChange, onClose }: { roomId: string; member
   return (
     <View style={styles.stack}>
       <Text variant="title" tone="heading">Verify {name}</Text>
-      <Text variant="sub" tone="muted">Compare these numbers in person or on a call. If they match, you’re both seeing the same keys the server gave each of you. This does not yet prove the server didn’t substitute a key.</Text>
+      <Text variant="sub" tone="muted">Compare these numbers in person or on a call. If they match, these are the keys inside your encrypted chat.</Text>
       {num ? (
         <View style={styles.digits} accessible accessibilityLabel={`Safety number ${groups.join(' ')}`} testID="verify.number">
           {groups.map((g, i) => <Text key={i} variant="h2" mono style={styles.digit}>{g}</Text>)}

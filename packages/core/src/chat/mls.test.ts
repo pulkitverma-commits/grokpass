@@ -122,4 +122,57 @@ describe('Secret Chat MLS adapter', () => {
     const changed = await mls.safetyNumber({ key: a.signaturePublicKey, id: a.deviceId }, { key: other, id: b.deviceId });
     expect(changed).not.toBe(ab);
   });
+
+  describe('F-2: tree keys and the listing-aware authentication service', () => {
+    const A = crypto.randomUUID(), B = crypto.randomUUID();
+    async function uuidRoom() {
+      const a = await mls.newSigningKey(), b = await mls.newSigningKey();
+      const aKp = await mls.newKeyPackage(A, a), bKp = await mls.newKeyPackage(B, b);
+      const room = await mls.createRoom(crypto.randomUUID(), aKp);
+      const added = await mls.addMembers(room, [bKp.publicBytes]);
+      return { a, b, bKp, added };
+    }
+
+    it('leafSignatureKeys maps each device id to its leaf signature key', async () => {
+      const { a, b, added } = await uuidRoom();
+      const keys = mls.leafSignatureKeys(added.state);
+      expect([...keys.keys()].sort()).toEqual([A, B].sort());
+      expect(keys.get(A)).toEqual(a.publicKey);
+      expect(keys.get(B)).toEqual(b.publicKey);
+    });
+
+    it('keyPackageInfo reads the device id and key a package claims', async () => {
+      const { b, bKp } = await uuidRoom();
+      expect(mls.keyPackageInfo(bKp.publicBytes)).toEqual({ deviceId: B, signaturePublicKey: b.publicKey });
+      expect(mls.keyPackageInfo(new Uint8Array([1, 2, 3]))).toBeNull();
+    });
+
+    it('joinRoom accepts a tree whose keys match the listing, or that has no listing yet', async () => {
+      const { a, b, bKp, added } = await uuidRoom();
+      const listed = new Map<string, Uint8Array>([[A, a.publicKey], [B, b.publicKey]]);
+      await expect(mls.joinRoom(added.welcome!, bKp, async id => listed.get(id) ?? null)).resolves.toBeTruthy();
+      await expect(mls.joinRoom(added.welcome!, bKp, async () => null)).resolves.toBeTruthy();
+    });
+
+    it('joinRoom refuses with KeyMismatchError when the Welcome signer\'s key is not the listed one', async () => {
+      const { b, bKp, added } = await uuidRoom();
+      const other = await mls.newSigningKey();
+      const listed = new Map<string, Uint8Array>([[A, other.publicKey], [B, b.publicKey]]);
+      const err = await mls.joinRoom(added.welcome!, bKp, async id => listed.get(id) ?? null).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(mls.KeyMismatchError);
+      expect((err as mls.KeyMismatchError).deviceIds).toEqual([A]);
+    });
+
+    it('with a directory, identities must be device UUIDs; without one, short opaque ids still pass', async () => {
+      const check = mls.keyCheck(async () => null);
+      const cred = (id: string) => ({ credentialType: 'basic' as const, identity: new TextEncoder().encode(id) });
+      const key = (await mls.newSigningKey()).publicKey;
+      expect(await check.service.validateCredential(cred(A), key)).toBe(true);
+      expect(await check.service.validateCredential(cred('dev-bob'), key)).toBe(false);
+      expect(await check.service.validateCredential(cred(A.toUpperCase()), key)).toBe(false);
+      expect(await mls.keyCheck().service.validateCredential(cred('dev-bob'), key)).toBe(true);
+      expect(await mls.keyCheck().service.validateCredential(cred(''), key)).toBe(false);
+      expect(await mls.keyCheck().service.validateCredential({ credentialType: 'basic', identity: new Uint8Array([0xff, 0xfe]) }, key)).toBe(false);
+    });
+  });
 });

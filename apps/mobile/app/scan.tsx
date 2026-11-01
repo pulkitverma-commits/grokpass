@@ -141,7 +141,7 @@ export default function ScanScreen() {
                 <ResultHead icon="shield" title="Safety number" sub="Comparing with the people in this chat…" />
               ) : found.match ? (
                 <>
-                  <ResultHead icon="check" title={`Matches ${found.match.name}`} sub="The numbers match. You’re seeing the same keys the server gave each of you. This does not yet prove the server didn’t substitute a key." accent />
+                  <ResultHead icon="check" title={`Matches ${found.match.name}`} sub="The numbers match. These are the keys inside your encrypted chat." accent />
                   <Button title={busy ? 'Saving…' : 'They match — mark verified'} busy={busy} onPress={markVerified} testID="scan.verify" />
                 </>
               ) : (

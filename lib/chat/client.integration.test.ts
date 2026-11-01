@@ -187,6 +187,47 @@ describe('Secret Chat end to end (two browsers)', () => {
     expect(a.c.keyChanged(mb)).toBe(true);
   });
 
+  it('F-2: honest room — the safety number from the MLS tree is the same digits the page showed before (listing-based)', async () => {
+    const mls = await import('./mls');
+    const a = await browser('a2', '31000000-0000-4000-8000-000000000031');
+    const b = await browser('b2', '41000000-0000-4000-8000-000000000041');
+    const roomId = await on(a, c => c.createRoom({ kind: 'secret', ttl: 300, mode: 'on_open', lifetime: 3600 }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: false }));
+    await on(b, c => c.redeemInvite(tokenOf(link), 'Bo'));
+    await on(a, c => c.admitPending(roomId));
+    await on(b, c => c.sync(roomId));
+    const aDev = await on(a, c => c.ensureDevice());
+    const bDev = await on(b, c => c.ensureDevice());
+    const listed = async (id: string) => ((await db.query<any>(`select signature_pub k from public.chat_devices where id = $1`, [id])).rows[0].k) as Uint8Array;
+    const before = await mls.safetyNumber({ key: aDev.signing.publicKey, id: aDev.id }, { key: await listed(bDev.id), id: bDev.id });
+    expect(await on(a, c => c.safetyNumberWith(roomId, bDev.id))).toBe(before);
+    expect(await on(b, c => c.safetyNumberWith(roomId, aDev.id))).toBe(before);
+    const ms = await on(a, c => c.members(roomId));
+    expect(ms.map(m => m.keyMismatch)).toEqual([false, false]);
+    expect(ms.filter(a.c.keyChanged)).toEqual([]);   // no warning on the page
+  });
+
+  it('F-2: a key package the server substituted is not admitted; the page warns and shows the mismatch message instead of a number', async () => {
+    const mls = await import('./mls');
+    const { friendlyError } = await import('../../app/chat/format');
+    const a = await browser('a3', '32000000-0000-4000-8000-000000000032');
+    const b = await browser('b3', '42000000-0000-4000-8000-000000000042');
+    const roomId = await on(a, c => c.createRoom({ kind: 'business', ttl: 3600, mode: 'on_send', lifetime: 3600 }));
+    const { link } = await on(a, c => c.createInvite(roomId, { expiresIn: 3600, maxUses: 1, approval: true }));
+    await on(b, c => c.redeemInvite(tokenOf(link), 'Bo'));
+    const bDev = (await on(b, c => c.ensureDevice())).id;
+    const forged = await mls.newKeyPackage(bDev);
+    await db.query(`update public.chat_members set key_package = $1 where device_id = $2`, [forged.publicBytes, bDev]);
+    expect(await on(a, c => c.admitPending(roomId, [bDev]))).toBe(0);
+    const mb = (await on(a, c => c.members(roomId))).find(m => m.deviceId === bDev)!;
+    expect(mb.keyMismatch).toBe(true);
+    expect(a.c.keyChanged(mb)).toBe(true);   // the page's warning list
+    await expect(on(a, c => c.safetyNumberWith(roomId, bDev))).rejects.toMatchObject({ code: 'member_key_mismatch' });
+    await expect(on(a, c => c.markVerified(roomId, bDev))).rejects.toMatchObject({ code: 'member_key_mismatch' });
+    expect(friendlyError('member_key_mismatch')).toBe('This member’s key doesn’t match the chat. Don’t trust this chat until you’ve checked with them.');
+    expect((await on(b, c => c.sync(roomId))).joined).toBe(false);
+  });
+
   it('removed members are locked out; Burn Chat wipes server and local state', async () => {
     const owner = await browser('owner', '50000000-0000-4000-8000-000000000005');
     const m1 = await browser('m1', '60000000-0000-4000-8000-000000000006');

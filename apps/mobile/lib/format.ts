@@ -73,6 +73,7 @@ export function friendlyError(code: string) {
     case 'view_once_sent': return 'You sent this as view once, so it can’t be opened on your side.';
     case 'gone': return 'That file has already been opened or has expired.';
     case 'no_local_state': return 'You haven’t been let into this chat yet. Wait for the owner, then try again.';
+    case 'member_key_mismatch': return 'This member’s key doesn’t match the chat. Don’t trust this chat until you’ve checked with them.';
     case 'keystore_unavailable': return 'This phone’s chat keys are missing.';
     case 'report_failed': return 'The report couldn’t be sent. Try again.';
     case 'quota_exceeded': return 'You’ve used this month’s free secrets. See onepeek.io/pricing.';
@@ -98,8 +99,12 @@ export function maskLink(link: string) {
   return link.replace(/#.*/, '#••••••');
 }
 
-/** The core's `keyChanged`: a verified member whose signing key no longer matches what was verified. */
-export function keyChanged(m: { verified: string | null; signaturePub: Uint8Array }) {
+/**
+ * The core's `keyChanged`: a verified member whose signing key in the encrypted chat no longer matches
+ * what was verified, or any member whose key in the chat and on the server disagree (`keyMismatch`).
+ */
+export function keyChanged(m: { verified: string | null; signaturePub: Uint8Array; keyMismatch?: boolean }) {
+  if (m.keyMismatch) return true;
   if (!m.verified) return false;
   let hex = '\\x';
   for (let i = 0; i < m.signaturePub.length; i++) hex += m.signaturePub[i]!.toString(16).padStart(2, '0');

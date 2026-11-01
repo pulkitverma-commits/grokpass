@@ -60,3 +60,25 @@ Plain statements of what Secret Chat does not do. The public page (/secret-chat)
    sent (forward secrecy: a key is never reused, even after a crash or retry), so a send that then fails, for
    example offline, consumes a ratchet generation that no one ever receives, and recipients simply skip it
    when they decrypt the next message; this is by design, not a bug to fix.
+15. **What a matching safety number proves, and what it doesn't.** Safety numbers are computed from the
+   signing keys inside the encrypted group (the MLS tree), so a server that swaps a member's key can no
+   longer make two screens show the same number. The apps also compare each member's key in the group
+   with the key the server lists for that device: the owner won't admit a key package that doesn't
+   match, a member refuses a Welcome or a commit that brings in a key that doesn't match (the chat then
+   stops syncing for that member and says "This member's key doesn't match the chat"), and a member
+   whose key changes on the server afterwards is shown as a key mismatch and can't be marked verified.
+   What remains open:
+   - **Before admission.** A person who has used an invite but isn't let in yet has no key in the group,
+     so there is no safety number to compare until the owner admits them; until then their key is only
+     the one the server lists.
+   - **Devices the server doesn't list.** A device that is still in the group but no longer listed (it
+     left or was revoked and the owner's app hasn't committed the removal yet), or one a malicious server
+     leaves out, is checked by format only; only an out-of-band safety-number comparison catches a wrong
+     key there.
+   - **Who sent a message.** Which member a message or nickname is shown under is still the server's
+     word (security review F-3): the encryption proves a current member wrote it and nobody changed it,
+     not which member.
+   - **A refused key stops the chat for that member.** When a Welcome or commit is refused, that device
+     stays at the last state it trusted and the chat can't continue there until the owner sorts it out
+     (for example by removing the member and inviting them again). Chats made before this check, whose
+     groups already hold a substituted key, show a key mismatch rather than recovering silently.

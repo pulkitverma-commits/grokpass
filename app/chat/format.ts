@@ -40,6 +40,7 @@ export function friendlyError(code: string) {
     case 'view_once_sent': return 'You sent this as view once, so it can’t be opened on your side.';
     case 'gone': return 'That file has already been opened or has expired.';
     case 'no_local_state': return 'You haven’t been let into this chat yet. Wait for the owner, then try again.';
+    case 'member_key_mismatch': return 'This member’s key doesn’t match the chat. Don’t trust this chat until you’ve checked with them.';
     default: return 'Something went wrong. Try again.';
   }
 }

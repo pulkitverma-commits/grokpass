@@ -4,6 +4,10 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- **Human decided F-2: fix in core now** (2026-11-01). Safety numbers, "key changed" and verification move to the
+  signature keys inside the MLS group (ts-mls leaves), and a member whose server-listed key disagrees with the group
+  is refused at welcome/admit/sync. Shared with the website, so web tests must prove the page's behaviour; where the
+  keys agree (every honest case) the numbers must stay identical so verified pairs see no change.
 - Full-report app fixes merged (F-1 sign-out wipes the chat keystore like the web and the room screen refuses rooms
   not in `myRooms()`; F-2 wording; F-4 QR behind a tap; F-7 `/reset` not deep-linkable; F-9 one notify per send;
   accessibility labels, held-text announcement, 7.06:1 destructive contrast; location notice in the secret viewer).

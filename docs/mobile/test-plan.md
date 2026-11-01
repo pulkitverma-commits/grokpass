@@ -1181,9 +1181,7 @@ finding, not a note (§5.2).
   from the first `sync` and the rest from the second, nothing duplicated (P3-Q2 below).
 - Keystore writes during the batch: `room:<id>:local` (lastSeq) **once**; `room:<id>:state` **200 times for 200 rows**
   (recorded by the passing test and printed).
-- `it.fails` **TARGET P3-Q1**: `saveState` once per `applyRows` batch. Red today by design (`applyRows` saves after every row:
-  `client.ts` `await saveState(roomId, state)` inside the loop). When core-crypto batches the save this test "unexpectedly
-  passes" and qa removes `.fails`.
+- **P3-Q1** (was `it.fails` TARGET): `saveState` once per `applyRows` batch. Green since core-crypto batched the save (state + lastSeq once per page, together, under the room lock); `.fails` removed.
 - Helper `test/devices.ts` (new): the interop test's `device()` construction with a transport switch and a controllable realtime
   channel; `sendMany()` moves the `send` rate-limit window on the server every 100 messages (server state, no sleep, §6.1).
 - Run: `cd packages/core && npx vitest run test/perf.sync.test.ts` → `Tests 4 passed (4)`, 3 runs, no flake.

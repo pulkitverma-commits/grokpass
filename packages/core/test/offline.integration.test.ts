@@ -5,12 +5,13 @@
 //
 // What a phone with no network sees from supabase-js: postgrest-js catches the fetch rejection and
 // returns `{ data: null, error: { message: 'TypeError: Network request failed', ... } }`; the client's
-// `rpc()` wraps that in a ChatError whose `code` is the last `[a-z_]+` run of the message (`failed`).
-// Realtime: `subscribe()` opens one private channel and reports `subscribed`; it has no handler for
-// CHANNEL_ERROR / TIMED_OUT / CLOSED and never re-subscribes on its own (finding P3-Q3; the room screen
-// compensates with a 4 s poll and a pull on foreground).
-import { describe, it, expect, beforeAll } from 'vitest';
-import { ChatError, type LocalMessage } from '../src/chat/client';
+// `rpc()` turns that, and a transport that rejects outright, into `ChatError('network')` (P3-Q4).
+// Realtime: `subscribe()` opens one private channel and reports `subscribed`; on CHANNEL_ERROR /
+// TIMED_OUT / CLOSED it drops the channel, re-runs setAuth and opens a new one after a bounded backoff,
+// and reports `subscribed` again once that one is joined (P3-Q3; the room screen's 4 s poll and pull on
+// foreground stay as the fallback).
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
+import { ChatError, RESUBSCRIBE_DELAYS_MS, type LocalMessage } from '../src/chat/client';
 import * as mls from '../src/chat/mls';
 import { hasNodeSqlite } from './rn-mocks';
 import { bootDb, type Harness } from './harness';
@@ -52,9 +53,8 @@ describeOffline('offline / reconnect: phone loses the network, the browser keeps
       expect(err).toBeInstanceOf(ChatError);
       codes.push((err as ChatError).code);
     }
-    // Stable across failures (today derived from the fetch message: 'failed'; P3-Q4 asks for a named code).
-    expect(new Set(codes).size).toBe(1);
-    expect(codes[0]).toMatch(/^[a-z_]+$/);
+    // Named and stable across failures (P3-Q4): the app keys "You're offline" on it.
+    expect(codes).toEqual(['network', 'network', 'network']);
     expect(phone.transport.blocked).toEqual(['chat_send', 'chat_send', 'chat_send']);
 
     // No partial local state: the failed messages are not stored (no optimistic row), lastSeq is unchanged,
@@ -72,11 +72,14 @@ describeOffline('offline / reconnect: phone loses the network, the browser keeps
     expect(phone.notify).not.toHaveBeenCalled();
   }, TIMEOUT);
 
-  it('O1 (transport rejects instead of returning an error): send still rejects and leaves no partial state', async () => {
+  it('O1 (transport rejects instead of returning an error): send rejects with ChatError(network) and leaves no partial state', async () => {
     const { guest: phone, roomId } = await pairUp(h, 'web', 'phone');
     const before = { msgs: await phone.run(c => c.messages(roomId)), lastSeq: await lastSeqOf(phone, roomId), server: await serverCount(roomId) };
     phone.transport.mode = 'reject';
-    await expect(phone.run(c => c.send(roomId, 'lost', 300))).rejects.toThrow('Network request failed');
+    const err = await phone.run(c => c.send(roomId, 'lost', 300)).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(ChatError);
+    expect((err as ChatError).code).toBe('network');
+    expect((err as ChatError).message).toBe('network');   // nothing from the transport's own message is kept
     expect(await phone.run(c => c.messages(roomId))).toEqual(before.msgs);
     expect(await lastSeqOf(phone, roomId)).toBe(before.lastSeq);
     expect(await serverCount(roomId)).toBe(before.server);
@@ -112,7 +115,7 @@ describeOffline('offline / reconnect: phone loses the network, the browser keeps
     for (let i = 1; i <= 5; i++) await web.run(c => c.send(roomId, `w${i}`, 300));
     const offlineSync = await phone.run(c => c.sync(roomId)).then(() => null, (e: unknown) => e);
     expect(offlineSync).toBeInstanceOf(ChatError);
-    expect((offlineSync as ChatError).code).not.toBe('not_a_member');   // a network error must never be read as "removed"
+    expect((offlineSync as ChatError).code).toBe('network');            // and never 'not_a_member' ("removed")
     expect(bodies(await phone.run(c => c.messages(roomId)))).toEqual(['w0']);
     expect(await stateOf(phone, roomId)).not.toBeNull();               // nothing forgotten
     expect(phone.transport.blocked).toEqual(['chat_fetch']);
@@ -148,7 +151,7 @@ describeOffline('offline / reconnect: phone loses the network, the browser keeps
     expect(mls.epoch((await stateOf(web, roomId))!)).toBe(mls.epoch((await stateOf(phone, roomId))!));
   }, TIMEOUT);
 
-  it('O6: messages sent by the web while the phone was offline arrive once, even when the realtime ping is delivered late and triggers a second sync', async () => {
+  it('O6: messages sent by the web while the phone was offline arrive once, even when the realtime ping is delivered late on the re-opened channel', async () => {
     const { owner: web, guest: phone, roomId } = await pairUp(h, 'web', 'phone');
     const seen: string[] = [];
     const synced: number[] = [];
@@ -163,6 +166,7 @@ describeOffline('offline / reconnect: phone loses the network, the browser keeps
 
     phone.transport.mode = 'error';
     ch.emitStatus('CHANNEL_ERROR');
+    expect(phone.realtime.removed).toEqual([ch]);                // dropped at once; a new one follows after the backoff
     await web.run(c => c.send(roomId, 'while you were away', 300));
     await web.run(c => c.send(roomId, 'and this', 300));
     // The pings for those sends never reached the phone.
@@ -170,8 +174,16 @@ describeOffline('offline / reconnect: phone loses the network, the browser keeps
 
     const r = await phone.run(c => c.sync(roomId));           // the pull on foreground / the poll
     expect(r.newMessages).toBe(2);
-    ch.emitStatus('SUBSCRIBED');
-    ch.broadcast('msg', { room: roomId });                       // a late ping for a message already applied
+    await new Promise(res => setTimeout(res, RESUBSCRIBE_DELAYS_MS[0] + 100));
+    expect(phone.realtime.channels).toHaveLength(2);
+    expect(phone.realtime.setAuthCalls).toEqual([phone.token, phone.token]);
+    const ch2 = phone.realtime.channels[1];
+    ch.emitStatus('SUBSCRIBED');                                 // the retired channel is ignored
+    ch.broadcast('msg', { room: roomId });
+    expect(seen).toEqual(['subscribed']);
+    ch2.emitStatus('SUBSCRIBED');
+    expect(seen).toEqual(['subscribed', 'subscribed']);          // the screen pulls once on this
+    ch2.broadcast('msg', { room: roomId });                      // a late ping for a message already applied
     await settle(); await settle();
     await new Promise(res => setTimeout(res, 50));
     expect(synced).toEqual([0]);
@@ -179,34 +191,96 @@ describeOffline('offline / reconnect: phone loses the network, the browser keeps
     expect(bodies(msgs)).toEqual(['while you were away', 'and this']);
     expect(new Set(msgs.map(m => m.id)).size).toBe(2);
     (await off)();
+    expect(phone.realtime.removed).toEqual([ch, ch2]);
   }, TIMEOUT);
 
-  it('P3-Q3 (documented): a channel that errors or closes is not re-subscribed by the core; unsubscribe removes the one channel', async () => {
-    const { guest: phone, roomId } = await pairUp(h, 'web', 'phone');
-    const events: string[] = [];
-    const off = await phone.run(async c => c.subscribe(roomId, (e) => { events.push(e); }));
-    await settle();
-    expect(phone.realtime.channels).toHaveLength(1);
-    expect(phone.realtime.setAuthCalls).toEqual([phone.token]);     // the private channel is authorised with the session token
-    const ch = phone.realtime.channels[0];
-    expect(ch.options).toEqual({ config: { private: true } });
-    ch.emitStatus('SUBSCRIBED');
-    ch.emitStatus('CHANNEL_ERROR');
-    ch.emitStatus('TIMED_OUT');
-    ch.emitStatus('CLOSED');
-    await settle();
-    // Nothing happens on those statuses: no new channel, no removal, no event to the screen.
-    expect(phone.realtime.channels).toHaveLength(1);
-    expect(phone.realtime.removed).toHaveLength(0);
-    expect(events).toEqual(['subscribed']);
-    // A broadcast on the old channel object still reaches the handler (realtime-js rejoins the same
-    // channel by itself after a socket reconnect; the core adds nothing on top).
-    ch.broadcast('msg', {});
-    ch.broadcast('burned', {});
-    expect(events).toEqual(['subscribed', 'msg', 'burned']);
-    off();
-    expect(phone.realtime.removed).toEqual([ch]);
-  }, TIMEOUT);
+  describe('P3-Q3: re-subscribe with backoff', () => {
+    afterEach(() => { vi.useRealTimers(); });
+    const fake = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    it('CHANNEL_ERROR, TIMED_OUT and CLOSED each drop the channel, re-run setAuth and open a new one after a growing, capped delay; SUBSCRIBED resets it', async () => {
+      const { guest: phone, roomId } = await pairUp(h, 'web', 'phone');
+      fake();
+      const events: string[] = [];
+      const off = phone.c.subscribe(roomId, (e) => { events.push(e); });
+      await vi.advanceTimersByTimeAsync(0);
+      const rt = phone.realtime;
+      expect(rt.channels).toHaveLength(1);
+      expect(rt.setAuthCalls).toEqual([phone.token]);           // the private channel is authorised with the session token
+      expect(rt.channels[0].options).toEqual({ config: { private: true } });
+      rt.channels[0].emitStatus('SUBSCRIBED');
+
+      // Keep failing: CHANNEL_ERROR, TIMED_OUT, CLOSED, then errors past the end of the table.
+      const failures = ['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED', 'CHANNEL_ERROR', 'CHANNEL_ERROR', 'TIMED_OUT', 'CHANNEL_ERROR'];
+      const expected = [...RESUBSCRIBE_DELAYS_MS, RESUBSCRIBE_DELAYS_MS[RESUBSCRIBE_DELAYS_MS.length - 1]];
+      for (let i = 0; i < failures.length; i++) {
+        const cur = rt.channels[i];
+        cur.emitStatus(failures[i]);
+        expect(rt.removed.at(-1)).toBe(cur);
+        cur.emitStatus(failures[i]);                             // repeated / late statuses of a dropped channel do nothing
+        const delay = expected[Math.min(i, expected.length - 1)];
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(rt.channels).toHaveLength(i + 1);                 // not before the delay
+        await vi.advanceTimersByTimeAsync(1);
+        expect(rt.channels).toHaveLength(i + 2);
+        expect(rt.setAuthCalls).toHaveLength(i + 2);
+        expect(rt.channels[i + 1].name).toBe(`room:${roomId}`);
+      }
+      expect(rt.removed).toHaveLength(failures.length);
+
+      // Joined again: the screen hears `subscribed` and the backoff starts over.
+      const n = rt.channels.length;
+      rt.channels[n - 1].emitStatus('SUBSCRIBED');
+      rt.channels[n - 1].emitStatus('CHANNEL_ERROR');
+      await vi.advanceTimersByTimeAsync(RESUBSCRIBE_DELAYS_MS[0]);
+      expect(rt.channels).toHaveLength(n + 1);
+      // Without `{ status: true }` the callback gets exactly what it got before: `subscribed` and broadcasts.
+      expect(events).toEqual(['subscribed', 'subscribed']);
+      rt.channels[0].broadcast('msg', {});                       // a dropped channel's broadcast is not delivered
+      rt.channels[n].broadcast('msg', {});
+      rt.channels[n].broadcast('burned', {});
+      expect(events).toEqual(['subscribed', 'subscribed', 'msg', 'burned']);
+      off();
+      expect(rt.removed.at(-1)).toBe(rt.channels[n]);
+    }, TIMEOUT);
+
+    it('{ status: true } also delivers every status as (\'status\', { status, attempt })', async () => {
+      const { guest: phone, roomId } = await pairUp(h, 'web', 'phone');
+      fake();
+      const got: Array<[string, unknown]> = [];
+      const off = phone.c.subscribe(roomId, (e, p) => { got.push([e, p]); }, { status: true });
+      await vi.advanceTimersByTimeAsync(0);
+      const rt = phone.realtime;
+      rt.channels[0].emitStatus('SUBSCRIBED');
+      rt.channels[0].emitStatus('TIMED_OUT');
+      await vi.advanceTimersByTimeAsync(RESUBSCRIBE_DELAYS_MS[0]);
+      rt.channels[1].emitStatus('CHANNEL_ERROR');
+      await vi.advanceTimersByTimeAsync(RESUBSCRIBE_DELAYS_MS[1]);
+      rt.channels[2].emitStatus('SUBSCRIBED');
+      expect(got).toEqual([
+        ['status', { status: 'SUBSCRIBED', attempt: 0 }], ['subscribed', {}],
+        ['status', { status: 'TIMED_OUT', attempt: 0 }],
+        ['status', { status: 'CHANNEL_ERROR', attempt: 1 }],
+        ['status', { status: 'SUBSCRIBED', attempt: 2 }], ['subscribed', {}],
+      ]);
+      off();
+    }, TIMEOUT);
+
+    it('unsubscribe during the backoff cancels the retry: no new channel, no setAuth', async () => {
+      const { guest: phone, roomId } = await pairUp(h, 'web', 'phone');
+      fake();
+      const off = phone.c.subscribe(roomId, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      const rt = phone.realtime;
+      rt.channels[0].emitStatus('CHANNEL_ERROR');
+      expect(rt.removed).toEqual([rt.channels[0]]);
+      off();
+      await vi.advanceTimersByTimeAsync(RESUBSCRIBE_DELAYS_MS.reduce((a, b) => a + b, 0) * 2);
+      expect(rt.channels).toHaveLength(1);
+      expect(rt.setAuthCalls).toEqual([phone.token]);
+      expect(rt.removed).toHaveLength(1);                        // removed once, not again by off()
+    }, TIMEOUT);
+  });
 
   it('subscribe() torn down before the session lookup resolves never opens a channel', async () => {
     const phone = await makeDevice(h, 'phone', 'solo');

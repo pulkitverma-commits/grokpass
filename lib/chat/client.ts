@@ -12,7 +12,7 @@ import { createChatClient, type LocalMessage } from '../../packages/core/src/cha
 import { createWebPlatform, fileSource, toBlob } from '../../packages/core/src/adapters/web/platform';
 import { keystore as ks } from './keystore';
 
-export { ChatError, toBytea, fromBytea, keyChanged, MAX_ATTACHMENT_BYTES } from '../../packages/core/src/chat/client';
+export { ChatError, toBytea, fromBytea, keyChanged, MAX_ATTACHMENT_BYTES, SYNC_PAGE_SIZE, SYNC_MAX_PAGES, RESUBSCRIBE_DELAYS_MS } from '../../packages/core/src/chat/client';
 export type { RoomKind, ExpiryMode, LocalMessage, RoomSummary, SyncResult, DeviceRecord, ChatClient } from '../../packages/core/src/chat/client';
 export type { ChatPlatform, FileSource, OpenedFile, KeyStore, SupabaseLike, ChatEnv, LockStore } from '../../packages/core/src/chat/ports';
 

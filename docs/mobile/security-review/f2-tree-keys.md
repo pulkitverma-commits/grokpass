@@ -363,3 +363,89 @@ Fix F2-10 before this ships. Then F-2 can be called closed.
 - `refusedWelcomePending` keeps sync rejecting on empty pages until the device has joined.
 - External commits are still impossible: `receive` takes only `mls_private_message`, and a missing sender is refused as `committer`.
 - The token is only ever sent as `p_token`.
+
+---
+
+## Fourth pass (27dd094)
+
+Reviewer: security-reviewer. Date: 2026-11-01. Read-only review of `3fde5dc..27dd094`; no tests or builds run (author reports core 382, web 150, mobile 460 green).
+
+### Verdict
+
+**F-2 is closed, with no open high or critical.**
+- F2-10 is fixed for honest members: invites now carry the room owner's pin, never the pin of the member who made the link.
+- One medium remains (F2-12). A *malicious* quick-room member can still write their own pin into a link by hand. A newcomer who joins through that link then sits in a branch only that member can read. This needs the inviter to be the attacker. It reveals nothing the member couldn't already read, and the server can only add impersonation through the F-3 residual. It is a gap in protecting the newcomer, not an F-2 confidentiality hole. Two cheap fixes are below.
+- The other open items are low.
+
+### Status of the third-pass findings
+
+| Finding | Status | Note |
+|---|---|---|
+| F2-10 member-made invite pinned the member | **Closed (honest case)** | `createInvite` takes the room's pin via `storedOwnerPin`: the owner's own, or the one a pinned member joined with. A member without a pin makes a token-only link and is told so (`INVITE_UNPINNED_NOTE`, `ownerPinned: false`). Tests in `tree-keys` and `room-menu.test.tsx`. |
+| F2-11 silent skip under a wrong pin | **Closed (partly)** | A skipped owner commit sets `changedGroup` on the owner's row, which shows `OWNER_UNRECOGNISED_NOTICE` on web and app. Only commits at this device's current epoch reach the committer check; a branched member never sees the owner's later commits as anything but undecryptable (see F2-12). |
+| (b) lenient parsing | **Closed** | `inviteTokenFrom`, `INVITE_RE` and `parseOnePeekLink` treat a `.` followed by anything but a v1 pin as no link. A trailing full stop is still read as punctuation. Tests in `links.test.ts`. |
+| (c) owner device changed | **Closed** | A refused Welcome in a pinned room now gives `invite_owner_mismatch` with the inviter message. Both UIs list it in `KEY_SYNC_CODES`, so it stays fail-closed and persistent. |
+| (d) `parseOnePeekLink` | **Closed** | It accepts the pinned form and returns `pin`; the README is updated. |
+| `ownerPinned` from the server's role | **Closed** | `ownerPinned` now comes only from the stored pin (`storedOwnerPin`). |
+| Sunset of token-only links | **Proposed** | 2027-02-01, in `known-limitations.md`. Track it as a dated task; nothing in the code enforces it yet. |
+
+### The lead's questions
+
+**Leaf-0 back-fill (`storedOwnerPin`).** The back-fill writes this device's own pin only when all three hold: no pin entry is stored; the server says `role === 'owner'`; and this device's own leaf is leaf 0 of its stored state.
+- **Can a non-owner satisfy it?** Only in a group that was already forged before these checks existed. ts-mls `createGroup` puts the creator at leaf 0, and an add fills the leftmost blank leaf. A server or member could have built a group where creator X is later removed, leaving a gap at leaf 0, and the victim is then added into that gap. If the server also says "owner", the victim pins *themselves*.
+  - That hurts the attacker: from then on the victim refuses the attacker's Welcomes and commits.
+  - The attacker gains only one thing: the "unpinned" notice disappears on a room that was already compromised.
+  - Low.
+- **Does any legitimate flow move the owner off leaf 0?** No.
+  - Leaves never move.
+  - The owner cannot be removed: `commitRemovals` excludes this device, the Members screen offers no Remove on yourself, the SQL `chat_send` refuses a non-owner's removal of anyone not already recorded, and commits from non-owners are skipped.
+  - Only old clients from before F-2, which applied any member's commit, could have accepted a rogue removal of the owner, and a later add could then land someone at leaf 0. Contrived; low.
+- **The reverse lever (low).**
+  - A server that tells a legacy owner they are only a "member" stops the back-fill. That owner's invites then stay token-only, and the owner sees "because you joined with an older link", which is wrong for someone who created the room.
+  - Fix: back-fill on leaf 0 alone (the server's role adds nothing a forged group couldn't also fake), or show the owner a dedicated message.
+
+**Can a member-made pinned invite be abused now? Yes, by a malicious member. This is F2-12 below.**
+
+**The `invite_owner_mismatch` split.**
+- It is still fail-closed (in `KEY_SYNC_CODES`; sync keeps rejecting until a genuine Welcome applies), and it is chosen only in a pinned room when a refused Welcome was refused because of its *signer*.
+- Its wording, "The person who invited you isn’t the one letting you in. Ask them for a new invite.", reads as a routine mix-up. In a pinned room this error now means one of: the owner's device changed, the server forged a Welcome, or a member branched the room. The server could also use it to nudge users towards a fresh link from someone it prefers.
+- Suggested wording: "We couldn’t confirm this chat: the device letting you in isn’t the owner your invite named. Don’t trust this chat. Check with the person who invited you, and ask the owner for a new invite."
+
+### New findings
+
+#### F2-12 (medium, what remains of F2-10): a malicious quick-room member can write their own pin into an invite and keep a newcomer in a branch only that member reads
+
+- Where:
+  - The pin is just text in the link. `createInvite` now embeds the owner's pin, but a modified client can put any pin there.
+  - `006_secret_chat.sql:311-314`: quick-room members may create invite tokens.
+  - `:415`: `chat_send` lets any member post `welcome` and `commit` rows; only removals are restricted to the owner.
+- Scenario: member M sends Dana `#<token>.1<M's pin>`.
+  1. Dana redeems the link. M then creates a commit adding Dana's package and a Welcome signed by M. An honest server delivers it.
+  2. Dana accepts it, since M is her pin. Everyone else skips M's commit as a non-owner change.
+  3. The owner's auto-admitted Welcome then reaches a Dana who has already joined, so she ignores it. The owner's later commits never decrypt on her side and are silently skipped as old-epoch or undecryptable, so `OWNER_UNRECOGNISED_NOTICE` never fires.
+  4. Dana's tree holds the other members' real leaves, so her pairwise numbers and device count match theirs.
+  5. Dana's messages reach only M, and she never sees anyone else's.
+- Impact: M learns nothing they couldn't already read as a member. With the server's help (F-3 relabelling), M can make their messages appear to come from other members.
+- Fix, either or both:
+  1. **At Welcome time, the joiner compares the pin with the listing.** By then the joiner can read the listing. If `pin.deviceId` is not the listed owner, refuse with `invite_owner_mismatch`, or at least flag the room. An honest server then exposes a malicious member, and only server-plus-member collusion gets past it (the F-3 class). This does not weaken the pin: the pin still has to match the Welcome's signer.
+  2. **Server, as defence in depth: `chat_send` accepts `welcome` rows and adding commits (`p_activate`) only from the owner device.** An honest server then never delivers M's Welcome.
+  - Test: a quick-room link pinning a non-owner member is refused or flagged at join, even though that member signs the Welcome.
+
+#### F2-13 (low): wording for legacy owners and for `invite_owner_mismatch`
+
+Both are covered above.
+- `INVITE_UNPINNED_NOTE` tells an owner whose back-fill didn't happen "you joined with an older link", which is wrong for them.
+- The `invite_owner_mismatch` wording is too mild for what it now means.
+
+### Checked and correct (27dd094)
+
+- `createInvite`:
+  - it never pins the device that makes the link;
+  - an unpinned member's link is token-only and labelled;
+  - `ownerPinned` is returned to both UIs.
+- `storedOwnerPin`:
+  - a stored `{pin: null}` (joined with an unpinned link) is never back-filled;
+  - the back-fill writes only this device's own key.
+- `welcomeRefusal`: `invite_owner_mismatch` is returned only when the room has a pin and a refused Welcome's reason was `signer`; everything else is still `member_key_mismatch`. Both are raised on empty pages too.
+- The parsers in core, web, `lib/format`, `lib/links` and `security/links` now agree.
+- The token is still the only thing sent to the server.

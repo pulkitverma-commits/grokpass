@@ -40,3 +40,10 @@ export const SECURE_RETRY_MS = 500;
 export const MAX_SHARE_ITEMS = 10;
 /** Bytes accepted per shared item: the core's MAX_ATTACHMENT_BYTES (50 MB bucket minus encryption overhead). Oversize items are skipped, never the whole share. */
 export const MAX_SHARE_ITEM_BYTES = 50 * 1024 * 1024 - 1024;
+/**
+ * Bytes copied per share, all items together (P3-6): one attachment's worth, since the share screen sends
+ * only the first item. Once the running total would pass it the remaining items are not copied and are
+ * counted in `dropped`; a hostile sender repeating shares cannot fill the cache faster than one attachment
+ * per share the user sees.
+ */
+export const MAX_SHARE_BYTES = MAX_SHARE_ITEM_BYTES;

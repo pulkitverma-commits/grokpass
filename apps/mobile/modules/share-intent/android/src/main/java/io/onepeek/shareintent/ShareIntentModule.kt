@@ -25,25 +25,32 @@ import java.security.SecureRandom
 //
 // The Intent only *references* the source app's content (a content:// Uri with a temporary read grant,
 // https://developer.android.com/reference/android/content/Intent#FLAG_GRANT_READ_URI_PERMISSION).
-// `getPendingShare()` copies each item into <cacheDir>/share-intent/<random>.<ext> through
+// `getPendingShare()` copies each item into <cacheDir>/share-intent/<nonce>/<random>.<ext> through
 // ContentResolver.openInputStream (https://developer.android.com/reference/android/content/ContentResolver#openInputStream(android.net.Uri))
-// and returns file:// URIs; the copy is a plaintext file that JS deletes once it has been encrypted
-// and sent (apps/mobile/security/shareIntent.ts sweeps the directory). The cache directory is used
+// and returns file:// URIs plus the `nonce` (one random directory per share, P3-3, so the share screen
+// deletes exactly its own copies and two overlapping shares never touch each other's); the copy is a
+// plaintext file that JS deletes once it has been encrypted and sent (apps/mobile/security/shareIntent.ts
+// `consumeShare(nonce)`; its launch sweep removes directories older than ten minutes). The cache directory is used
 // on purpose: never the files/Documents dir, and it is excluded from backups like everything else
 // (plugins/withBackupRules.js). The copy runs in an AsyncFunction, i.e. on the module queue, not
 // the UI thread (https://docs.expo.dev/modules/module-api/#asyncfunction).
 //
-// Caps (security review P2-4; mirrored in apps/mobile/security/constants.ts and src/ShareIntentModule.ts):
+// Caps (security review P2-4 / P3-6; mirrored in apps/mobile/security/constants.ts and src/ShareIntentModule.ts):
 // content:// URIs only (a file:// URI would be opened with OUR permissions: a hostile sender could point
 // it at our own databases/ or shared_prefs/), never a URI whose authority belongs to this package, at most
-// MAX_ITEMS items and MAX_ITEM_BYTES per item (an oversize item is stopped and its partial copy deleted;
-// the other items still go through). `dropped` tells JS how many items were skipped (count only).
+// MAX_ITEMS items, MAX_ITEM_BYTES per item and MAX_SHARE_BYTES for the whole share (one attachment's
+// worth: the share screen sends only the first item). An item that would exceed either cap is stopped and
+// its partial copy deleted; the items already copied stay, later items are tried against what is left of
+// the budget, and once the budget is spent no further item is opened. `dropped` tells JS how many items
+// were skipped (count only).
 //
 // Nothing here logs anything: no Uri, no text, no file name, no size.
 class ShareIntentModule : Module() {
   companion object {
     const val MAX_ITEMS = 10
     const val MAX_ITEM_BYTES = 50L * 1024L * 1024L - 1024L
+    /** Per-share total (P3-6): the core's MAX_ATTACHMENT_BYTES, the same number as the per-item cap. */
+    const val MAX_SHARE_BYTES = MAX_ITEM_BYTES
   }
 
   private var pendingDropped: Int = 0
@@ -68,7 +75,7 @@ class ShareIntentModule : Module() {
       }
     }
 
-    /** Copies pending items into the cache and returns { text?: string, uris?: string[] } or null. */
+    /** Copies pending items into <cacheDir>/share-intent/<nonce>/ and returns { text?, uris?, nonce?, dropped? } or null. */
     AsyncFunction("getPendingShare") { ->
       val text = pendingText
       val uris = pendingUris
@@ -79,9 +86,29 @@ class ShareIntentModule : Module() {
       if (text != null) out["text"] = text
       var dropped = pendingDropped
       if (uris.isNotEmpty()) {
-        val copied = uris.mapNotNull { copyToCache(it) }
-        dropped += uris.size - copied.size
-        if (copied.isNotEmpty()) out["uris"] = copied
+        val nonce = randomName()
+        val dir = File(shareDir(), nonce)
+        val copied = mutableListOf<String>()
+        var budget = MAX_SHARE_BYTES
+        for (uri in uris) {
+          if (budget <= 0L) {
+            dropped += 1   // the share's byte budget is spent: not opened, not copied
+            continue
+          }
+          val r = copyToCache(uri, dir, budget)
+          if (r == null) {
+            dropped += 1
+          } else {
+            copied.add(r.first)
+            budget -= r.second
+          }
+        }
+        if (copied.isNotEmpty()) {
+          out["uris"] = copied
+          out["nonce"] = nonce
+        } else {
+          dir.delete()   // nothing landed: no empty per-share directory left behind
+        }
       }
       // Consumed: the Uri grants are single-use from our point of view; a second call returns null.
       pendingText = null
@@ -180,14 +207,18 @@ class ShareIntentModule : Module() {
     return !authority.startsWith(self)
   }
 
-  /** Copies one content Uri into the share cache under a random name; null when it cannot be read, is not acceptable or exceeds MAX_ITEM_BYTES. */
-  private fun copyToCache(uri: Uri): String? {
+  /**
+   * Copies one content Uri into [dir] under a random name and returns (file:// URI, bytes copied); null
+   * when it cannot be read, is not acceptable, or exceeds MAX_ITEM_BYTES or the share's remaining
+   * [budget] (the partial copy is deleted in both cases).
+   */
+  private fun copyToCache(uri: Uri, dir: File, budget: Long): Pair<String, Long>? {
     val resolver = appContext.reactContext?.contentResolver ?: return null
     if (!acceptable(uri)) return null
     val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(resolver.getType(uri) ?: "")?.let { ".$it" }
       ?: extensionOf(uri)
-    val dir = shareDir()
     if (!dir.exists()) dir.mkdirs()
+    val cap = minOf(MAX_ITEM_BYTES, budget)
     val target = File(dir, randomName() + ext)
     return try {
       val input = resolver.openInputStream(uri) ?: return null
@@ -200,7 +231,7 @@ class ShareIntentModule : Module() {
             val n = src.read(buffer)
             if (n < 0) break
             total += n
-            if (total > MAX_ITEM_BYTES) {
+            if (total > cap) {
               ok = false
               break
             }
@@ -212,7 +243,7 @@ class ShareIntentModule : Module() {
         target.delete()
         null
       } else {
-        Uri.fromFile(target).toString()
+        Pair(Uri.fromFile(target).toString(), total)
       }
     } catch (_: Exception) {
       target.delete()

@@ -11,7 +11,8 @@
 // - auth: session helpers. Sign-in with Apple (identity token + nonce), Google through the system
 //   browser (startOAuth returns the URL, completeFromUrl finishes with the onepeek://auth callback),
 //   email link (also completed by completeFromUrl; the link is bound to the address requested on this
-//   phone, review W1-1), guest (anonymous), sign out. setForeground(active) starts / stops the
+//   phone, review W1-1, kept in SecureStore so the link still completes after the app was killed in
+//   between), guest (anonymous), sign out. setForeground(active) starts / stops the
 //   session auto-refresh with the AppState (the Expo-documented pattern: on React Native supabase-js
 //   has no `window` focus events, so the root layout drives it). onSignedIn(cb) is the VERIFIED
 //   sign-in signal (review P2-1): it fires once per sign-in this module completed itself (Apple,
@@ -27,7 +28,8 @@
 //
 // What never leaves this phone unencrypted: chat keys and messages (sealed rows in onepeek-chat.db),
 // the Supabase session with its refresh token (sealed rows in onepeek-auth.db; the wrapping keys sit
-// in SecureStore WHEN_UNLOCKED_THIS_DEVICE_ONLY). Nothing here logs: not URLs, codes or tokens.
+// in SecureStore WHEN_UNLOCKED_THIS_DEVICE_ONLY, as does the pending email address). Nothing here
+// logs: not URLs, codes or tokens.
 import { createChatClient, type ChatClient, type KeyStore } from '@onepeek/core';
 import {
   assertRuntimeSupport, createRnAuthStorage, createRnKeyStore, createRnLockStore, createRnPlatform,
@@ -40,6 +42,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
 import { Platform } from 'react-native';
 import { clearPickerCaches } from './files';
+import { clearHandoffs } from './links';
 import { forgetClientId } from './secrets';
 
 export type AuthSession = { userId: string; email: string | null; isAnonymous: boolean };
@@ -152,13 +155,55 @@ function toAuthSession(s: Session | null): AuthSession | null {
 // holds a magic link for any account can build a callback that signs this phone into that account
 // (login CSRF, review W1-1). The PKCE `code` is bound to the verifier in sealed storage; the hash is
 // not, so the app binds it itself: the address sendEmailLink() asked for on this phone, for the OTP
-// lifetime, and the resulting session must belong to that address. Module memory on purpose: a cold
-// start clears it and the user asks for a new link.
+// lifetime, and the resulting session must belong to that address. The address and its timestamp are
+// kept in SecureStore (WHEN_UNLOCKED_THIS_DEVICE_ONLY: never in a backup, never on another device) so
+// the link still completes when the user taps it after the app was killed in between (W1-1 residual);
+// module memory is only a cache of that row. One link per request: the row goes after the first
+// token_hash it is checked against, matching or not, on expiry, on sign-out and on reset.
 const EMAIL_LINK_TTL_MS = 60 * 60 * 1000;   // GoTrue's default OTP lifetime
 const EMAIL_LINK_TYPES: ReadonlySet<string> = new Set<EmailOtpType>(['magiclink', 'email']);
-let pendingEmail: { email: string; at: number } | null = null;
+/** SecureStore key of the pending address: `{ "email": <lower-cased>, "at": <ms since epoch> }`. */
+export const PENDING_EMAIL_KEY = 'onepeek.pending-email';
+type PendingEmail = { email: string; at: number };
+// undefined: not read from SecureStore yet (cold start); null: known to be absent.
+let pendingEmail: PendingEmail | null | undefined;
 
 const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
+/** The pending address, from memory or (once per process) from SecureStore. Anything malformed is null. */
+async function loadPendingEmail(): Promise<PendingEmail | null> {
+  if (pendingEmail !== undefined) return pendingEmail;
+  let found: PendingEmail | null = null;
+  try {
+    const raw = await SecureStore.getItemAsync(PENDING_EMAIL_KEY);
+    if (raw) {
+      const v = JSON.parse(raw) as Partial<PendingEmail>;
+      if (typeof v.email === 'string' && v.email && typeof v.at === 'number' && Number.isFinite(v.at)) {
+        found = { email: v.email, at: v.at };
+      }
+    }
+  } catch {
+    /* unreadable row: treated as absent, and the next write replaces it */
+  }
+  pendingEmail = found;
+  return found;
+}
+
+/** Writes (or, with null, removes) the pending address in memory and SecureStore. Never throws. */
+async function setPendingEmail(next: PendingEmail | null): Promise<void> {
+  pendingEmail = next;
+  try {
+    if (next) {
+      await SecureStore.setItemAsync(PENDING_EMAIL_KEY, JSON.stringify(next), {
+        keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+      });
+    } else {
+      await SecureStore.deleteItemAsync(PENDING_EMAIL_KEY);
+    }
+  } catch {
+    /* SecureStore unavailable: memory still holds the value for this process */
+  }
+}
 
 /**
  * Parses an `onepeek://auth` callback into its query and fragment parameters. Returns null for any
@@ -264,13 +309,13 @@ export const auth = {
       const { error } = await a.exchangeCodeForSession(p.code);
       if (error) return false;
     } else if (p.token_hash && p.type) {
-      const pending = pendingEmail;
+      const pending = await loadPendingEmail();
       const expired = !!pending && Date.now() - pending.at > EMAIL_LINK_TTL_MS;
-      if (expired) pendingEmail = null;
+      if (expired) await setPendingEmail(null);
       if (!pending || expired || !EMAIL_LINK_TYPES.has(p.type)) return false;
       const { data, error } = await a.verifyOtp({ token_hash: p.token_hash, type: p.type as EmailOtpType });
       if (error) return false;
-      pendingEmail = null;   // one link per request, matching or not
+      await setPendingEmail(null);   // one link per request, matching or not
       const email = data.session?.user.email;
       if (!email || normalizeEmail(email) !== pending.email) {
         // Someone else's account: drop the session this phone just got, locally and server-side.
@@ -286,12 +331,15 @@ export const auth = {
     return true;
   },
 
-  /** Sends a magic link and remembers the address: completeFromUrl() accepts a `token_hash` only for it. */
+  /**
+   * Sends a magic link and remembers the address (SecureStore, this device only): completeFromUrl()
+   * accepts a `token_hash` only for it, also after the app was killed before the link was tapped.
+   */
   async sendEmailLink(email: string): Promise<void> {
     const address = email.trim();
     const { error } = await sb().auth.signInWithOtp({ email: address, options: { emailRedirectTo: AUTH_REDIRECT_URL } });
     if (error) throw new Error(error.message);
-    pendingEmail = { email: normalizeEmail(address), at: Date.now() };
+    await setPendingEmail({ email: normalizeEmail(address), at: Date.now() });
   },
 
   async signInAsGuest(): Promise<void> {
@@ -324,7 +372,7 @@ export const auth = {
    * sign-out should not leave an identifier that links the next account's secrets to this one's.
    */
   async signOut(): Promise<void> {
-    pendingEmail = null;
+    await setPendingEmail(null);
     try { await push.unregister(); } catch { /* offline or not registered: the row is moved by the next owner (008) */ }
     const { error } = await sb().auth.signOut({ scope: 'local' });
     await forgetClientId();
@@ -382,10 +430,12 @@ export const push = {
  * next getChat() builds fresh ones. Used by the recovery screen for `keystore_unavailable`, where the
  * rows are already unreadable, and nowhere else. Server-side state (room membership, the old device
  * record) is untouched; this device simply joins again as a new one. Also sweeps the picker and viewer
- * cache directories (lib/files) so no plaintext attachment copy survives the reset.
+ * cache directories (lib/files) so no plaintext attachment copy survives the reset, forgets the pending
+ * email address and drops any link parked in lib/links' hand-off (P3-2).
  */
 export async function resetThisPhone(): Promise<void> {
-  pendingEmail = null;
+  await setPendingEmail(null);
+  clearHandoffs();
   const b = built;
   if (b?.supabase) {
     // The push token first: the RPC needs the session that is revoked just below. Best effort.

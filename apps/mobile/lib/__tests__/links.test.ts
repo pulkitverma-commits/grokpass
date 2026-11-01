@@ -1,5 +1,5 @@
 // lib/links: classification of scanned / shared / tapped text, and the one-shot hand-off.
-import { classify, clearHandoffs, inviteLinkFrom, secretLinkFrom, stashHandoff, takeHandoff, verifyDigitsFrom } from '../links';
+import { classify, clearHandoffs, HANDOFF_TTL_MS, inviteLinkFrom, secretLinkFrom, stashHandoff, takeHandoff, verifyDigitsFrom } from '../links';
 
 jest.mock('../secrets', () => ({ isSecretLink: jest.fn((u: string) => !u.includes('reject-me')) }));
 
@@ -46,5 +46,37 @@ test('the hand-off is read exactly once and per slot', () => {
   expect(takeHandoff('secret')).toBe('s-link');
   expect(takeHandoff('secret')).toBeNull();
   expect(takeHandoff('invite')).toBe('i-link');
+  expect(takeHandoff('invite')).toBeNull();
+});
+
+test('P3-2: a stash older than HANDOFF_TTL_MS (30 s) is not taken, and is gone; a fresh one is', () => {
+  const t0 = 1_700_000_000_000;
+  const now = jest.spyOn(Date, 'now');
+  try {
+    now.mockReturnValue(t0);
+    stashHandoff('secret', 'stale');
+    stashHandoff('invite', 'stale-invite');
+    now.mockReturnValue(t0 + HANDOFF_TTL_MS + 1);
+    expect(HANDOFF_TTL_MS).toBe(30_000);
+    expect(takeHandoff('secret')).toBeNull();
+    expect(takeHandoff('invite')).toBeNull();
+    // Dropped, not kept for a later reader that happens to be "in time" again.
+    now.mockReturnValue(t0 + 1);
+    expect(takeHandoff('secret')).toBeNull();
+    // Just inside the lifetime is fine.
+    now.mockReturnValue(t0);
+    stashHandoff('secret', 'fresh');
+    now.mockReturnValue(t0 + HANDOFF_TTL_MS);
+    expect(takeHandoff('secret')).toBe('fresh');
+  } finally {
+    now.mockRestore();
+  }
+});
+
+test('P3-2: clearHandoffs forgets both slots (relock and resetThisPhone call it)', () => {
+  stashHandoff('secret', 's-link');
+  stashHandoff('invite', 'i-link');
+  clearHandoffs();
+  expect(takeHandoff('secret')).toBeNull();
   expect(takeHandoff('invite')).toBeNull();
 });

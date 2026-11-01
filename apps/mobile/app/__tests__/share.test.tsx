@@ -18,8 +18,9 @@ jest.mock('react-native-safe-area-context', () => require('react-native-safe-are
 jest.mock('react-native-qrcode-svg', () => { const { View } = require('react-native'); function QrMock() { return <View testID="qr" />; } return QrMock; });
 jest.mock('expo-clipboard', () => ({ setStringAsync: jest.fn() }));
 jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { extra: {} } } }));
-const mockSecurity = { consumeShare: jest.fn(async () => {}) };
-jest.mock('@/security', () => ({ ...jest.requireActual('@/security/constants'), useSecureScreen: jest.fn(), consumeShare: () => mockSecurity.consumeShare() }));
+const mockSecurity = { consumeShare: jest.fn(async (_nonce?: string) => {}) };
+jest.mock('@/security', () => ({ ...jest.requireActual('@/security/constants'), useSecureScreen: jest.fn(), consumeShare: (nonce?: string) => mockSecurity.consumeShare(nonce) }));
+const NONCE = '0123456789abcdef01234567';
 jest.mock('@/lib/files', () => ({
   MAX_ATTACHMENT_BYTES: 50 * 1024 * 1024 - 1024,
   fileSize: (n: number) => `${(n / 1048576).toFixed(1)} MB`,
@@ -56,6 +57,33 @@ test('a shared file: the first active room is preselected, view once is on, Encr
   // P2-3: the share cache copy is consumed once the send has settled, not before.
   expect(mockSecurity.consumeShare).toHaveBeenCalledTimes(1);
   expect(mockSecurity.consumeShare.mock.invocationCallOrder[0]!).toBeGreaterThan(chat.sendFile.mock.invocationCallOrder[0]!);
+});
+
+test('P3-3: the share is consumed by its own nonce (the route param the bridge set), so another share on screen keeps its copies', async () => {
+  setLocalParams({ uris: `file:///cache/share-intent/${NONCE}/0000.jpg`, nonce: NONCE });
+  await renderScreen(<ShareScreen />);
+  await screen.findAllByTestId('share.room');
+  await fireEvent.press(screen.getByTestId('share.cancel'));
+  expect(mockSecurity.consumeShare).toHaveBeenCalledTimes(1);
+  expect(mockSecurity.consumeShare).toHaveBeenCalledWith(NONCE);
+  expect(screen.queryByTestId('share.skipped')).toBeNull();
+});
+
+test('P3-6: a positive `dropped` count shows "Some items were skipped"; the count itself is never drawn', async () => {
+  setLocalParams({ uris: `file:///cache/share-intent/${NONCE}/0000.jpg`, nonce: NONCE, dropped: '3' });
+  await renderScreen(<ShareScreen />);
+  expect(await screen.findByTestId('share.skipped')).toBeTruthy();
+  expect(screen.getByText('Some items were skipped.')).toBeTruthy();
+  expect(screen.queryByText(/3/)).toBeNull();
+  // A text-only share has no directory: consume is called with no nonce.
+  await screen.unmount();
+  mockSecurity.consumeShare.mockClear();
+  setLocalParams({ text: 'plain', dropped: '0' });
+  await renderScreen(<ShareScreen />);
+  await screen.findAllByTestId('share.room');
+  expect(screen.queryByTestId('share.skipped')).toBeNull();
+  await fireEvent.press(screen.getByTestId('share.cancel'));
+  expect(mockSecurity.consumeShare).toHaveBeenCalledWith(undefined);
 });
 
 test('P2-3: nothing is consumed while the screen waits; cancel consumes exactly once', async () => {

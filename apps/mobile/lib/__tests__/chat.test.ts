@@ -3,7 +3,8 @@
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
-import { AUTH_REDIRECT_URL, auth, getChat, getLockStore, parseAuthCallback, push, resetThisPhone, type AuthSession } from '../chat';
+import { AUTH_REDIRECT_URL, auth, getChat, getLockStore, parseAuthCallback, PENDING_EMAIL_KEY, push, resetThisPhone, type AuthSession } from '../chat';
+import { stashHandoff, takeHandoff } from '../links';
 import { CLIENT_ID_KEY, getClientId, resetClientIdCache } from '../secrets';
 import type { FakeSqlite } from './fake-sqlite';
 
@@ -299,6 +300,7 @@ describe('auth', () => {
           now.mockReturnValue(t0 + HOUR + 1);
           expect(await auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(false);
           expect(callsOf('verifyOtp')).toEqual([]);
+          expect(secureItems.has(PENDING_EMAIL_KEY)).toBe(false);   // expiry removes the SecureStore row too
           // Expired means gone: back in time, the address is still not accepted.
           now.mockReturnValue(t0 + 1);
           expect(await auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(false);
@@ -316,9 +318,97 @@ describe('auth', () => {
 
       it('sign-out forgets the pending address (the recovery reset too: see resetThisPhone)', async () => {
         await auth.sendEmailLink('me@x.test');
+        expect(secureItems.has(PENDING_EMAIL_KEY)).toBe(true);
         await auth.signOut();
+        expect(secureItems.has(PENDING_EMAIL_KEY)).toBe(false);
         expect(await auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(false);
         expect(callsOf('verifyOtp')).toEqual([]);
+      });
+
+      // W1-1 residual: the address used to live in module memory, so a link tapped after the app had been
+      // killed in between asked for a new link. It is now a SecureStore row (this device only).
+      describe('survives a cold start (SecureStore, WHEN_UNLOCKED_THIS_DEVICE_ONLY)', () => {
+        /** A fresh lib/chat module instance with fresh fakes, as after a kill: only SecureStore carries over. */
+        function coldStart(otpEmail: string): { auth: typeof auth; items: Map<string, string> } {
+          let fresh: typeof import('../chat') | null = null;
+          let items: Map<string, string> | null = null;
+          jest.isolateModules(() => {
+            // The new process sees the same SecureStore (seeded from the old mock's map; the two maps may
+            // be one object or two, depending on how the registry re-creates the mock) and fresh everything else.
+            const SS = jest.requireMock('expo-secure-store') as { __items: Map<string, string> };
+            for (const [k, v] of secureItems) SS.__items.set(k, v);
+            items = SS.__items;
+            const sb2 = jest.requireMock('@supabase/supabase-js') as Mocked;
+            sb2.__otp.email = otpEmail;
+            fresh = jest.requireActual('../chat') as typeof import('../chat');
+          });
+          return { auth: fresh!.auth, items: items! };
+        }
+
+        it('sendEmailLink writes { email, at } under onepeek.pending-email with the this-device-only class, lower-cased', async () => {
+          const set = jest.spyOn(SecureStore, 'setItemAsync');
+          const t0 = Date.now();
+          const now = jest.spyOn(Date, 'now').mockReturnValue(t0);
+          try {
+            await auth.sendEmailLink('  Me@X.test ');
+          } finally { now.mockRestore(); }
+          expect(set).toHaveBeenCalledWith(PENDING_EMAIL_KEY, JSON.stringify({ email: 'me@x.test', at: t0 }), { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+          expect(PENDING_EMAIL_KEY).toBe('onepeek.pending-email');
+          expect(JSON.parse(secureItems.get(PENDING_EMAIL_KEY)!)).toEqual({ email: 'me@x.test', at: t0 });
+          // Nothing but the address and the time: no token, no hash, no URL.
+          expect(secureItems.get(PENDING_EMAIL_KEY)).not.toMatch(/token|hash|onepeek:\/\//);
+          set.mockRestore();
+          await auth.signOut();
+        });
+
+        it('a matching link completes in a new process (the request was made before the kill); the row is consumed', async () => {
+          await auth.sendEmailLink('me@x.test');
+          const cold = coldStart('me@x.test');
+          expect(await cold.auth.completeFromUrl('onepeek://auth?token_hash=h-after-kill&type=magiclink')).toBe(true);
+          expect(await cold.auth.getSession()).toMatchObject({ email: 'me@x.test', isAnonymous: false });
+          expect(cold.items.has(PENDING_EMAIL_KEY)).toBe(false);
+          // One link per request: the same row is not accepted a second time, in the new process either.
+          await cold.auth.signOut();
+          expect(await cold.auth.completeFromUrl('onepeek://auth?token_hash=h-after-kill&type=magiclink')).toBe(false);
+          // The old process's memory is stale by now; its row is gone too (shared SecureStore).
+          secureItems.delete(PENDING_EMAIL_KEY);
+          await auth.signOut();
+        });
+
+        it("a link for another account is still refused in a new process (login CSRF), signed out again, and the row goes", async () => {
+          await auth.sendEmailLink('me@x.test');
+          const cold = coldStart('other@evil.test');
+          expect(await cold.auth.completeFromUrl('onepeek://auth?token_hash=attackers-hash&type=magiclink')).toBe(false);
+          expect(await cold.auth.getSession()).toBeNull();
+          expect(cold.items.has(PENDING_EMAIL_KEY)).toBe(false);
+          secureItems.delete(PENDING_EMAIL_KEY);
+          await auth.signOut();
+        });
+
+        it('the 1 h rule applies to the stored timestamp: an old row found at cold start is refused and removed', async () => {
+          const t0 = Date.now();
+          const now = jest.spyOn(Date, 'now');
+          try {
+            now.mockReturnValue(t0);
+            await auth.sendEmailLink('me@x.test');
+            now.mockReturnValue(t0 + HOUR + 1);
+            const cold = coldStart('me@x.test');
+            expect(await cold.auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(false);
+            expect(cold.items.has(PENDING_EMAIL_KEY)).toBe(false);
+          } finally { now.mockRestore(); }
+          secureItems.delete(PENDING_EMAIL_KEY);
+          await auth.signOut();
+        });
+
+        it('a malformed row is treated as absent', async () => {
+          secureItems.set(PENDING_EMAIL_KEY, '{"email":"me@x.test"}');   // no timestamp
+          const cold = coldStart('me@x.test');
+          expect(await cold.auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(false);
+          secureItems.set(PENDING_EMAIL_KEY, 'not json');
+          const cold2 = coldStart('me@x.test');
+          expect(await cold2.auth.completeFromUrl('onepeek://auth?token_hash=h&type=magiclink')).toBe(false);
+          secureItems.delete(PENDING_EMAIL_KEY);
+        });
       });
     });
 
@@ -522,6 +612,8 @@ describe('resetThisPhone', () => {
     const before = getChat();
     expect(await auth.completeFromUrl('onepeek://auth?code=good-code')).toBe(true);
     await auth.sendEmailLink('me@x.test');   // a pending email link: forgotten by the reset
+    expect(secureItems.has(PENDING_EMAIL_KEY)).toBe(true);
+    stashHandoff('secret', 'https://onepeek.io/s/abcdefgh12#' + 'k'.repeat(43));   // a parked link: dropped by the reset (P3-2)
     await before.keystore.put('room:r1:state', new Uint8Array([1, 2, 3]));
     getLockStore().set();
     expect(sqliteFake.files.get('onepeek-chat.db')!.sealed.size).toBeGreaterThan(0);
@@ -537,6 +629,8 @@ describe('resetThisPhone', () => {
     await resetThisPhone();
 
     expect(mockFiles.clearPickerCaches).toHaveBeenCalledTimes(1);   // picker copies and viewer temps go too (W2-2 / W2-3)
+    expect(secureItems.has(PENDING_EMAIL_KEY)).toBe(false);
+    expect(takeHandoff('secret')).toBeNull();
     expect(secureItems.has(CLIENT_ID_KEY)).toBe(false);
     expect(await getClientId()).not.toBe(clientId);
     secureItems.delete(CLIENT_ID_KEY); resetClientIdCache();

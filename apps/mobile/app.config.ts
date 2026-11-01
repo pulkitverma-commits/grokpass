@@ -70,6 +70,18 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         ],
         category: ['BROWSABLE', 'DEFAULT'],
       },
+      // native-security (N6): receive from the Android share sheet. Read by modules/share-intent; the
+      // copies land in <cache>/share-intent/ and are swept by apps/mobile/security/shareIntent.ts.
+      {
+        action: 'SEND',
+        data: [{ mimeType: 'text/plain' }, { mimeType: 'image/*' }, { mimeType: '*/*' }],
+        category: ['DEFAULT'],
+      },
+      {
+        action: 'SEND_MULTIPLE',
+        data: [{ mimeType: 'image/*' }, { mimeType: '*/*' }],
+        category: ['DEFAULT'],
+      },
     ],
   },
   plugins: [
@@ -88,6 +100,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // native-security (N1, N3): FLAG_SECURE on MainActivity; Android backup/transfer rules.
     './plugins/withSecureWindow.js',
     './plugins/withBackupRules.js',
+    // native-security (N6): App Group entitlement for the share flow; the hand-written Share Extension
+    // target is EXPERIMENTAL (never compiled here) and only added when ONEPEEK_SHARE_EXTENSION=1.
+    ['./plugins/withShareExtension.js', { appGroup: 'group.io.onepeek.app', extension: process.env.ONEPEEK_SHARE_EXTENSION === '1' }],
   ],
   experiments: { typedRoutes: true },
   extra: {

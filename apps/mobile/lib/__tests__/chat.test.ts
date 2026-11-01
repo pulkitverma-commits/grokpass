@@ -236,6 +236,26 @@ describe('auth', () => {
         expect(callsOf('verifyOtp')).toHaveLength(1);
       });
 
+      it("W3-5: nothing reaches the backend on the attacker's session: no rpc, from(), storage or channel call between verifyOtp and signOut", async () => {
+        await auth.sendEmailLink('me@x.test');
+        sbMock.__otp.email = 'other@evil.test';
+        expect(await auth.completeFromUrl('onepeek://auth?token_hash=attackers-hash&type=magiclink')).toBe(false);
+        const methods = sbMock.__calls.map(c => c.method);
+        const verified = methods.indexOf('verifyOtp');
+        const out = methods.indexOf('signOut', verified);
+        expect(verified).toBeGreaterThanOrEqual(0);
+        expect(out).toBeGreaterThan(verified);
+        // The window in which the foreign session is live on this client, in call order.
+        const between = methods.slice(verified + 1, out);
+        expect(between.filter(m => ['rpc', 'from', 'storage.from', 'channel'].includes(m))).toEqual([]);
+        // Stronger: nothing at all runs in that window (no getSession either); the next thing is the sign-out.
+        expect(between).toEqual([]);
+        expect(sbMock.__calls[out].args).toEqual([{ scope: 'local' }]);
+        // And after the sign-out, still nothing: the device is not registered under the attacker's account.
+        expect(methods.slice(out + 1).filter(m => ['rpc', 'from', 'storage.from', 'channel'].includes(m))).toEqual([]);
+        expect(rpcsOf('chat_register_device')).toEqual([]);
+      });
+
       it('a session without an email never matches', async () => {
         await auth.sendEmailLink('me@x.test');
         sbMock.__otp.email = '';

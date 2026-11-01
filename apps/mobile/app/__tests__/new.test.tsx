@@ -14,9 +14,12 @@ const mockQr = jest.fn((_value: string) => {});
 jest.mock('react-native-qrcode-svg', () => { const { View } = require('react-native'); function QrMock(p: { value: string }) { mockQr(p.value); return <View testID="qr" />; } return QrMock; });
 const mockSetString = jest.fn(async (_text: string) => true);
 jest.mock('expo-clipboard', () => ({ setStringAsync: (s: string) => mockSetString(s) }));
+// InviteSheet reads `extra.e2e` from the build's config (W3-2); the tests flip it per case.
+const mockExtra: { e2e?: unknown } = {};
+jest.mock('expo-constants', () => ({ __esModule: true, default: { get expoConfig() { return { extra: mockExtra }; } } }));
 
 const TOKEN = 'T'.repeat(43);
-beforeEach(() => { resetChatMock(); resetRouter(); mockSetString.mockClear(); mockQr.mockClear(); });
+beforeEach(() => { resetChatMock(); resetRouter(); mockSetString.mockClear(); mockQr.mockClear(); delete mockExtra.e2e; });
 
 test('Secret is the default kind and needs a 6+ character access code', async () => {
   await renderScreen(<NewChatScreen />);
@@ -47,6 +50,38 @@ test('creates the room with the chosen options, then an invite, and shows the li
   await waitFor(() => expect(mockSetString).toHaveBeenCalledWith(`https://onepeek.io/chat/join#${TOKEN}`));
   await fireEvent.press(screen.getByTestId('invite.done'));
   expect(router.replace).toHaveBeenCalledWith('/room/room-new');
+});
+
+async function createQuickAndOpenInvite() {
+  await renderScreen(<NewChatScreen />);
+  await fireEvent.press(screen.getByTestId('new.kind.quick'));
+  await fireEvent.press(screen.getByTestId('new.create'));
+  return screen.findByTestId('invite.link');
+}
+
+test('W3-2: only `extra.e2e === true` (the e2e EAS profile) renders the full link; anything else masks it', async () => {
+  mockExtra.e2e = true;
+  let link = await createQuickAndOpenInvite();
+  expect(link.props.children).toBe(`https://onepeek.io/chat/join#${TOKEN}`);
+  expect(link.props.numberOfLines).toBeUndefined();
+  expect(link.props.ellipsizeMode).toBeUndefined();
+  await screen.unmount();
+  // A truthy-but-not-true value (a copied env string, a "1") fails closed.
+  for (const v of ['1', 'true', 1, {}] as unknown[]) {
+    mockExtra.e2e = v;
+    link = await createQuickAndOpenInvite();
+    expect(link.props.children).toBe('https://onepeek.io/chat/join#••••••');
+    expect(link.props.numberOfLines).toBe(1);
+    await screen.unmount();
+  }
+  // The shell variable alone does nothing in the sheet.
+  delete mockExtra.e2e;
+  process.env.EXPO_PUBLIC_E2E = '1';
+  try {
+    link = await createQuickAndOpenInvite();
+    expect(link.props.children).toBe('https://onepeek.io/chat/join#••••••');
+    expect(JSON.stringify(screen.toJSON())).not.toContain(TOKEN.slice(0, 12));
+  } finally { delete process.env.EXPO_PUBLIC_E2E; }
 });
 
 test('Quick chat needs no code, uses its own defaults and omits an empty nickname', async () => {

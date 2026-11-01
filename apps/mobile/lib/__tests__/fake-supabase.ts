@@ -64,8 +64,11 @@ export function createFakeSupabase(fn: typeof jest.fn) {
         if (fn === 'chat_register_device') return { data: 'device-1', error: null };
         return { data: null, error: null };
       },
-      storage: { from: () => ({ upload: async () => ({ error: null }), download: async () => ({ data: null, error: { message: 'none' } }) }) },
-      channel: () => { throw new Error('unused'); },
+      // Table, bucket and realtime access are recorded like `rpc` so a test can prove nothing touched
+      // the backend in a given window (W3-5); none of them is answered.
+      from(table: string) { rec('from', table); throw new Error('unused'); },
+      storage: { from: (bucket: string) => { rec('storage.from', bucket); return { upload: async () => ({ error: null }), download: async () => ({ data: null, error: { message: 'none' } }) }; } },
+      channel: (name: string) => { rec('channel', name); throw new Error('unused'); },
       removeChannel: () => {},
       realtime: { setAuth: () => {} },
     };

@@ -1,8 +1,11 @@
 // Invite sheet: the link the core built (token in the #fragment only), as a QR code, with Copy and
 // Share. The screen shows the link masked; the full link goes only to the clipboard or the share
-// sheet, never to any server from here. Security review W1-9: `invite.link` renders the full link
-// only in an E2E build (EXPO_PUBLIC_E2E=1, so Maestro can copy it); every other build masks it.
+// sheet, never to any server from here. Security review W1-9 / W3-2: `invite.link` renders the full
+// link only when the build's config carries `extra.e2e === true`, which app.config.ts sets for the
+// `e2e` EAS profile alone (so Maestro can copy it); every other build, OTA bundle or local release
+// build masks it. The env var is not read here: a stray EXPO_PUBLIC_E2E in a shell unmasks nothing.
 import * as Clipboard from 'expo-clipboard';
+import Constants from 'expo-constants';
 import { useState } from 'react';
 import { Share, StyleSheet, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
@@ -15,10 +18,13 @@ import { maskLink } from '@/lib/format';
 
 type Props = { open: boolean; link: string; kind: 'quick' | 'secret' | 'business'; onDone: () => void; expiresLabel?: string; usesLabel?: string };
 
-/** Build-time flag: E2E builds render the full invite link so the two-device flows can copy it. */
-const E2E = process.env.EXPO_PUBLIC_E2E === '1';
+/** Fail closed: only the literal `true` the `e2e` profile's config writes unmasks the link. */
+function isE2EBuild(): boolean {
+  return (Constants.expoConfig?.extra as { e2e?: unknown } | undefined)?.e2e === true;
+}
 
 export function InviteSheet({ open, link, kind, onDone, expiresLabel = '1 day', usesLabel = 'once' }: Props) {
+  const E2E = isE2EBuild();
   const [toast, setToast] = useState('');
   const [err, setErr] = useState('');
 

@@ -13,10 +13,11 @@ account pending). What was checked: every file parses as YAML, every `id:` exist
 (`node apps/mobile/e2e/scripts/check-flows.mjs`: `17 flows, 168 ids in TESTIDS.md (1 proposed)`).
 Where to run them is the lead's decision ("Where to run", below); both options are written up.
 
-**Build:** the flows need the **E2E build**, an `eas.json` profile `e2e` that extends `development`
-and sets `env: { "EXPO_PUBLIC_E2E": "1" }` (iOS `simulator: true` for CI). Only that flag makes
-`invite.link` render the full link that 03 copies (security review W1-9); every other build masks it
-and 03 stops at its `assertTrue` on purpose. `release` owns `eas.json`; the profile is requested in
+**Build:** the flows need the **E2E build**, the `eas.json` profile `e2e` (extends `development`,
+iOS `simulator: true` for CI). Only a build of that profile (`EAS_BUILD_PROFILE=e2e`, which
+`app.config.ts` turns into `extra.e2e`) makes `invite.link` render the full link that 03 copies
+(security review W1-9 / W3-2); every other build, `expo export` bundle or local release build masks
+it and 03 stops at its `assertTrue` on purpose. `EXPO_PUBLIC_E2E` in a shell unmasks nothing. `release` owns `eas.json`; the profile is requested in
 the qa wave-2 report.
 
 ## Flows

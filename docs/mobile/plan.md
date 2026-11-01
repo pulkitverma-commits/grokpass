@@ -1,6 +1,6 @@
 # OnePeek mobile apps: build plan
 
-Lead: Claude (lead engineer). Status: **Gate 2 reached on `mobile/integration` (2026-11-01): Phase 2 code-complete, two security reviews, no open high or critical; device verification blocked on the Expo and Apple accounts. Waiting for human approval and confirmation of the Gate 2 wording (see `gates/phase-2.md`).**
+Lead: Claude (lead engineer). Status: **Gate 2 approved by the human on 2026-11-01 with device verification deferred (see `gates/phase-2.md`). Phase 3 (hardening and beta) running for the parts that need no device or account; see `log.md`.**
 Source of truth for scope and rules: the build prompt (sections 1, 3, 4). This file holds the task
 breakdown, owners, order and risks. The running log is `log.md`; gate evidence goes in `gates/`.
 

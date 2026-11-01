@@ -1,9 +1,8 @@
 # Gate 2: secrets inside chat and sharing
 
 Date: 2026-11-01. Branch: `mobile/integration` (34 commits after Gate 1 approval, 97 files, +9k lines).
-Decision requested from the human: **approve Phase 2 as code-complete with device verification deferred** (the same
-blocker as Gates 0 and 1: no Expo or Apple account, no Xcode or Android Studio on this Mac), and **confirm the Gate 2
-wording** in `plan.md` §4, which the lead reconstructed because the build prompt file is no longer on this machine.
+Decision: **approved by the human on 2026-11-01 with device verification deferred** (the reconstructed Gate 2 wording in
+`plan.md` §4 stands unless the human corrects it). Device checks run once the accounts exist; results are appended here.
 
 Security verdict: **no open high or critical findings** (`security-review/phase-2-close-out.md`). The four Phase 2 mediums and six lows are closed with tests; the close-out's one new medium (P3-1, share screen dismissed without deleting the shared copy) is fixed in the same branch with a test. Open lows (P3-2, P3-3, P3-5, P3-6 and the Phase 1 carry-overs) are listed in the close-out with owners and go into Phase 3.
 

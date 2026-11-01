@@ -4,6 +4,15 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- **Human approved Gate 2 with device verification deferred** (2026-11-01). Phase 3 starts with what needs neither a
+  device nor an account nor much disk (this Mac has ~230 MB free; agents run jest with `--no-cache`, no exports):
+  release (store listings, privacy labels / Data safety, export-compliance draft, reviewer notes, TestFlight / Play
+  internal-track runbooks), security-reviewer (full Phase 3 report over the whole app), a fix branch for the open
+  lows (P3-2 hand-off TTL, P3-3 per-nonce share consume, P3-5 substring classification, P3-6 per-share byte total,
+  W1-1 pending email surviving a cold start), qa (device matrix with owners and pass criteria, offline / reconnect
+  and 200-message sync tests in core, accessibility checklist). Deferred until disk and accounts exist: EXIF
+  re-encode (`expo-image-manipulator` install), spike deletion, every device check, performance numbers, TestFlight
+  and Play uploads.
 - security-reviewer close-out `phase-2-close-out.md`: no open high or critical; P2-1..P2-10 closed with tests. New
   medium P3-1 (share screen dismissed by swipe/back/redirect left the shared copy) fixed by the lead (unmount
   cleanup + signed-out path), with P3-4 (`+native-intent` test, narrow import) and P3-7 (Intent cleared after parking

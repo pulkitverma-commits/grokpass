@@ -5,6 +5,11 @@ every element addressed by the testIDs in [`TESTIDS.md`](TESTIDS.md) (the single
 `mobile-ui` builds against it, `scripts/check-flows.mjs` enforces it). Companion to
 `docs/mobile/test-plan.md` §3.
 
+**Status 2026-11-01 (Phase 2): 12–16 added, written and statically checked, not run; 35 dry steps.** The
+Phase 2 flows use the `secret.*`, `link.<id>`, `viewer.peek|open|revealed|timer`, `share.*` and `scan.*`
+ids proposed in `TESTIDS.md` ("Phase 2 proposed"); until mobile-ui lands them (U8) every such step is dry
+and `check-flows.mjs` lists it (`23 flows, 226 ids in TESTIDS.md (59 proposed)`, `flows OK`).
+
 **Status 2026-10-31 (wave 2): written and statically checked, not run.** This Mac has no Xcode,
 Android Studio, Java or Maestro (`docs/mobile/log.md`), and there is no device build yet (EAS
 account pending). What was checked: every file parses as YAML, every `id:` exists in `TESTIDS.md`
@@ -35,13 +40,20 @@ the qa wave-2 report.
 | 08 | `08-burn.yaml` + `.peer.yaml` | A: menu (Panic row present) → burn → **cancel** → burn → confirm → room gone, still gone after relaunch; B: `room.ended` → back → no room, still gone after relaunch | A then B | yes |
 | 10 | `10-settings-notifications.yaml` | Settings → Notifications on → OS prompt handled → switch `checked: true`, no error → relaunch keeps it → off again. Never asserts the token | 1 | needs a device that can mint a push token (tag `push`, `MAESTRO_PUSH=1` in the run script) |
 | 09 | `09-panic-lock.yaml` | Chats → Settings → `panic` (single tap, no confirmation) → `locked.screen` ("Locked by Panic Exit"), Settings/Chats/room not visible → relaunch still locked → (optional) biometric unlock | 1 | yes; unlock only with `MAESTRO_BIOMETRIC=sim` |
+| 12 | `12-secret-link-in-app.yaml` + `.peer.yaml` | A: composer `room.secret` → sheet 07 → onepeek.io link, view once, guard on → create → `link.<id>` card in the room, text not in the tree. B: tap the card → viewer `viewer.peek` (never the content) → `viewer.open` → `viewer.revealed` behind `viewer.hold` (never held), no share → done → tap again → `viewer.gone`; still gone after a relaunch | A then B | dry: `secret.*`, `link.<id>`, `viewer.peek|open|revealed` proposed |
+| 13 | `13-secret-link-from-browser.yaml` | Chats → `chats.secret` → `secret.screen` → 1 h, view once, 1 m viewer timer → create → `secret.link` (E2E build only, masked otherwise: `assertTrue` stops the flow) → relay → `openLink` (https rewritten to `onepeek://` on simulators) → `viewer.peek` → open → `viewer.revealed` + `viewer.timer`, text never in the tree → done → `openLink` again → `viewer.gone`. **Manual M18**: the same link on a phone without the app opens the website | 1 | dry: `secret.*`, `viewer.*` proposed; E2E build |
+| 14 | `14-share-from-photos.yaml` | **DEVICE**: Photos → first photo → Share → OnePeek → `share.screen` with `share.item` (kind + size, no name) and `share.viewOnce` checked → `share.toChat` → `share.room` 0 → `share.send` → room shows our `file.<id>` disabled (view-once) | A (in the 05 room) | dry: `share.*` proposed; system Photos/share-sheet labels confirmed on the first device run |
+| 15 | `15-share-from-files.yaml` | **DEVICE**: Files → `e2e-note.txt` → Share → OnePeek → `share.cancel` (nothing created, back to Chats) → again → `share.link` → `secret.screen` prefilled → 1 h, view once → create → `secret.link|copy|share|qr`, the file name never on screen → done | 1 | dry: `share.*`, `secret.*` proposed; Files labels confirmed on the first device run |
+| 16 | `16-scan-qr.yaml` | Chats → `chats.scan` → camera permission (`launchApp permissions` + `scan.allow` fallback) → `scan.camera`; run 4× with `MAESTRO_QR_KIND=invite|secret|verify|foreign`, a second device showing `invite.qr` / `secret.qr` / `verify.qr` or any foreign QR: invite → `join.screen`, secret → `viewer.peek`, verify → `verify.number` + "They match", foreign → `scan.foreign`, scanner stays, payload never shown | 1 + a device showing the code | dry: `scan.*`, `chats.scan`, `invite.qr`, `secret.qr` proposed; **camera**: physical device, or Android emulator virtual scene; no iOS simulator |
 
 Sub-flows in `flows/_common/`: `guest-home` (fresh install to Chats home), `back-to-chats`
 (`room.back` when in a room, else Android back / iOS edge swipe, twice), `open-room` (tap the only
 room if on Chats home).
 
-Tags: `ios`, `android` (every flow runs on both), `single` (01, 02, 03, 09, 10: one device),
-`two-device` with `device-a` / `device-b` (03 to 08, 11), `push` (10 only).
+Tags: `ios`, `android` (every flow runs on both), `single` (01, 02, 03, 09, 10, 13, 15, 16: one device),
+`two-device` with `device-a` / `device-b` (03 to 08, 11, 12, 14), `push` (10 only), `phase-2` (12–16),
+`share` (14, 15: the system Photos/Files apps and their share sheet), `camera` (16). CI without devices:
+`--exclude-tags push,share,camera`.
 
 ## Rules the flows follow
 
@@ -92,6 +104,9 @@ Environment (defaults in each flow's `env:`; `-e NAME=value` overrides):
 | `MAESTRO_BODY`, `MAESTRO_BODY2` | 05 | `The launch code is 4471`, `Got it` |
 | `MAESTRO_EMAIL` | 02 | `qa-maestro@onepeek.io` (lead: replace with a real team inbox) |
 | `MAESTRO_BIOMETRIC` | 09 | `skip` (`sim` asks the relay to accept the simulator biometric) |
+| `MAESTRO_SECRET` | 12, 13 | `The launch code is 4471` (a fixture, never asserted visible) |
+| `MAESTRO_QR_KIND` | 16 | `foreign` (`invite`, `secret`, `verify`: what the other device shows) |
+| `MAESTRO_PHASE2`, `MAESTRO_SHARE` | run script: `1` adds 12/12.peer, and 14 with both | `0` |
 
 ## Screenshots (flow 07) and biometrics (flow 09)
 
@@ -176,6 +191,30 @@ node apps/mobile/e2e/scripts/check-flows.mjs
 Seed one photo before 06: `xcrun simctl addmedia <udid> e2e-photo.png` /
 `adb -s <serial> push e2e-photo.png /sdcard/Pictures/` then a media-scanner broadcast. The photo
 is any PNG; it is never asserted on and the file is deleted by view-once.
+
+## Share targets and cameras (14, 15, 16)
+
+- **Seed** before 14/15: the e2e photo (above) and a text file: iOS `xcrun simctl` cannot push into
+  Files, so on a simulator save `e2e-note.txt` through the Files app's iCloud Drive / On My iPhone once
+  by hand (or run 15 on a device); Android `adb -s <serial> push e2e-note.txt /sdcard/Download/`. The
+  file's content is a fixture line; its name is never asserted as visible text (`share.item` shows kind
+  and size).
+- **Share sheet labels** ("Share", "OnePeek", the first photo as `Photo.*`) are system UI outside the
+  testID contract; both flows mark those steps `DEVICE` and the first real run fixes the labels per OS
+  version. iOS runs the share **extension** process, so the app must be installed from a build that
+  includes it (native-security N6); 14/15 cannot pass against a build without the extension, which is
+  the intended failure.
+- **Cameras**: iOS simulators have no camera, so 16 is a physical-device flow on iOS. Android: start the
+  emulator with `-camera-back virtualscene`, then in Extended controls → Camera → set the wall poster
+  to a PNG of the QR (export `invite.qr` / `secret.qr` / `verify.qr` from the other device as an image
+  taken with a third phone, or render the same link with any QR tool for `foreign` use a Wi-Fi QR).
+  The flow never asserts the scanned payload as text; a foreign code must leave the scanner open with
+  `scan.foreign` and nothing of the payload on screen.
+- **Universal Links** (13 and 04): simulators do not verify associated domains, so `relay-get.js`
+  rewrites `https://onepeek.io/…` to `onepeek://…`. On a physical device with the AASA / assetlinks
+  live, run with `MAESTRO_UNIVERSAL_LINKS=1` so the https form is what the OS routes; the fragment must
+  reach the app (`viewer.peek` appears) and the website must not have been opened. The "without the
+  app" half is manual (test-plan §4 M18).
 
 ## Report format
 

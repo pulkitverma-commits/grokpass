@@ -1,0 +1,112 @@
+# 15 One device: share a document from the system Files app to OnePeek → share target → "Make a
+# onepeek.io link" → the One-time secret screen prefilled with the file (`share.item` kind "file") →
+# create → `secret.link` → done. The file is the seeded `e2e-note.txt` (README); its name is never
+# asserted as text (`share.item` carries kind and size only). Cancel path first: cancel discards the copy
+# and returns to Chats, nothing is created.
+#
+# DEVICE steps (marked): the Files app (iOS) / Files by Google (Android), its share sheet and "OnePeek"
+# in it are outside the contract; labels confirmed on the first device run. S21+ (native-security) cover
+# the extension side.
+appId: io.onepeek.app
+name: 15-share-from-files
+tags:
+  - ios
+  - android
+  - single
+  - phase-2
+  - share
+---
+- runFlow: _common/guest-home.yaml
+# DEVICE: share from Files, cancel in OnePeek.
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - launchApp: com.apple.DocumentsApp
+      - tapOn:
+          text: "e2e-note"
+      - longPressOn:
+          text: "e2e-note"
+      - tapOn:
+          text: "Share"
+      - tapOn:
+          text: "OnePeek"
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - launchApp: com.google.android.apps.nbu.files
+      - longPressOn:
+          text: "e2e-note.txt"
+      - tapOn:
+          text: "Share"
+      - tapOn:
+          text: "OnePeek"
+- extendedWaitUntil:
+    visible:
+      id: "share.screen"
+    timeout: 30000
+- assertVisible:
+    id: "share.item"
+- assertNotVisible: "e2e-note"
+- tapOn:
+    id: "share.cancel"
+- assertNotVisible:
+    id: "share.screen"
+- assertVisible:
+    id: "chats.screen"
+# DEVICE: share again, this time make a link.
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - launchApp: com.apple.DocumentsApp
+      - longPressOn:
+          text: "e2e-note"
+      - tapOn:
+          text: "Share"
+      - tapOn:
+          text: "OnePeek"
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - launchApp: com.google.android.apps.nbu.files
+      - longPressOn:
+          text: "e2e-note.txt"
+      - tapOn:
+          text: "Share"
+      - tapOn:
+          text: "OnePeek"
+- extendedWaitUntil:
+    visible:
+      id: "share.screen"
+    timeout: 30000
+- tapOn:
+    id: "share.link"
+- extendedWaitUntil:
+    visible:
+      id: "secret.screen"
+    timeout: 15000
+- tapOn:
+    id: "secret.expires.3600"
+- tapOn:
+    id: "secret.views.1"
+- tapOn:
+    id: "secret.create"
+- extendedWaitUntil:
+    visible:
+      id: "secret.link"
+    timeout: 30000
+- assertVisible:
+    id: "secret.copy"
+- assertVisible:
+    id: "secret.share"
+- assertVisible:
+    id: "secret.qr"
+# The file name is not on the result screen either.
+- assertNotVisible: "e2e-note"
+- tapOn:
+    id: "secret.done"
+- assertVisible:
+    id: "chats.screen"

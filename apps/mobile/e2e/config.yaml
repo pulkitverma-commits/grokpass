@@ -4,6 +4,10 @@
 # half on its own simulator and passes the room link between them (see README.md).
 # 10 (tag `push`) needs a device that can mint a push token; exclude it with `--exclude-tags push`
 # on an iOS simulator without APNs support or an emulator without Google Play.
+# Phase 2 (tag `phase-2`): 12/12.peer (two-device, in the run script), 13 (single, E2E build for the
+# unmasked `secret.link`), 14/15 (tag `share`: the system Photos/Files apps and their share sheet, a
+# device or seeded simulator), 16 (tag `camera`: a physical device or an emulator with a virtual-scene
+# QR poster; iOS simulators have no camera). Exclude with `--exclude-tags share,camera` in CI.
 flows:
   - "flows/*.yaml"
 executionOrder:
@@ -12,6 +16,9 @@ executionOrder:
     - 01-welcome-guest
     - 02-signin-email
     - 03-create-secret-room
+    - 13-secret-link-from-browser
+    - 15-share-from-files
+    - 16-scan-qr
     - 10-settings-notifications
     - 09-panic-lock
 platform:

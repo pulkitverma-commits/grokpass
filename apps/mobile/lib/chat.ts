@@ -114,10 +114,16 @@ function build(): Built {
         },
       })
     : null;
+  return { supabase, authStorage, ...buildChat(supabase, keystore) };
+}
+
+/** The chat half of the singletons: a keystore and the ChatClient over it, on the given Supabase client. */
+function buildChat(supabase: SupabaseClient | null, keystore?: KeyStore): Pick<Built, 'keystore' | 'chat'> {
+  const ks = keystore ?? createRnKeyStore({ secureStore: SecureStore, sqlite: SQLite });
   const platform = createRnPlatform<Session>({
-    supabase, keystore, lockStore: getLockStore(), siteUrl: cfg.siteUrl, deviceLabel: deviceLabel(),
+    supabase, keystore: ks, lockStore: getLockStore(), siteUrl: extra().siteUrl, deviceLabel: deviceLabel(),
   });
-  return { supabase, keystore, authStorage, chat: createChatClient(platform) };
+  return { keystore: ks, chat: createChatClient(platform) };
 }
 
 function get(): Built {
@@ -363,19 +369,32 @@ export const auth = {
   },
 
   /**
-   * Signs this phone out. `scope: 'local'` revokes this device's refresh token and removes the
-   * sealed session here; the user's browsers and other phones stay signed in (a global sign-out
-   * from a phone would be surprising). auth-js removes the local session even when the revoke call
-   * fails, so the phone is signed out in every case; a network error is reported after that. The
-   * push token goes first (it needs the session), best effort: sign-out never waits on it. The
-   * secrets quota id (lib/secrets CLIENT_ID_KEY) goes too (P2-9): it is not account-bound, but a
-   * sign-out should not leave an identifier that links the next account's secrets to this one's.
+   * Signs this phone out and removes this account's chats from it, as the website does
+   * (`chat.keystore.wipe()` before the Supabase sign-out; review F-1). Chat records are keyed by room,
+   * not by user, so anything left behind would be read by the next account signed in on this phone:
+   * the MLS state (with this account's leaf keys), the stored message copies and the device signing
+   * key all go. Order: the push token first (the RPC needs the session; best effort, sign-out never
+   * waits on it), then the chat keystore wipe (wrapping key deleted before any row), then
+   * `signOut({ scope: 'local' })`, which revokes this device's refresh token and removes the sealed
+   * session here (browsers and other phones stay signed in; auth-js removes the local session even
+   * when the revoke call fails). The in-memory ChatClient is dropped so the next getChat() builds a
+   * fresh one with no cached device; the Supabase client is kept, so screens' auth listeners stay
+   * attached. The secrets quota id (P2-9), parked links (lib/links) and picker / viewer cache copies
+   * (lib/files) go too. A wipe or network error is reported after the phone is signed out.
    */
   async signOut(): Promise<void> {
     await setPendingEmail(null);
+    clearHandoffs();
     try { await push.unregister(); } catch { /* offline or not registered: the row is moved by the next owner (008) */ }
-    const { error } = await sb().auth.signOut({ scope: 'local' });
+    const b = get();
+    let wipeError: unknown = null;
+    try { await b.keystore.wipe(); } catch (e) { wipeError = e; }
+    const s = sb();
+    const { error } = await s.auth.signOut({ scope: 'local' });
+    if (built === b) built = { ...b, ...buildChat(b.supabase) };
     await forgetClientId();
+    try { await clearPickerCaches(); } catch { /* swept again on the next launch */ }
+    if (wipeError) throw wipeError instanceof Error ? wipeError : new Error('wipe_failed');
     if (error) throw new Error(error.message);
   },
 };

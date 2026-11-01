@@ -320,7 +320,7 @@ function Verify({ roomId, members, onChange, onClose }: { roomId: string; member
   return (
     <View style={styles.stack}>
       <Text variant="title" tone="heading">Verify {name}</Text>
-      <Text variant="sub" tone="muted">Compare these numbers in person or on a call. If they match on both screens, nobody is intercepting this chat.</Text>
+      <Text variant="sub" tone="muted">Compare these numbers in person or on a call. If they match, you’re both seeing the same keys the server gave each of you. This does not yet prove the server didn’t substitute a key.</Text>
       {num ? (
         <View style={styles.digits} accessible accessibilityLabel={`Safety number ${groups.join(' ')}`} testID="verify.number">
           {groups.map((g, i) => <Text key={i} variant="h2" mono style={styles.digit}>{g}</Text>)}

@@ -25,10 +25,11 @@ installRnCrypto();
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 /**
- * Routes a signed-out user may see. Joining is public (guests), the recovery screen must always
- * open, and a secret link (`/s/<id>`) opens for anyone who holds it, as on the website.
+ * Routes a signed-out user may see. Joining is public (guests), and a secret link (`/s/<id>`) opens
+ * for anyone who holds it, as on the website. The recovery screen is not public (review F-7): it
+ * opens only from the app's own guard() or Settings, which arm a one-shot pass in lib/links.
  */
-const PUBLIC = new Set(['welcome', 'sign-in', 'auth', 'join', 'chat', 'reset', 's']);
+const PUBLIC = new Set(['welcome', 'sign-in', 'auth', 'join', 'chat', 's']);
 
 /**
  * Tells the core whether the app is in front (core-crypto adds `auth.setForeground` for Supabase's

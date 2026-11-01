@@ -102,3 +102,8 @@ test('carry-over: auth.setForeground follows AppState when lib/chat exports it, 
     spy.mockRestore();
   }
 });
+
+test('F-7: /reset is no longer public: a signed-out user there is sent to Welcome', async () => {
+  await mount(['reset'], null);
+  await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/welcome'));
+});

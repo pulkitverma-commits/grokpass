@@ -144,8 +144,7 @@ export default function ShareScreen() {
       const ttl = room?.ttl ?? 60;
       if (file) await guard(() => chat().sendFile(roomId, fileSource(file), ttl, viewOnce));
       else await guard(() => chat().send(roomId, text.trim(), ttl));
-      consume();
-      void chat().notifyRoom(roomId);
+      consume();   // send() / sendFile() notify the room themselves (review F-9)
       router.replace(`/room/${roomId}`);
     } catch (e) {
       // The copy is not kept for a retry: a failed send leaves nothing behind either (P2-3). The

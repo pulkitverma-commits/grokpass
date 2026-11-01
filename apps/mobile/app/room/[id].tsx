@@ -102,8 +102,14 @@ export default function RoomScreen() {
   const secret = room?.kind === 'secret';
   useScreenshotAlert(joined && !ended ? roomId : null, room?.ttl ?? ttl);
 
-  /** Stored messages plus any still on their way out. */
+  // Whether myRooms() listed this room for the current session (review F-1, defence in depth). Stored
+  // copies are shown only after that: a room id from a notification or a deep link that this account
+  // is not in never has its local messages read onto the screen, whatever the keystore still holds.
+  const listed = useRef(false);
+
+  /** Stored messages plus any still on their way out; nothing for a room myRooms() has not listed. */
   const showStored = useCallback(async () => {
+    if (!listed.current) { setMsgs([]); return; }
     const stored = (await chat().messages(roomId)) as Msg[];
     const ids = new Set(stored.map((m) => m.id));
     for (const k of Array.from(outgoing.current.keys())) if (ids.has(k)) outgoing.current.delete(k);
@@ -118,7 +124,8 @@ export default function RoomScreen() {
       if (r.removed) { setEnded((e) => e ?? 'This chat has ended, or you were removed.'); return; }
       const rooms = await chat().myRooms();
       const current = rooms.find((x) => x.id === roomId) ?? null;
-      if (!current) { setEnded((e) => e ?? 'This chat has ended.'); await chat().forgetRoom(roomId); return; }
+      listed.current = !!current;
+      if (!current) { setMsgs([]); setEnded((e) => e ?? 'This chat has ended.'); await chat().forgetRoom(roomId); return; }
       setRoom(current);
       // The composer follows the room default whenever the default itself changes (as on the web).
       if (roomTtl.current !== current.ttl) { roomTtl.current = current.ttl; setTtl(current.ttl); }
@@ -233,7 +240,7 @@ export default function RoomScreen() {
       const m = (await guard(() => chat().send(roomId, body, ttl, reply?.id, msgId))) as Msg | undefined;
       outgoing.current.delete(msgId);
       if (m) setMsgs((cur) => (cur.some((x) => x.id === msgId) ? cur.map((x) => (x.id === msgId ? m : x)) : [...cur, m]));
-      void chat().notifyRoom(roomId);
+      // No notifyRoom here: the core's send() already asks the server to push (review F-9).
     } catch (e) {
       outgoing.current.delete(msgId);
       setMsgs((cur) => cur.filter((x) => x.id !== msgId));
@@ -264,8 +271,7 @@ export default function RoomScreen() {
     setErr(''); setFileBusy('sending');
     try {
       const m = (await guard(() => chat().sendFile(roomId, fileSource(p), ttl, viewOnce))) as Msg;
-      setMsgs((cur) => [...cur, m]);
-      void chat().notifyRoom(roomId);
+      setMsgs((cur) => [...cur, m]);   // sendFile() notifies the room itself (F-9)
     } catch (e) {
       setErr(friendlyError(errorCode(e)));
       throw e;

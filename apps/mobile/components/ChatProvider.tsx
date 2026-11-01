@@ -8,6 +8,31 @@ import { errorCode } from '@/lib/format';
 
 type Chat = ReturnType<typeof getChat>;
 
+// ---------------------------------------------------------------------------- reset pass (review F-7)
+
+// The recovery screen (/reset) wipes every chat on the phone in two taps, so it acts only when the app
+// itself sent the user there: guard() below on `keystore_unavailable`, or Settings → "Reset chats on
+// this phone". Those callers arm a one-shot pass right before navigating; a deep link
+// (`onepeek://reset` from another app or a message) finds none and the screen sends it home. Memory
+// only, valid for RESET_PASS_MS, spent by the screen once it has mounted.
+const RESET_PASS_MS = 30_000;
+let resetPassAt = 0;
+
+/** Arms the one-shot pass for /reset. Call right before `router.push` / `replace('/reset')`. */
+export function allowReset(): void {
+  resetPassAt = Date.now();
+}
+
+/** Whether an unexpired pass is armed. Does not spend it. */
+export function resetAllowed(): boolean {
+  return resetPassAt > 0 && Date.now() - resetPassAt <= RESET_PASS_MS;
+}
+
+/** Spends the pass: the next visit to /reset needs a new allowReset(). */
+export function consumeReset(): void {
+  resetPassAt = 0;
+}
+
 type ChatContextValue = {
   /** The client. Built lazily so a screen that never touches chat never touches the keystore. */
   chat: () => Chat;
@@ -23,7 +48,8 @@ export function ChatProvider({ children }: PropsWithChildren) {
     try {
       return await work();
     } catch (e) {
-      if (errorCode(e) === 'keystore_unavailable') router.replace('/reset');
+      // The pass lets /reset act; a deep link to it has none and goes home (review F-7).
+      if (errorCode(e) === 'keystore_unavailable') { allowReset(); router.replace('/reset'); }
       throw e;
     }
   }, [router]);

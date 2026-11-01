@@ -5,6 +5,7 @@ import SettingsScreen from '../settings';
 import { auth, chat, push, resetChatMock, resetThisPhone } from '../../test/chat-mock';
 import { resetRouter, router } from '../../test/expo-router-mock';
 import { renderScreen } from '../../test/render';
+import { allowReset, consumeReset, resetAllowed, useChat } from '../../components/ChatProvider';
 
 const mockSecurity = { biometrics: 'face', deviceInsecure: false, lockNow: jest.fn(), panic: jest.fn() };
 const mockNotifications = {
@@ -22,6 +23,7 @@ jest.mock('@/security', () => ({ ...jest.requireActual('@/security/constants'), 
 beforeEach(() => { resetChatMock(); resetRouter(); mockSecurity.panic.mockClear(); mockSecurity.lockNow.mockClear(); mockNotifications.requestPermissionsAsync.mockClear().mockResolvedValue({ granted: true }); });
 
 test('Reset explains the missing keys, asks twice, calls resetThisPhone and goes to Welcome', async () => {
+  allowReset();   // as guard() / Settings do before navigating here (F-7)
   await render(<ResetScreen />);
   expect(screen.getByText('This phone’s chat keys are missing')).toBeTruthy();
   expect(screen.queryByTestId('reset.confirm')).toBeNull();
@@ -36,8 +38,11 @@ test('Settings shows who is signed in, signs out, and routes to reset', async ()
   auth.getSession.mockResolvedValue({ userId: 'u', email: 'sam@example.com', isAnonymous: false });
   await renderScreen(<SettingsScreen />);
   expect(await screen.findByText('Signed in as sam@example.com')).toBeTruthy();
+  consumeReset();
   await fireEvent.press(screen.getByTestId('settings.reset'));
   expect(router.push).toHaveBeenCalledWith('/reset');
+  expect(resetAllowed()).toBe(true);   // Settings armed the one-shot pass (F-7)
+  consumeReset();
   await fireEvent.press(screen.getByTestId('settings.signOut'));
   await waitFor(() => expect(auth.signOut).toHaveBeenCalledTimes(1));
   expect(router.replace).toHaveBeenCalledWith('/welcome');
@@ -99,4 +104,53 @@ test('Devices: lists from listDevices, revoke after confirming; honest protectio
   await waitFor(() => expect(chat.revokeDevice).toHaveBeenCalledWith('bbbbbbbb-0000-0000-0000-00000000000b'));
   expect(screen.getByText(/a screenshot cannot be blocked|screenshots and screen recordings of OnePeek come out black/)).toBeTruthy();
   expect(screen.getByText(/OnePeek 1\.0\.0/)).toBeTruthy();
+});
+
+describe('F-7: /reset acts only when the app sent the user there', () => {
+  beforeEach(() => { consumeReset(); });
+
+  test('a cold deep link to /reset (no pass) renders nothing and redirects home', async () => {
+    await render(<ResetScreen />);
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/'));
+    expect(screen.queryByTestId('reset.screen')).toBeNull();
+    expect(screen.queryByTestId('reset.reset')).toBeNull();
+    expect(resetThisPhone).not.toHaveBeenCalled();
+  });
+
+  test('the pass is one-shot: a second visit after a reached reset is sent home', async () => {
+    allowReset();
+    await render(<ResetScreen />);
+    expect(screen.getByTestId('reset.reset')).toBeTruthy();
+    expect(resetAllowed()).toBe(false);   // spent once the screen mounted
+    await screen.unmount();
+    resetRouter();
+    await render(<ResetScreen />);
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/'));
+    expect(screen.queryByTestId('reset.reset')).toBeNull();
+  });
+
+  test('guard() arms the pass on keystore_unavailable before routing to /reset; other errors do not', async () => {
+    const box: { guard?: ReturnType<typeof useChat>['guard'] } = {};
+    function Probe() { box.guard = useChat().guard; return null; }
+    await renderScreen(<Probe />);
+    const guard = box.guard;
+    await expect(guard!(async () => { throw Object.assign(new Error('failed: offline'), { code: 'offline' }); })).rejects.toThrow();
+    expect(resetAllowed()).toBe(false);
+    expect(router.replace).not.toHaveBeenCalled();
+    await expect(guard!(async () => { throw Object.assign(new Error('failed: keystore_unavailable'), { code: 'keystore_unavailable' }); })).rejects.toThrow();
+    expect(router.replace).toHaveBeenCalledWith('/reset');
+    expect(resetAllowed()).toBe(true);
+  });
+});
+
+test('F-1: Sign out says it removes this account\'s chats from the phone (account and guest); Reset keeps its wording', async () => {
+  auth.getSession.mockResolvedValue({ userId: 'u', email: 'sam@example.com', isAnonymous: false });
+  await renderScreen(<SettingsScreen />);
+  expect(await screen.findByText('Removes this account’s chats and chat keys from this phone, as signing out on onepeek.io does. Your other devices keep theirs.')).toBeTruthy();
+  expect(screen.getByText('Forgets every chat and key stored here. Other devices are not affected.')).toBeTruthy();
+  await screen.unmount();
+  auth.getSession.mockResolvedValue({ userId: 'u', email: null, isAnonymous: true });
+  await renderScreen(<SettingsScreen />);
+  expect(await screen.findByText('Removes this guest’s chats and chat keys from this phone. A guest session can’t be signed back into.')).toBeTruthy();
+  expect(screen.queryByText(/stay on this phone/)).toBeNull();
 });

@@ -6,7 +6,9 @@
 #   MAESTRO_DEVICE_A=<udid|serial> MAESTRO_DEVICE_B=<udid|serial> apps/mobile/e2e/scripts/run-two-device.sh
 #
 # Optional: MAESTRO_BIOMETRIC=sim (unlock in 09), MAESTRO_UNIVERSAL_LINKS=1 (physical devices),
-# MAESTRO_PUSH=1 (run 10, which needs a device that can mint a push token), KEEP_DEBUG=1 (keep
+# MAESTRO_PUSH=1 (run 10, which needs a device that can mint a push token), MAESTRO_PHASE2=1 (run 12
+# and 12.peer after 06; dry until mobile-ui lands the `secret.*` / `link.<id>` ids), MAESTRO_SHARE=1
+# (with PHASE2: also 14, needs the Photos app with the seeded image on A), KEEP_DEBUG=1 (keep
 # Maestro's debug logs; screenshots and recordings are always deleted).
 # The installed build must be the `e2e` EAS profile (`EAS_BUILD_PROFILE=e2e` sets `extra.e2e`; the
 # only producer, W3-2): 03 reads the full invite link from `invite.link`, which every other build
@@ -61,11 +63,17 @@ run "$A" 11-verify-safety-number.yaml       # publishes the safety number (not a
 run "$B" 11-verify-safety-number.peer.yaml  # compares it with its own
 run "$A" 06-file-view-once.yaml
 run "$B" 06-file-view-once.peer.yaml
+if [ "${MAESTRO_PHASE2:-0}" = "1" ]; then           # Phase 2 (dry until the secret.* ids land)
+  run "$A" 12-secret-link-in-app.yaml                # link card in the room
+  run "$B" 12-secret-link-in-app.peer.yaml           # opens once, second open gone
+  if [ "${MAESTRO_SHARE:-0}" = "1" ]; then run "$A" 14-share-from-photos.yaml; fi   # needs Photos + seeded image
+fi
 run "$B" 07-screenshot-notice.peer.yaml      # system screenshot on B (B must be frontmost on iOS)
 run "$A" 07-screenshot-notice.yaml
 run "$A" 08-burn.yaml                        # also the clean-up: the throwaway room ends here
 run "$B" 08-burn.peer.yaml
 n=16
-if [ "${MAESTRO_PUSH:-0}" = "1" ]; then run "$A" 10-settings-notifications.yaml; n=17; fi
+if [ "${MAESTRO_PHASE2:-0}" = "1" ]; then n=$((n + 2)); if [ "${MAESTRO_SHARE:-0}" = "1" ]; then n=$((n + 1)); fi; fi
+if [ "${MAESTRO_PUSH:-0}" = "1" ]; then run "$A" 10-settings-notifications.yaml; n=$((n + 1)); fi
 run "$A" 09-panic-lock.yaml                  # last: it leaves A locked
 printf 'two-device run: %s flows passed (A=%s B=%s)\n' "$n" "${A:0:8}…" "${B:0:8}…"

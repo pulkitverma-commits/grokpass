@@ -227,6 +227,82 @@ Everything proposed on 2026-10-31 landed under a contract name (`signin.sent` �
 `join.waiting` → `room.waiting`, `new.timer.1h` → `new.timer.3600`) or verbatim (`join.error`,
 `room.back`, `attach.*`, `viewer.*`, `room.notice`).
 
+## Phase 2 proposed (qa, 2026-11-01; mobile-ui reconciles against U8/N6 as the screens land)
+
+Needed by flows 12–16 (`docs/mobile/test-plan.md` §3.3, Phase 2 rows). `secret.screen` and the `viewer.*`
+ids above are **contract** and are reused: the one-time-secret screen (lead-owned) and the file viewer
+double as the secret viewer, so the flows only add the states that secrets introduce. Same rules: lower-case
+`screen.element`, no dynamic data except `link.<id>` (message id) and the option values `secret.views.<n>`
+(1, 3, 5, 10), `secret.expires.<s>` (300, 3600, 86400, 604800), `secret.timer.<s>` (TIMERS). Until accepted,
+every step using one of these is dry (`check-flows.mjs` lists them).
+
+| id | screen | status | needed by |
+| --- | --- | --- | --- |
+| `room.secret` | Conversation, composer "Send as secret" button (opens `secret.sheet`) | proposed | 12 |
+| `secret.sheet` | Send-as-secret sheet (07) container, in a room | proposed | 12 |
+| `secret.text` | Send-as-secret sheet (07) and One-time secret screen, the text field | proposed | 12, 13 |
+| `secret.mode.inChat` | 07, "View once in this chat" | proposed | 12 |
+| `secret.mode.link` | 07, "onepeek.io link" | proposed | 12 |
+| `secret.views` | 07 / `secret.screen`, "Can be opened" group | proposed | 12, 13 |
+| `secret.views.<n>` | one option; `<n>` ∈ 1, 3, 5, 10 (`secret.views.1` is view once) | proposed | 12, 13 |
+| `secret.expires` | 07 / `secret.screen`, "Link works for" group | proposed | 13 |
+| `secret.expires.<s>` | one option; `<s>` ∈ 300, 3600, 86400, 604800 | proposed | 13 |
+| `secret.timer` | 07 / `secret.screen`, viewer-timer group | proposed | 13 |
+| `secret.timer.<s>` | one option; `<s>` ∈ TIMERS | proposed | 13 |
+| `secret.guard` | 07 / `secret.screen`, "Blur until held" Switch | proposed | 12, 13 |
+| `secret.noCopy` | 07 / `secret.screen`, "Allow copying" Switch (off = noCopy) | proposed | 13 |
+| `secret.create` | 07 / `secret.screen`, "Encrypt and send" / "Create link" | proposed | 12, 13 |
+| `secret.cancel` | 07 / `secret.screen`, cancel | proposed | 12 |
+| `secret.error` | 07 / `secret.screen`, error notice | proposed | 12, 13 |
+| `secret.link` | `secret.screen` result, the link text. **Masked** like `invite.link` (`…#••••••`) except on the `e2e` EAS profile | proposed | 13 |
+| `secret.copy` | `secret.screen` result, Copy | proposed | 13 |
+| `secret.share` | `secret.screen` result, Share | proposed | 13, 15 |
+| `secret.qr` | `secret.screen` result, the QR code wrapper (carries the full link; never the text) | proposed | 13, 16 |
+| `secret.done` | `secret.screen` result, Done | proposed | 13, 15 |
+| `link.<id>` | Conversation, the tappable secret-link card inside bubble `<id>` (opens the viewer) | proposed | 12 |
+| `viewer.peek` | Secret viewer, the pre-open state container ("Someone sent you a secret", views left, kind chip; never content) | proposed | 12, 13, 16 |
+| `viewer.open` | Secret viewer, "Open" (counts the view) | proposed | 12, 13 |
+| `viewer.revealed` | Secret viewer, the revealed-state container (content inside is never asserted on) | proposed | 12, 13 |
+| `viewer.timer` | Secret viewer, the countdown text | proposed | 13 |
+| `viewer.copy` | Secret viewer, Copy (absent when the header has `noCopy`) | proposed | 13 |
+| `viewer.wifi` | Secret viewer, the Wi-Fi card (join button / QR) | proposed | 13 (optional) |
+| `share.screen` | Share-target route (10) container, after the system share sheet handed us content | proposed | 14, 15 |
+| `share.item` | Share target, the received item row: kind and size only, **never the file name as text** (`accessibilityLabel` "1 photo", "1 file") | proposed | 14, 15 |
+| `share.toChat` | Share target, "Send to a chat" | proposed | 14 |
+| `share.room` | Share target, a room row in the picker (one id for every row; flows pick by index) | proposed | 14 |
+| `share.viewOnce` | Share target, view-once Switch (`checked: true` by default) | proposed | 14 |
+| `share.send` | Share target, "Encrypt and send" | proposed | 14 |
+| `share.link` | Share target, "Make a onepeek.io link" (opens `secret.screen` prefilled with the file) | proposed | 15 |
+| `share.cancel` | Share target, cancel (discards the copy) | proposed | 14, 15 |
+| `share.error` | Share target, error notice (too large, unsupported type) | proposed | 14, 15 |
+| `chats.scan` | Chats home (04), "Scan a code" | proposed | 16 |
+| `join.scan` | Join (09), "Scan instead" | proposed | 16 (optional) |
+| `scan.screen` | Scan QR (11) container | proposed | 16 |
+| `scan.camera` | Scan QR, the camera view | proposed | 16 |
+| `scan.permission` | Scan QR, camera-permission-denied state | proposed | 16 |
+| `scan.allow` | Scan QR, "Allow camera" / open settings | proposed | 16 |
+| `scan.paste` | Scan QR, "Paste a link instead" | proposed | 16 |
+| `scan.foreign` | Scan QR, "Not a OnePeek code" notice (stays on the scanner; the payload is never shown) | proposed | 16 |
+| `scan.close` | Scan QR, close | proposed | 16 |
+| `invite.qr` | Invite sheet, the QR code wrapper (carries the full link; the text stays masked) | proposed | 16 |
+| `room.menu.report` | Room menu, "Report this chat" | proposed | (unit tests; no flow) |
+| `report.sheet` | Report sheet container | proposed | — |
+| `report.reason.<k>` | Report sheet, one reason; `<k>` ∈ spam, harm, other (fixed keys) | proposed | — |
+| `report.submit` | Report sheet, "Send report" (ids only; the copy says no message content is sent) | proposed | — |
+| `report.cancel` | Report sheet, cancel | proposed | — |
+| `report.sent` | Report sheet, sent confirmation | proposed | — |
+| `members.block` | Room details, "Block" on a member row (owner or member) | proposed | — |
+| `block.confirm` | Block confirmation box | proposed | — |
+| `block.yes` | Block confirmation, "Block" | proposed | — |
+| `block.no` | Block confirmation, "Keep" | proposed | — |
+| `members.blocked` | Room details, the "Blocked" state on a row | proposed | — |
+
+Rendering requirements for the flows (same spirit as below): `secret.link` masks like `invite.link` and
+unmasks only on the `e2e` profile (`extra.e2e`); the secret viewer's revealed content is inside
+`viewer.revealed` and is never asserted on, in a Secret room it stays behind `viewer.hold`; `share.item`
+carries no file name as text; `scan.foreign` never echoes the scanned payload; `link.<id>` is on the card so a
+tap opens the viewer and a `longPressOn` on `msg.<id>` still works for hold-to-read.
+
 ## Rendering requirements the flows depend on
 
 - `invite.link` is **masked** on screen (`maskLink`: `…#••••••`, one line, middle ellipsis) in every

@@ -1,6 +1,9 @@
 # OnePeek mobile: test plan v1
 
-Owner: `qa`. Status: v1.2. v1 written 2026-10-31 for task Q2 (`plan.md` §2) and merged; v1.1 (same day,
+Owner: `qa`. Status: v1.3 (2026-11-01, Phase 2, task Q5 + carry-over W3-3): §1.6 the W3-3 sink rules and the
+"name-based, not taint" statement, §2.4 the cross-platform secrets interop test as built, §3.3 flows 12–16, §4 M18
+and §4.2 the Phase 2 device checks (share receive, Universal Links; native-security's S21+ referenced), §6.2 the new
+commands, §9 the Gate 2 criteria map. v1.2. v1 written 2026-10-31 for task Q2 (`plan.md` §2) and merged; v1.1 (same day,
 tasks Q3/Q4) records what was built: §1.6 the leak guard as landed, §3 the Maestro flows as written, §8 the
 Gate 1 criteria map, and the §1.3 siteUrl correction from the S0 close-out (N4). v1.2 (same day, Phase 1
 wave 2): §1.5 the qa review of backend's push tests (pass/gap per item), §1.6 the W1-10 rules, §3 the flows
@@ -297,7 +300,24 @@ column-set dump, (1)+(2) fixtures-based sweep over every captured request, (8) c
 list plus an error-path test. Backend closes them in its next pass; §8 keeps "push with no content" at
 "tests landed, review gaps closed" (closed 2026-10-31, backend `test-gaps` pass).
 
-### 1.6 Leak guard (Q4, as built 2026-10-31; W1-10 additions same day)
+### 1.6 Leak guard (Q4, as built 2026-10-31; W1-10 additions same day; W3-3 additions 2026-11-01)
+
+**What this guard is, stated plainly so nobody reads it as a guarantee: a name-based lint tripwire, not taint
+analysis.** Every selector below fires on the *lexical shape* of a call and the *name* of its argument (`token`,
+`m.body`, `` `…${accessCode}` ``, `{ message: plaintext }`). It does not follow a value: `const text = m.body;
+Clipboard.setStringAsync(text)` passes, so does `Share.share({ message: render() })`, a URL built from a token two lines
+earlier, a spread or computed property, `globalThis.WebSocket`, a module alias (`import * as C from 'expo-clipboard'`),
+string concatenation, `xhr.send(body)`. The proof that nothing leaks is never this lint; it is the tests that sweep the
+rendered tree (`room.test.tsx` `treeText()`, now a deny-list walk after W3-4), the captured requests and the SQL log
+(`interop.integration.test.ts`, `secrets.interop.test.ts`, `alerts.native.test.ts`), and the security reviewer reading
+every PR that adds an off-device call. **What a reviewer must still read by hand** on every PR that touches a screen or
+adapter: (1) every `Clipboard`/`Share`/`Sharing`/`Linking`/`WebBrowser`/`MediaLibrary`/`Notifications` call and what the
+variable handed to it *holds*, not what it is called; (2) every `fetch` with a computed URL (the host rule only covers
+literals; `checkOnePeekUrl` in the adapter is the runtime check); (3) every `<Image source>` / `WebView` / `Video` with a
+remote URI; (4) every write to disk (`File`, `FileSystem`, SQLite outside the keystore) and where it lives (`Paths.cache`
+is swept on launch; nothing else is); (5) every `Alert`, toast, `accessibilityLabel`, `title` and notification body
+that is not a fixed string; (6) every new third-party dependency, for telemetry the import rule does not list.
+
 
 The rule set lives in `packages/core/eslint.config.mjs` and, as a kept-in-sync copy, in
 `apps/mobile/eslint.config.mjs` (the app's lint must not import the core's tooling). Everything is an
@@ -312,6 +332,10 @@ selectors (esquery; regexes use `\x2f` for `/`):
 | ad-hoc logger | `logger.info(x)`, `log.warn(x)` and the other logging verbs (`log info warn error debug trace fatal verbose silly notice critical`) on an identifier named `log` or `logger`. `log.push(...)` on an array is not matched | all files |
 | stringify to a sink | `JSON.stringify(<ident>)` or `JSON.stringify(<obj>.<prop>)` where the identifier/property is one of `message body plaintext token accessCode code secret key nick fileName name`, passed to any sink above, to `log(...)`/`logger(...)` or to `console.*` | all files |
 | off-device sink (W1-10) | `Clipboard.setString*/setUrl*/setImage*`, `Share.share/open`, `Linking.openURL/sendIntent/openSettings`, `WebBrowser.open*Async`, `Alert.alert/prompt`, `new WebSocket(...)`, `new XMLHttpRequest(...)` when an **argument** is a secret-named identifier (`token`), member (`m.body`), a template expression (`` `…${accessCode}` ``) or an object-property value (`{ message: plaintext }`), same `SENSITIVE` list. The call itself is allowed: `Clipboard.setStringAsync(link)`, `Share.share({ message: link, url: link })`, `WebBrowser.openBrowserAsync('https://onepeek.io/terms')`, `openAuthSessionAsync(url, redirect)` and a fixed `Alert.alert` (InviteSheet, Welcome, sign-in, Settings) lint clean | all files |
+| off-device sink, W3-3 additions | the same argument shapes for `Sharing.share/shareAsync` (expo-sharing, what `lib/files.ts` `shareBytes` uses), `Notifications.scheduleNotificationAsync/presentNotificationAsync`, `MediaLibrary.saveToLibraryAsync/createAssetAsync/createAlbumAsync/addAssetsToAlbumAsync`, and **any** `.write(…)`, `.writeAsStringAsync(…)`, `.writeAsync(…)`, `.writeAsStringSync(…)` call (`new File(Paths.cache, n).write(plaintext)`, `t.write(m.body)`, `FileSystem.writeAsStringAsync(uri, body)`); plus one nested object level for `{ content: { body } }` / `{ content: { title: m.nick } }` / `` { content: { body: `${nick}…` } } ``. `Sharing.shareAsync(uri, { mimeType })`, `MediaLibrary.saveToLibraryAsync(uri)`, `f.write(bytes)` lint clean | all files |
+| notification copy (W3-3) | `Notifications.scheduleNotificationAsync|presentNotificationAsync({ content: { title|subtitle|body: <anything but a string literal> } })`: lock-screen text is fixed copy, whatever the variable is called (`body: text` fails even though `text` is not on the list). Route with `content.data = { roomId }` | all files |
+| backed-up directory (W3-3) | `Paths.document`, `FileSystem.documentDirectory` anywhere: Documents is in the iOS backup set and Android auto-backup; temporaries go under `Paths.cache` (swept on launch) and nothing else is written | all files |
+| remote image URL (W3-3) | `<Image|ImageBackground|ExpoImage|FastImage source|src={{ uri|url: <secret-named identifier, member or template expression> }}>`: the host receives it. `<Image source={{ uri }}>` with the viewer's local `uri` lints clean | `apps/mobile/**` (JSX; the core has no .tsx) |
 | fetch host | `fetch('<literal>')`, `globalThis.fetch('<literal>')` or an expression-free template literal whose URL is not `https://onepeek.io/…`, `https://*.onepeek.io/…` or `https://<project>.supabase.co/…`: another host, a look-alike (`onepeek.io.evil.example`), plain `http:`, or a relative path | `apps/mobile/**`, `packages/core/src/adapters/rn/**` (the web adapter keeps its relative `/api/chat/notify`) |
 
 The approved path is `packages/core/src/log.ts`: `log(event, fields?)` is a **no-op** in every build
@@ -319,18 +343,24 @@ The approved path is `packages/core/src/log.ts`: `log(event, fields?)` is a **no
 sink is ever wired in there (lead + security-reviewer decision), nothing sensitive can reach it:
 sensitive keys (`SENSITIVE_KEY`: message, body, plain, text, token, access, code, secret, key, nick,
 file, name, password, email, link, url, session, jwt, state; case-insensitive, anywhere in the key) become
-`[redacted]`, strings are capped at 32 chars **except inside arrays, where every string is redacted
-whole at any depth** (W1-10: `redact({ ids: [token] })` used to keep the token's first 32 characters because
-`ids` is not a sensitive key), byte buffers become `[bytes:n]`, errors keep only `name` and the trailing
-`[a-z_]+` code, depth stops at 4. Screens import it from the package root (`log`, `redact` are exported
-from `index.ts` since Q4 merged) or as `@onepeek/core/src/log`. `packages/core/src/log.test.ts` (9 tests)
-covers each rule.
+`[redacted]` **whatever the value's type** (W3-3 proof: `{ code: 447101 }` → `[redacted]`), strings are capped at
+32 chars **except inside arrays, where every string and number is redacted whole at any depth** (W1-10:
+`redact({ ids: [token] })` used to keep the token's first 32 characters because `ids` is not a sensitive key; W3-3:
+`{ ids: [447101] }` kept the number the same way), a bare string or number at the top level is redacted whole, byte
+buffers become `[bytes:n]`, errors keep only `name` and the trailing `[a-z_]+` code, depth stops at 4. **Not
+covered, by design:** a secret held as a number under a neutral key (`{ value: 447101 }`) is kept; the redactor is
+name-based like the lint. Screens import it from the package root (`log`, `redact` are exported from `index.ts`
+since Q4 merged) or as `@onepeek/core/src/log`. `packages/core/src/log.test.ts` (10 tests) covers each rule.
 
-`packages/core/test/leak-guard.test.ts` (84 tests, ~0.6 s) runs ESLint programmatically with both
-configs: 39 probe files (one per forbidden pattern; 16 added for W1-10: the two imports and a `require`,
+`packages/core/test/leak-guard.test.ts` (113 tests, ~1 s) runs ESLint programmatically with both
+configs: 55 probe files (one per forbidden pattern; 16 added for W1-10: the two imports and a `require`,
 clipboard identifier/member, share object-property identifier/member, `Linking.openURL` template with an
 identifier/member, `WebBrowser` identifier and auth-session member, `Alert` identifier/member, `new
-WebSocket` identifier/template) are written to the scratchpad, read back and linted
+WebSocket` identifier/template; 16 added for W3-3: `Sharing` identifier/member, notification `content.body`
+identifier / `content.title` member / body template / neutral-named body, `MediaLibrary` identifier/member,
+`File#write` identifier/member, `FileSystem.writeAsStringAsync`, `Paths.document`, `FileSystem.documentDirectory`,
+and three JSX `<Image source={{ uri }}>` probes linted by the app config only, since the core has no `.tsx`) are
+written to the scratchpad, read back and linted
 under a virtual path inside the package (`src/chat/…`, `src/adapters/rn/…`, `app/…`), each must be
 reported with the matching message and nothing else at error level; a clean file (`log` + `redact`,
 `fetch` to onepeek.io/supabase.co/computed URL, `JSON.stringify({ roomId })`) must pass both; the fetch
@@ -343,7 +373,9 @@ shapes). The temp dir is removed in `afterAll`. The same file holds the **static
 `__DEV__\s*&&\s*console`, grep-style (comments included: a shipped file does not mention the console
 with a dot after it). Ran 3× on 2026-10-31 (wave 1), 61/61 each time; ran 3× after the W1-10 additions
 (leak-guard + log, `npm test -w packages/core -- test/leak-guard.test.ts src/log.test.ts`), 93/93 each
-time, no flake. `npm run lint` stays at 0 errors with the merged wave-2 screens.
+time, no flake. `npm run lint` stays at 0 errors with the merged wave-2 screens. W3-3 (2026-11-01): leak-guard 113 +
+log 10 = 123/123, ran 3×, no flake; `npm run lint` 0 errors with the Phase 1 app (`lib/files.ts` `Sharing.shareAsync(uri,
+…)` and `f.write(bytes)`, `FileViewer` `<Image source={{ uri }}>` all pass, as intended: neutral names, local URIs).
 
 Not covered (by design, named so nobody assumes otherwise): string concatenation of a secret into a
 sink (`log('x ' + token)`, `Clipboard.setStringAsync('code: ' + code)`) is not matched (template literals
@@ -357,9 +389,12 @@ be `Clipboard`/`Share`/`Linking`/`WebBrowser`/`Alert`; `fetch` with a computed U
 responsibility (`checkOnePeekUrl`); `Image source={{ uri }}` with a remote URI, `expo-file-system`
 uploads/downloads, `expo-sharing` (`shareBytes` in `lib/files.ts`, used by the viewer on purpose),
 `expo-mail-composer`/`expo-sms`, `Intent` extras and iOS user-activity/Spotlight APIs are not sinks the
-lint knows; `XMLHttpRequest` is banned as a global in the core (`no-restricted-globals`) but in the app only
-a secret-named constructor argument is flagged, `xhr.send(body)` is not. The rule set is a net under the
-reviewer, not a replacement: every PR that adds an off-device call is read by security-reviewer.
+lint knows (W3-3 closed `Sharing`, `MediaLibrary`, `Notifications`, file writes, `Paths.document` and `Image
+source` by name; `expo-mail-composer`/`expo-sms`, `Intent` extras, Spotlight/user-activity, `WebView`/`Video` sources
+stay unlisted); `XMLHttpRequest` is banned as a global in the core (`no-restricted-globals`) but in the app only a
+secret-named constructor argument is flagged, `xhr.send(body)` is not. The rule set is a net under the reviewer, not
+a replacement: every PR that adds an off-device call is read by security-reviewer (the list at the top of this
+section is what to read).
 
 ## 2. Interop test design (Q1)
 
@@ -517,6 +552,63 @@ Status 2026-10-31 (branch `mobile/qa/interop-test`): `20 passed`, five consecuti
 root `58 passed` unchanged; `packages/core` `70 passed` (50 + 20). Needs Node 22.13+ for `node:sqlite`
 (the interop block is skipped, not failed, without it).
 
+### 2.4 Cross-platform one-time secrets (Q5, as built 2026-11-01)
+
+`packages/core/test/secrets.interop.test.ts` with `packages/core/test/secrets-harness.ts`. **17 tests, ran 3×, no
+flake, ~1 s after a ~5 s boot.** Core 275 (after C4) → 322 with W3-3's 30 probes and these 17.
+
+**Harness.** Unlike the chat harness (006+), this boots the *whole* production schema the way
+`supabase/tests/production-history.test.ts` does: `supabase-stubs.sql`, `schema.sql`, then every forward migration
+002…009 in order, so `create_secret` (005), `peek_secret` and `open_secret` (004) run with their real plan, quota,
+geofence and lock code. The Supabase stand-in runs `rpc()` as `anon` for the website's anonymous client (no session,
+no `secret_log` row) or as `authenticated` with a uid for a signed-in phone, with PostgREST's named-argument form;
+`storage.from('secrets')` applies the bucket's real predicates (upload name regex `^f/[A-Za-z0-9_-]{24,64}\.bin$`,
+`is_claimed_file` for download, `is_burned_file` for remove). **`/api/open` is exercised at the RPC it calls, not
+through the Next handler**: `openRoute(body)` mirrors `app/api/open/route.ts` (id regex, `open_secret` as
+`service_role` with the route's exact argument names `p_id, p_lat, p_lon, p_source, p_area, p_city, p_region,
+p_country, p_ip_country, p_unlock_token`, 404 `gone` on no row, 403 on a lock error, the `header/body/file_path/
+views_left/final/viewer_place` response). The handler itself imports `@/lib/server|alerts|geo` through the root vitest
+alias, which the core's vitest config does not define (not qa's file). A **source-contract test** reads `route.ts` and
+asserts the RPC call, every argument name, the response keys, the 404 and that no decrypt/importKey/fragment code is
+in it, so a drift in the route fails here. Every RPC, every `/api/open` body and response is recorded.
+
+**Sides.** The *website* is its own code path lifted step for step from `app/page.tsx` `createSecret()` (key, header
+JSON `{ v, type, name, mime, size, timer, guard, tpl, noCopy, noSave }`, `encryptJson/encryptText/encryptBytes`, upload,
+`create_secret` args, link `${origin}/s/${id}#${keyB64}`) and `app/s/[id]/page.tsx` (fragment → `importKey`,
+`peek_secret`, header decrypt; `/api/open`, body decrypt or download + `decryptBytes`, `remove` on the final view).
+The *phone* is `packages/core/src/secrets.ts` (`createSecret`, `peekSecret`, `openSecret`, `parseSecretLink`,
+`SecretError`) over `SecretsDeps = { supabase, fetch, apiBase, origin, tz, clientId }`, with a `fetch` that accepts
+only `POST https://onepeek.io/api/open` and hands the body to the route mirror.
+
+**Scenarios (web path, 10):** `open_secret` executable by `service_role` only (`has_function_privilege` + a refused
+anon/authenticated RPC), `create_secret`/`peek_secret` by anon and authenticated; text create → peek (does not burn,
+`views_left` 1) → open (`final`, `views_left` 0, response is ciphertext) → row gone, peek gone, second open 404;
+`guard/timer/noCopy/noSave` round-trip in the header; Wi-Fi (`tpl: 'wifi'`, ssid/password/security/hidden); file
+(bytes equal, header name/mime/size, download refused before the open, ciphertext removed after the final view);
+3 views (`views_left` 2/1/0, `final` only on the last, peek counts down, a viewer's `remove` refused between views,
+ciphertext gone after the last); expiry (`expires_at` moved into the past → peek none, open 404, row still there as
+ciphertext until the reaper; `p_ttl_seconds` 60 → `invalid expiry`); wrong key (another key cannot decrypt the
+header and does not burn; a wrong-length key is refused before any RPC); the route source contract; the sweep
+canary (plants body, file name, Wi-Fi password, key in text/hex/base64/base64url and expects the sweep to fire; the
+artefacts are non-empty); every `/api/open` body carries only `id|precise|unlockToken`, every `create_secret`
+carries base64url ciphertext only. **App ↔ web (7):** app → web text (link `^https://onepeek.io/s/[A-Za-z0-9]{10}#
+[A-Za-z0-9_-]{43}$`, flags round-trip, second web open gone, one `create_secret` under the phone's session, one
+`secret_log` row for the owner), app → web Wi-Fi, app → web file (one `bytes()` read, upload length = plaintext + 12
++ 16, unreadable before the open, removed after, `secret_log.kind='file'` with the size); web → app text (`peekSecret`
+→ `openSecret` → `gone` on the second open and after expiry, `bad_key` before any RPC, every phone request body only
+the id); web → app Wi-Fi + a 2-view file (both views equal bytes, ciphertext kept between views, third `gone`); app →
+app once; the phone refuses what the website refuses (`invalid_expiry`, `empty`) before any RPC.
+
+**Sweep (every scenario):** the key (base64url and raw bytes as hex/base64), the plaintext body, file name, file
+bytes and Wi-Fi password/ssid never appear in the SQL log (all RPC args), the DB dump (every public table plus the
+stored objects as hex), the `/api/open` request bodies or responses, in text, hex, base64 or base64url. The ids are
+asserted *present* so the sweep is known to look at the right places.
+
+**Not covered here (and where it is):** recipient-locked links (`/api/unlock/*`), geofence and time locks, country
+allow-lists: `packages/core/src/secrets.test.ts` (core-crypto, 34 tests with a `createWorld()` fake) covers the error
+mapping; the SQL side is `supabase/tests/*`. The real Next handler runs only in the web suite. Running the phone
+side on Hermes with `react-native-quick-crypto` is a device check (Gate 2 live run, §9).
+
 ## 3. Maestro E2E flows (Q3, as written 2026-10-31)
 
 The flows exist in `apps/mobile/e2e/` and are documented there (`README.md`); this section keeps the
@@ -586,11 +678,22 @@ parses every YAML, requires every `id:` to exist in `apps/mobile/e2e/TESTIDS.md`
 | 08 | `08-burn.yaml` (A) + `.peer.yaml` (B) | A: menu (`room.panic` present) → `room.burn` → `confirm.cancel` → burn → `room.burn.confirm` → Chats, no room, still none after relaunch; B: `room.ended` → `room.back` → no room, still none after relaunch | device build |
 | 10 | `10-settings-notifications.yaml` | Settings → `settings.notify` off → tap → OS prompt (`launchApp permissions` + "Allow" fallback) → `checked: true`, no `settings.notifyError` → relaunch keeps it → off again. The token is never rendered or asserted | a device that can mint a push token (tag `push`; `MAESTRO_PUSH=1` in the run script, `--exclude-tags push` otherwise) |
 | 09 | `09-panic-lock.yaml` | Chats → `chats.settings` → `panic` (one tap) → `locked.screen` + "Locked by Panic Exit", Settings/Chats/room **not** visible → relaunch still locked → unlock only with `MAESTRO_BIOMETRIC=sim` (CI default `skip` ends on the locked screen) | device build |
+| 12 (Phase 2) | `12-secret-link-in-app.yaml` (A) + `.peer.yaml` (B) | A: `room.secret` → `secret.sheet` → `secret.mode.link`, `secret.views.1` checked, `secret.guard` checked → text → `secret.create` → `link.<id>` card, text **not** in the tree. B: tap card → `viewer.screen` with `viewer.peek`, no `viewer.revealed` → `viewer.open` → `viewer.revealed` behind `viewer.hold` (never held), no `viewer.share` → `viewer.done` → tap again → `viewer.gone`, no `viewer.open`; relaunch → still `viewer.gone` | U8 ids (dry today), device build |
+| 13 (Phase 2) | `13-secret-link-from-browser.yaml` | `chats.secret` → `secret.screen` → text, `secret.expires.3600`, `secret.views.1`, `secret.timer.60`, guard checked → `secret.create` → `secret.link` + `secret.qr` → `copyTextFrom` (E2E build only; `assertTrue` stops a masked link) → relay → `openLink` (https → `onepeek://` on simulators, `MAESTRO_UNIVERSAL_LINKS=1` on devices) → `viewer.peek` → open → `viewer.revealed` + `viewer.timer` + `viewer.hold` → done → `openLink` again → `viewer.gone`. Manual half M18 | U8 ids, E2E build; N6 link handling |
+| 14 (Phase 2) | `14-share-from-photos.yaml` (A) | **DEVICE**: Photos → first photo → Share → OnePeek → `share.screen`, `share.item` (kind + size, no name), `share.viewOnce` checked → `share.toChat` → `share.room` 0 → `share.send` → `room.screen` → own `file.<id>` disabled | U8 ids, N6 share extension/intent in the build, seeded photo |
+| 15 (Phase 2) | `15-share-from-files.yaml` | **DEVICE**: Files → `e2e-note.txt` → Share → OnePeek → `share.cancel` → Chats, nothing created → again → `share.link` → `secret.screen` → 1 h, view once → `secret.create` → `secret.link|copy|share|qr`, file name never visible → `secret.done` | U8 ids, N6, seeded file |
+| 16 (Phase 2) | `16-scan-qr.yaml` ×4 (`MAESTRO_QR_KIND`) | `chats.scan` → `scan.screen` (camera permission: `launchApp permissions` + `scan.allow` fallback) → `scan.camera`, `scan.paste`; a second device shows `invite.qr` / `secret.qr` / `verify.qr` / a foreign QR: invite → `join.screen` + `join.code`; secret → `viewer.peek`; verify → `verify.number` + `verify.mark` + "They match"; foreign → `scan.foreign`, scanner stays, no payload text, `scan.close` → Chats | U8 ids, a camera (physical iOS; Android emulator virtual scene), a device showing the code |
 
 Sub-flows: `_common/guest-home.yaml`, `_common/back-to-chats.yaml` (`room.back` in a room, else Android
-`back` / iOS edge swipe, twice), `_common/open-room.yaml`. Count: 11 journeys, 17 top-level flow files, 3
+`back` / iOS edge swipe, twice), `_common/open-room.yaml`. Count at Gate 1: 11 journeys, 17 top-level flow files, 3
 sub-flows, 20 YAML files, 0 dry steps (`check-flows.mjs`: `17 flows, 168 ids in TESTIDS.md (1 proposed)`,
-`flows OK`); expected at Gate 1: 17 flows × 2 platforms = 34 runs, 02 allowed to end at the sent state, 10
+`flows OK`). **Phase 2 (2026-11-01):** 16 journeys, 23 top-level flows, 26 YAML files; `check-flows.mjs`: `23 flows,
+226 ids in TESTIDS.md (59 proposed)`, **35 dry steps** (every `secret.*`, `link.<id>`, `viewer.peek|open|revealed|
+timer`, `share.*`, `chats.scan`/`scan.*` step), `flows OK`; the proposed ids are listed in `TESTIDS.md` "Phase 2
+proposed" for mobile-ui to reconcile against U8/N6 as the screens land, and the dry steps become runnable the moment
+an id is marked `contract`. Tags added: `phase-2`, `share` (14, 15), `camera` (16); CI without devices runs with
+`--exclude-tags push,share,camera`. The run script takes `MAESTRO_PHASE2=1` (12, 12.peer after 06) and
+`MAESTRO_SHARE=1` (14). Gate 1 text continues: expected at Gate 1: 17 flows × 2 platforms = 34 runs, 02 allowed to end at the sent state, 10
 skipped by tag where no push token can be minted and reported as skipped with the reason. The run script
 sequence is 01 A, 01 B, 03, 04, 04-let-in, 05, 05.peer, 11, 11.peer, 06, 06.peer, 07.peer, 07, 08, 08.peer,
 [10 with `MAESTRO_PUSH=1`], 09 (last: it leaves A locked). v1's 03-lock-unlock (60 s auto-lock) stays
@@ -623,6 +726,7 @@ Rooms are throwaway (§0).
 | M13 | Watermark | hold a bubble in a Secret room; photograph the screen | faint `<nick> · <device code> · <time>` over the content, readable in the photo | same |
 | M14 | Guest session loss | guest joins, force-quit, relaunch | the room is still there (the guest session is persisted in SecureStore) | same |
 | M15 | Burned room on a locked phone | owner burns while the member's phone is locked | on unlock the room is gone and the SQLite has no `room:<id>:` rows (verify on the debug device via `adb shell run-as`) | verify via Xcode device container download on the test device |
+| M18 (Phase 2) | Secret link without and with the app | make a onepeek.io secret link (website or app); send it to a phone **without** OnePeek (Messages/Mail), tap; then install the app (or use a second phone with it), send the same kind of link, tap; then the same link a second time | without the app: the browser opens `onepeek.io/s/<id>` and the website viewer peeks (no chooser, nothing else involved); with the app and `assetlinks.json` verified: the app opens directly on `viewer.peek`, no disambiguation sheet (if the sheet appears, verification failed: record it); Vercel log for `/s/<id>`: path only, never the fragment; the second tap shows "already opened" in whichever opened it | without the app: Safari opens the website viewer; with the app and the AASA live: the app opens on `viewer.peek`, Safari never shows; long-press the link → "Open in OnePeek" offered; fragment never in the Vercel log; second tap → already opened |
 
 What we do not test because it is not true: "iOS blocks screenshots", "the server cannot see who is
 in a room" (it sees user ids and device ids), "push delivery is invisible" (`known-limitations.md` 7).
@@ -661,6 +765,26 @@ Overlaps with the M table are noted so each pair is run once and recorded under 
 
 Not tested because it is not true (unchanged from `MANUAL-CHECKS.md`): "iOS blocks screenshots", "a camera
 is stopped", "a rooted or jailbroken phone keeps the flags".
+
+### 4.2 Phase 2 device checks: share receive, secret viewer, Universal Links (owners as marked)
+
+native-security (N6) is writing the share extension / share intent, FLAG_SECURE on the secret viewer and the
+Universal Link / App Link handling with the fragment read on the device, and extends `MANUAL-CHECKS.md` with **S21+**
+in parallel; those numbers are theirs and are referenced here, not duplicated. What qa runs on top, once per release
+candidate on every device in §5.1, recorded as `P<n> <device> PASS|FAIL <date> <evidence>`:
+
+| # | Check | Steps | Expected | Owner | Overlaps |
+| --- | --- | --- | --- | --- | --- |
+| P1 | Share receive: photo | Photos → share one photo → OnePeek (flow 14 by hand) | the share target shows kind and size, **not** the file name; view-once on by default; send → bubble in the room; **the picked copy is deleted** after send and after cancel (iOS: `Containers/Shared/AppGroup/<id>/` and the app's `Library/Caches` empty of it; Android: `cache/` empty) | qa | S21+ (N6: extension memory, FLAG_SECURE on the extension UI), W2-2 (`deletePicked`) |
+| P2 | Share receive: document and oversize | Files → `e2e-note.txt` → OnePeek → cancel; again → make a link; then a 60 MB file | cancel discards (nothing in storage, no RPC); link made with the file name only inside the encrypted header (the SQL `secrets.header` is ciphertext; `secret_log.kind='file'`, `size` only); oversize → `share.error`, the copy deleted | qa | flow 15 |
+| P3 | Share receive while locked | lock the app (Panic Exit); share a photo from Photos | the share target is **behind the lock**: `locked.screen` first, the received item only after unlock; a cancelled unlock discards the copy | qa | S12, N4 |
+| P4 | Share sheet does not leak into the switcher | share → OnePeek → background mid-way → app switcher | the thumbnail shows the cover, not the shared image (iOS extension and app both) | native-security | S4, S21+ |
+| P5 | Secret viewer under capture | open a guarded secret from a link; take a screenshot while held; start a recording | Android: screenshot refused (FLAG_SECURE on the viewer), nothing in Photos; iOS: screenshot taken (honest copy), the sender's device gets **no** alert (one-time links have no room to alert into: known limitation, copy must say so); recording shows the cover | native-security (FLAG_SECURE), qa (copy) | S1, S3, S6 |
+| P6 | Universal Link / App Link with the app | M18 "with the app" half on each device and OS version in §5.1 | app opens directly on `viewer.peek`; the fragment is never sent (Vercel log for `/s/<id>`: path only; `/api/open` body: id only) | qa | M18, M9 |
+| P7 | Link without the app | M18 "without the app" half | website viewer; no OnePeek chooser | qa | M18 |
+| P8 | Link from the camera | 16 by hand with a real QR on a second phone (`invite.qr`, `secret.qr`, `verify.qr`, a Wi-Fi QR) | routed as in flow 16; the foreign payload is never displayed; the camera permission denial state offers "Paste a link instead" and never a system-settings deep link with data in it | qa | flow 16 |
+| P9 | Quick-crypto parity on Hermes | app → web and web → app once each on the real project with throwaway secrets (text, Wi-Fi, a 5 MB image), each device | identical to §2.4: opens once, bytes equal, second open "already opened"; the SQL log / Vercel log carry ciphertext and ids only | qa (run), lead (live project) | §2.4 (logic), C2 (Hermes) |
+| P10 | Report and block (B5/U8) | report a chat; block a member | the report request body is exactly `{ p_room, p_reason }` (proxy the phone through mitmproxy on a test device, or read the route test): no message, no nick; the blocked member's messages stop rendering and the block survives a relaunch | qa | `supabase/tests/chat-reports.test.ts`, route tests (backend) |
 
 ## 5. Phase 3: device matrix, performance, offline, accessibility
 
@@ -752,9 +876,10 @@ npm test                                               # root + packages/core + 
 npm test -w packages/core                              # core only
 npm test -w apps/mobile                                # security + adapters-in-app tests
 npx vitest run packages/core/test/interop.integration.test.ts
+npx vitest run packages/core/test/secrets.interop.test.ts --root packages/core   # Q5: secrets app <-> web (17), run 3x before a report
 npx vitest run lib/chat/client.integration.test.ts     # web regression, must stay 8 passed
 npm test -w packages/core -- test/leak-guard.test.ts src/log.test.ts   # leak guard, run 3× before a report
-node apps/mobile/e2e/scripts/check-flows.mjs            # Maestro flows: YAML, ids vs TESTIDS.md, no screenshots
+node apps/mobile/e2e/scripts/check-flows.mjs            # Maestro flows: YAML, ids vs TESTIDS.md, no screenshots; lists the dry steps
 npx vitest run lib/alerts.native.test.ts supabase/tests/push-devices.test.ts app/api/chat/notify/route.test.ts   # push (§1.5)
 
 # Maestro (a machine with simulators; see apps/mobile/e2e/README.md "Where to run")
@@ -762,6 +887,9 @@ maestro test apps/mobile/e2e --include-tags single --include-tags ios     --form
 maestro test apps/mobile/e2e --include-tags single --include-tags android --format junit --output apps/mobile/e2e/results/android.xml
 MAESTRO_DEVICE_A=<udid> MAESTRO_DEVICE_B=<udid> apps/mobile/e2e/scripts/run-two-device.sh   # 16 flows, A/B alternating; MAESTRO_PUSH=1 adds 10
 maestro test apps/mobile/e2e --include-tags single --exclude-tags push   # when the device cannot mint a push token
+maestro test apps/mobile/e2e --include-tags single --exclude-tags push,share,camera   # CI simulators: no Photos/Files seeding, no camera
+MAESTRO_PHASE2=1 MAESTRO_DEVICE_A=<udid> MAESTRO_DEVICE_B=<udid> apps/mobile/e2e/scripts/run-two-device.sh   # + 12/12.peer; MAESTRO_SHARE=1 adds 14
+for k in invite secret verify foreign; do maestro test apps/mobile/e2e/flows/16-scan-qr.yaml -e MAESTRO_QR_KIND=$k; done   # a device showing each code
 
 # Device perf
 adb shell am start -W -n io.onepeek.app/.MainActivity
@@ -843,6 +971,16 @@ verbatim and the fixture string it leaked, if any.
    M8/M17 carry the proof on physical devices.
 13. **Backend review gaps (§1.5).** Closed 2026-10-31 (d, f, 1+2, 8). Was: four additive assertions; not a
    blocker for the gate's "no content" line (the shapes are exact), a blocker for calling §1.5 complete.
+14. **Gate 2 wording (lead).** `plan.md` §4 says "Gate 2 as in the prompt" and the prompt text is not in the repo; §9
+   maps the Phase 2 deliverables from `log.md` instead. Paste the criteria into `plan.md` §4 so §9 can be checked
+   line for line.
+15. **`/api/open` handler in the core suite (lead).** `secrets.interop.test.ts` mirrors `route.ts` at the RPC and
+   pins the route's source; the handler itself would run here with one line in `packages/core/vitest.config.ts`
+   (`resolve.alias['@'] = <repo root>`) plus `vi.mock` of `@/lib/alerts` and `@vercel/functions`. Not qa's file;
+   worth doing if the route grows.
+16. **Share-path reuse of `deletePicked` (mobile-ui, U8 review).** Flows 14/15 and P1–P3 assume the share target
+   copies into `Paths.cache` and deletes with `deletePicked`/`clearPickerCaches` (W2-2). If N6 lands the received
+   item somewhere else (an iOS App Group container), the W2-2 tests do not cover it and P1 is the only proof.
 
 ## 8. Phase 1: Gate 1 criteria map
 
@@ -868,3 +1006,29 @@ Reporting at the gate follows §6.3: counts from the tools, dry steps listed by 
 `M<n>` / `S<n>` `<device> PASS|FAIL <date> <evidence>`. Counts on 2026-10-31 after wave 2 (`npm test` from
 the root): web 108/108, core 194/194, mobile jest 172/172; `npm run typecheck` clean; `npm run lint` 0
 errors (55 grandfathered warnings).
+
+## 9. Phase 2: Gate 2 criteria map
+
+`plan.md` §4 says "Gate 2 as in the prompt" and the prompt's wording is not recorded in the repo (open question
+§7); the criteria below are the Phase 2 deliverables as the lead fixed them in `log.md` (2026-11-01): C4 secrets in
+the core on the web's contract, U8 send-as-secret sheet / share target / QR scanner / block / report, N6 share
+extension + intent, FLAG_SECURE on the secret viewer, Universal Links with the fragment on the device, B5 report
+endpoint with ids only, Q5 cross-platform secrets and link/share flows, plus the standing rules (no content off the
+device except as ciphertext, no open high/critical). Status on 2026-11-01 after the C4 + B5 merge.
+
+| Gate 2 criterion | Automated proof | Manual proof | Owner | Status 2026-11-01 |
+| --- | --- | --- | --- | --- |
+| A secret made on a phone opens on the website, and one made on the website opens in the app, exactly as many times as the sender allowed | `packages/core/test/secrets.interop.test.ts` (17: web path on the production schema 002–009, app ↔ web both ways through `src/secrets.ts`, 3 views, expiry, wrong key, sweeps; §2.4); `packages/core/src/secrets.test.ts` (34, core-crypto: error mapping, unlock, locks); web `app/api/open` route tests | P9 on the live project (text, Wi-Fi, 5 MB image, each device: Hermes/quick-crypto parity); flows 12, 13 | qa (interop test, P9 run), core-crypto (module + its tests), lead (live project) | **test green 17/17 ×3**; P9 and the flows pending the device build + U8 ids |
+| Nothing about a secret reaches the server except ciphertext and the id; the key stays in the fragment | §2.4 sweep over SQL log, DB dump, stored objects, `/api/open` bodies and responses, in 4 encodings, with a canary; route source contract (no decrypt/fragment code in `route.ts`); phone request bodies carry only `id|precise|unlockToken` | P6 (Vercel log for `/s/<id>` and `/api/open`: path and id only); M18 | qa | **landed**; P6/M18 pending device build and live AASA/assetlinks |
+| Secret links route into the app (Universal Links / App Links) with the fragment read on the device, and to the website without the app | flow 13 (openLink → `viewer.peek`, second open `viewer.gone`); `apps/mobile/lib/__tests__/*` link parsing (core-crypto/native-security, N6) | M18 (both halves), P6, P7, M9 | native-security (N6, S21+), qa (13, M18, P6, P7) | 13 written (dry: U8 ids); N6 in progress |
+| Share from Photos and Files into OnePeek (share extension / intent): to a chat as view-once, or as a link; the received copy never outlives the action | flows 14, 15 (device-marked system steps); `files.test.ts` W2-2 `deletePicked`/`clearPickerCaches` (reused by the share path, to confirm in U8 review) | P1, P2, P3, P4; S21+ (N6: extension memory, FLAG_SECURE on the extension) | native-security (N6, S21+), mobile-ui (U8), qa (14, 15, P1–P3) | flows written (dry); N6/U8 in progress |
+| QR scanning routes invites, secrets and safety numbers and refuses foreign codes without showing them | flow 16 ×4 | P8 | mobile-ui (U8 scanner), qa (16, P8) | written (dry); needs a camera: physical iOS, Android virtual scene |
+| Report a chat with ids only; block a member | `supabase/tests/chat-reports.test.ts` (13: service-role table, `report_chat` member check, reason enum, 20/day cap, upsert) + `app/api/chat/report` route tests (6: exactly `{ p_room, p_reason }` forwarded) (backend, B5); U8 unit tests for the block state (mobile-ui, to land) | P10 | backend (B5), mobile-ui (U8), qa (P10) | B5 **landed** (web 142); U8 pending |
+| FLAG_SECURE on the secret viewer; cover under capture | `security/__tests__/*` extended by N6 (to land) | P5; S1, S3, S6 | native-security | pending N6 |
+| Leak guard keeps up with the new sinks (W3-3) | `leak-guard.test.ts` 113 + `log.test.ts` 10 = 123/123 ×3; `npm run lint` 0 errors (§1.6: `Sharing`, `Notifications`, `MediaLibrary`, file writes, `Paths.document`, remote `Image`; notification copy must be literal; `redact()` numbers) | the §1.6 "what a reviewer must still read" list, applied to the U8/N6 PRs | qa (rules), security-reviewer (reads) | **landed 2026-11-01**, W3-3 closed |
+| No open high findings | — | security-reviewer's Phase 2 report | security-reviewer | S1 ongoing |
+
+Counts on 2026-11-01 (this branch, `mobile/qa/phase2-tests` after merging `mobile/integration` with C4 + B5): web
+142/142, core 322/322 (275 after C4 + 30 W3-3 probes + 17 Q5), mobile jest 230/230; `npm run typecheck` clean; `npm run lint` 0 errors;
+`check-flows.mjs` 23 flows, 226 ids (59 proposed), 35 dry steps, `flows OK`. Reporting at the gate follows §6.3; a
+dry step is never counted as passed; P-checks as `P<n> <device> PASS|FAIL <date> <evidence>`.

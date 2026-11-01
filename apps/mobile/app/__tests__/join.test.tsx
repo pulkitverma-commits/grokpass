@@ -9,17 +9,21 @@ import { renderScreen } from '../../test/render';
 jest.mock('expo-router', () => require('../../test/expo-router-mock'));
 jest.mock('@/lib/chat', () => require('../../test/chat-mock').chatMock);
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
+const mockSecurity = { forgetLinkingURL: jest.fn() };
+jest.mock('@/security', () => ({ ...jest.requireActual('@/security/constants'), forgetLinkingURL: () => mockSecurity.forgetLinkingURL() }));
 
 const TOKEN = 'k'.repeat(40) + 'XYZ';
 const mockLink: { url: string | null } = { url: null };
 jest.mock('expo-linking', () => ({ useLinkingURL: () => mockLink.url }));
 
-beforeEach(() => { resetChatMock(); resetRouter(); mockLink.url = null; });
+beforeEach(() => { resetChatMock(); resetRouter(); mockLink.url = null; mockSecurity.forgetLinkingURL.mockClear(); });
 
 test('deep link: reads the token from the URL fragment, peeks, asks for code and nickname, redeems', async () => {
   mockLink.url = `https://onepeek.io/chat/join#${TOKEN}`;
   await renderScreen(<JoinDeepLinkRoute />);
   await waitFor(() => expect(chat.peekInvite).toHaveBeenCalledWith(TOKEN));
+  // P2-2: once the token is captured the launch URL is forgotten (initial-URL cache, Android Intent); exactly once.
+  expect(mockSecurity.forgetLinkingURL).toHaveBeenCalledTimes(1);
   expect(await screen.findByText('You’re invited to a Secret Chat')).toBeTruthy();
   expect(screen.getByText('Hold to read')).toBeTruthy();
   expect(JSON.stringify(screen.toJSON())).not.toContain(TOKEN);
@@ -38,6 +42,12 @@ test('custom scheme link works the same way and a Quick Chat needs no code', asy
   expect(screen.queryByTestId('join.code')).toBeNull();
   await fireEvent.press(screen.getByTestId('join.submit'));
   await waitFor(() => expect(chat.redeemInvite).toHaveBeenCalledWith(TOKEN, '', undefined));
+});
+
+test('P2-2: a deep-link route with no token forgets nothing (there is no fragment to forget)', async () => {
+  await renderScreen(<JoinDeepLinkRoute />);
+  await screen.findByTestId('join.link');
+  expect(mockSecurity.forgetLinkingURL).not.toHaveBeenCalled();
 });
 
 test('pasted link: extracts the fragment, rejects junk', async () => {

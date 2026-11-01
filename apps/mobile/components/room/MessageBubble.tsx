@@ -64,7 +64,9 @@ export const MessageBubble = memo(function MessageBubble({ m, parent, secret, he
   const soon = left !== null && left < 10_000;
   const f = m.file;
   // Only "this message carries a secret link" is on screen; the link (and its key) is not, until the viewer.
-  const link = !f && onOpenLink ? secretLinkFrom(m.body) : null;
+  // In a Secret room the button exists only while the text is shown (held): before that, even "there is a
+  // secret link in here" stays hidden, and the viewer cannot be reached without the room's hold (P2-6).
+  const link = !f && !hidden && onOpenLink ? secretLinkFrom(m.body) : null;
 
   const fileTitle = f
     ? f.viewOnce ? (m.mine ? 'View-once file' : m.viewed ? 'Opened' : f.mime.startsWith('image/') ? 'View-once photo' : 'View-once file')

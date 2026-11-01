@@ -424,6 +424,28 @@ test('U8 block: messages from a device on this phone’s block list are hidden; 
   expect(screen.getByTestId('msg.m9')).toBeTruthy();
 });
 
+test('P2-6 Secret room: a bubble with a secret link shows no "Open secret" until it is held; the button goes away on release', async () => {
+  await open([message({ id: 'm5', body: `Here you go: ${SECRET_URL}` })]);
+  const bubble = await screen.findByTestId('msg.m5');
+  expect(screen.getByText('Hold to read')).toBeTruthy();
+  expect(screen.queryByTestId('link.m5')).toBeNull();
+  expect(treeText()).not.toContain('Open secret');
+  expect(treeText()).not.toContain('onepeek.io');
+  await act(async () => { fireEvent(bubble, 'pressIn'); });
+  const btn = screen.getByTestId('link.m5');
+  expect(btn.props.accessibilityLabel).not.toContain('onepeek.io');
+  await fireEvent.press(btn);
+  expect(router.push).toHaveBeenCalledWith(`/s/${SECRET_ID}`);
+  expect(takeHandoff('secret')).toBe(SECRET_URL);
+  await act(async () => { fireEvent(bubble, 'pressOut'); });
+  expect(screen.queryByTestId('link.m5')).toBeNull();
+  // The sender's own bubble is never hidden, so its button is there without a hold.
+  await screen.unmount();
+  resetRouter(); clearHandoffs();
+  await open([message({ id: 'm6', mine: true, sender: 'dddddddd-0000-0000-0000-00000000000d', body: SECRET_URL })]);
+  expect(await screen.findByTestId('link.m6')).toBeTruthy();
+});
+
 test('U8 secret link in a message: "Open secret" parks the full link and routes by id only; the link is not an accessibility label', async () => {
   chat.myRooms.mockResolvedValue([room({ id: ROOM.id, kind: 'quick', name: 'Vault handover', ttl: 60 })]);
   await open([message({ id: 'm5', body: `Here you go: ${SECRET_URL}` })]);

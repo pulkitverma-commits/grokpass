@@ -2,12 +2,18 @@
 // sheet (native-security's share extension / share intent routes here with `{ text?, uris? }`).
 // Choices: send it into one of this phone's chats (the room's own send / sendFile, view-once for
 // files), or make a onepeek.io link with the secret composer. Shared text that is itself a secret
-// or invite link goes straight to the viewer / join flow. The shared content stays in component
+// or invite link goes straight to the viewer / join flow (P2-5: classified on arrival, parked in
+// lib/links' hand-off and the route REPLACED, so `/share?text=<link>` does not stay in the router
+// history; the bridge-side fix, classifying before routing so the text never travels as a param,
+// belongs to native-security's `security/shareIntent.ts`). The shared content stays in component
 // state; the file is read by the core when it is encrypted and is never copied by this screen.
+// Whatever the bridge left in <cache>/share-intent/ is removed with `consumeShare()` as soon as this
+// screen is done with it: after a send (success or failure), on cancel, after a link was made, or
+// when the text was a OnePeek link (P2-3). Exactly once per share.
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Switch, View } from 'react-native';
-import { useSecureScreen } from '@/security';
+import { consumeShare, useSecureScreen } from '@/security';
 import { Avatar } from '../components/Avatar';
 import { Button } from '../components/Button';
 import { useChat } from '../components/ChatProvider';
@@ -56,12 +62,22 @@ export default function ShareScreen() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
-  // A shared OnePeek link is not something to forward: it is opened.
+  // The plaintext copies the bridge left for this share go the moment this screen is finished with
+  // them (P2-3). Once: a send and the cancel that follows, or a link and its Done, share one share.
+  const consumed = useRef(false);
+  const consume = useCallback(() => {
+    if (consumed.current) return;
+    consumed.current = true;
+    void consumeShare().catch(() => { /* best effort: the next launch sweeps */ });
+  }, []);
+
+  // A shared OnePeek link is not something to forward: it is opened. The text is consumed here and
+  // the route replaced, so the link does not stay reachable as a `/share` param (P2-5).
   const routed = useMemo(() => (!file ? classify(sharedText) : { kind: 'none' as const }), [file, sharedText]);
   useEffect(() => {
-    if (routed.kind === 'secret') { stashHandoff('secret', routed.url); router.replace(`/s/${routed.id}`); }
-    else if (routed.kind === 'invite') { stashHandoff('invite', routed.url); router.replace('/chat/join'); }
-  }, [routed, router]);
+    if (routed.kind === 'secret') { stashHandoff('secret', routed.url); consume(); router.replace(`/s/${routed.id}`); }
+    else if (routed.kind === 'invite') { stashHandoff('invite', routed.url); consume(); router.replace('/chat/join'); }
+  }, [routed, router, consume]);
 
   const load = useCallback(async () => {
     if (routed.kind !== 'none') return;
@@ -79,7 +95,7 @@ export default function ShareScreen() {
   const tooBig = !!file && file.size > MAX_ATTACHMENT_BYTES;
   const canSend = !!roomId && !busy && !tooBig && (file ? true : text.trim().length > 0);
   const room = rooms?.find((r) => r.id === roomId) ?? null;
-  const cancel = () => { if (router.canGoBack()) router.back(); else router.replace('/'); };
+  const cancel = () => { consume(); if (router.canGoBack()) router.back(); else router.replace('/'); };
 
   async function send() {
     if (!roomId || !canSend) return;
@@ -88,9 +104,13 @@ export default function ShareScreen() {
       const ttl = room?.ttl ?? 60;
       if (file) await guard(() => chat().sendFile(roomId, fileSource(file), ttl, viewOnce));
       else await guard(() => chat().send(roomId, text.trim(), ttl));
+      consume();
       void chat().notifyRoom(roomId);
       router.replace(`/room/${roomId}`);
     } catch (e) {
+      // The copy is not kept for a retry: a failed send leaves nothing behind either (P2-3). The
+      // shared text stays in state, so "Make a one-time link" still works; a file needs a new share.
+      consume();
       setErr(friendlyError(errorCode(e)));
       setBusy(false);
     }
@@ -101,7 +121,7 @@ export default function ShareScreen() {
   if (mode === 'link') {
     return (
       <Screen scroll header={<Header close title="One-time link" onBack={() => setMode('chat')} testID="share.backToChat" />} testID="share.screen">
-        <SecretComposer target={null} fixed initialText={file ? '' : text} initialFile={file} onDone={cancel} />
+        <SecretComposer target={null} fixed initialText={file ? '' : text} initialFile={file} onLinkMade={consume} onDone={cancel} />
       </Screen>
     );
   }

@@ -6,19 +6,25 @@
 // in-memory hand-off (lib/links), never from route params, and goes only into lib/secrets.
 // Decrypted content lives in component state only: it is dropped when the app goes inactive, when
 // the screen loses focus, when the timer runs out and on unmount; an image temp file is deleted
-// with it. A recipient-locked secret runs the web's email-code flow through lib/secrets
-// (requestUnlockCode / verifyUnlockCode, C4); only the id, the address and the code go to the core.
-// Geofenced secrets need a location the app does not read (no expo-location): the website instead.
-// Nothing here logs.
+// with it. Once the peek has resolved (the key is imported), the launch URL is forgotten
+// (`forgetLinkingURL`, P2-2) so the key does not stay in the native initial-URL cache or the Android
+// Intent for the life of the process. A recipient-locked secret runs the web's email-code flow
+// through lib/secrets (requestUnlockCode / verifyUnlockCode, C4); only the id, the address and the
+// code go to the core. Geofenced secrets need a location the app does not read (no expo-location):
+// the website instead, through "Open in browser" (P2-8: a Custom Tab on Android, where the system
+// browser would resolve the verified App Link straight back into this app; Safari on iOS). The
+// sentence under that button says that the link, key included, is handed to the browser. Nothing
+// here logs.
 import * as Clipboard from 'expo-clipboard';
 import { useLinkingURL } from 'expo-linking';
 import { Image } from 'expo-image';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import * as WebBrowser from 'expo-web-browser';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { AppState, Linking, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { wifiQrPayload } from '@onepeek/core';
-import { useSecureScreen, Watermark } from '@/security';
+import { forgetLinkingURL, useSecureScreen, Watermark } from '@/security';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
 import { Field } from '../../components/Field';
@@ -31,19 +37,11 @@ import { colors, radii, spacing, touchTarget } from '../../theme';
 import { DATA_URI_LIMIT, dataUri, deleteTemp, extensionOf, fileSize, shareBytes, writeTemp } from '@/lib/files';
 import { errorCode, friendlyError } from '@/lib/format';
 import { secretLinkFrom, takeHandoff } from '@/lib/links';
-import * as secretsLib from '@/lib/secrets';
-import { openSecretLink, peekSecretLink, type OpenedSecret, type SecretPeek } from '@/lib/secrets';
-
-/**
- * The lock-email flow lands with core-crypto's C4 (`requestUnlockCode`, `verifyUnlockCode`); this
- * branch predates it, so the two are reached optionally and the viewer falls back to the website
- * when they are absent. `viewerPlace` on the opened secret is a C4 superset field as well.
- */
-type UnlockApi = { requestUnlockCode?: (url: string, email: string) => Promise<void>; verifyUnlockCode?: (url: string, code: string) => Promise<{ token: string }> };
-const unlockApi = secretsLib as unknown as UnlockApi;
-const hasUnlockFlow = typeof unlockApi.requestUnlockCode === 'function' && typeof unlockApi.verifyUnlockCode === 'function';
+import { openSecretLink, peekSecretLink, requestUnlockCode, verifyUnlockCode, type OpenedSecret, type SecretPeek } from '@/lib/secrets';
 
 const WEBSITE_ONLY = ' Open the link in a browser on onepeek.io instead.';
+/** Under "Open in browser": the honest consequence of the fallback (the web viewer strips the fragment afterwards, but the browser saw it). */
+const BROWSER_NOTE = 'Opens in your browser. The full link, key included, is handed to the browser and will be in its history.';
 const KEPT = ' Nothing has been opened or deleted.';
 
 type Phase = 'loading' | 'ready' | 'opening' | 'revealed' | 'vanished' | 'cleared' | 'error';
@@ -117,12 +115,14 @@ export default function SecretViewerRoute() {
   const [lockMsg, setLockMsg] = useState('');
   const [unlockToken, setUnlockToken] = useState('');
 
-  // Peek: what the viewer learns before opening (type, size, views, locks). Never the content.
+  // Peek: what the viewer learns before opening (type, size, views, locks). Never the content. Once
+  // it has resolved the key has been imported, so the launch URL that carried it is forgotten (P2-2);
+  // the link itself stays in this component's state for the open.
   useEffect(() => {
     if (!url) return;
     let alive = true;
     peekSecretLink(url)
-      .then((p) => { if (alive) { setPeek(p); setPhase('ready'); } })
+      .then((p) => { forgetLinkingURL(); if (alive) { setPeek(p); setPhase('ready'); } })
       .catch((e) => { if (alive) { setErr(secretError(e)); setPhase('error'); } });
     return () => { alive = false; };
   }, [url]);
@@ -151,12 +151,12 @@ export default function SecretViewerRoute() {
   }, [phase, timer, remaining, clear]);
 
   async function sendCode() {
-    if (!url || !unlockApi.requestUnlockCode) return;
+    if (!url) return;
     const address = lockEmail.trim();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) { setLockMsg('Enter your email address.'); return; }
     setLockBusy(true); setLockMsg('');
     try {
-      await unlockApi.requestUnlockCode(url, address);
+      await requestUnlockCode(url, address);
       setCodeSent(true);
       setLockMsg('If that’s the address the sender chose, a 6-digit code is on its way. Check your inbox and spam folder.');
     } catch (e) {
@@ -170,11 +170,11 @@ export default function SecretViewerRoute() {
   }
 
   async function verifyCode() {
-    if (!url || !unlockApi.verifyUnlockCode || lockCode.length !== 6) return;
+    if (!url || lockCode.length !== 6) return;
     setLockBusy(true); setLockMsg('');
     try {
-      const { token } = await unlockApi.verifyUnlockCode(url, lockCode);
-      setUnlockToken(token);
+      // The one-use unlock token (a string, as the core returns it): kept in state for open() only.
+      setUnlockToken(await verifyUnlockCode(url, lockCode));
     } catch (e) {
       const code = errorCode(e);
       if (code === 'wrong_code') setLockMsg('That code isn’t right. Try again.');
@@ -223,9 +223,16 @@ export default function SecretViewerRoute() {
     finally { setSharing(false); }
   }
 
+  /**
+   * The website as the fallback the user chose (geofence, a protection this build cannot check).
+   * Android: a Custom Tab (`openBrowserAsync`), because `Linking.openURL` of an https://onepeek.io/s/
+   * link resolves through the verified App Link straight back into this app. iOS: `openURL`, which
+   * hands a Universal Link the app itself owns to Safari. Either way the browser gets the key.
+   */
   function openInBrowser() {
     if (!url) return;
-    Linking.openURL(url).catch(() => setErr('Couldn’t open the browser.'));
+    const open = Platform.OS === 'android' ? WebBrowser.openBrowserAsync(url).then(() => undefined) : Linking.openURL(url).then(() => undefined);
+    open.catch(() => setErr('Couldn’t open the browser.'));
   }
 
   const close = () => { clear('cleared'); if (router.canGoBack()) router.back(); else router.replace('/'); };
@@ -292,7 +299,7 @@ export default function SecretViewerRoute() {
             It will be decrypted on this phone. {maxViews > 1 ? `This link can be opened ${viewsLeft} more time${viewsLeft === 1 ? '' : 's'}, then it’s deleted from OnePeek.` : 'As soon as you open it, it’s deleted from OnePeek — this link won’t work again.'}{timer > 0 ? ` You’ll have ${timer} second${timer === 1 ? '' : 's'} to view it.` : ''}
           </Text>
 
-          {needsCode && hasUnlockFlow ? (
+          {needsCode ? (
             <View style={styles.box} testID="sview.locked">
               <Text variant="sub">This secret is for {peek.lockHint ?? 'one email address'}. Confirm it’s you with a one-time code.</Text>
               {!codeSent ? (
@@ -309,11 +316,6 @@ export default function SecretViewerRoute() {
               )}
               {lockMsg ? <Text variant="meta" tone="muted" accessibilityLiveRegion="polite" testID="sview.lockMsg">{lockMsg}</Text> : null}
             </View>
-          ) : needsCode ? (
-            <View style={styles.box} testID="sview.locked">
-              <Text variant="sub">This secret is for {peek.lockHint ?? 'one email address'}. Confirming an email isn’t available in this build, so open the link in a browser on onepeek.io.</Text>
-              <Button title="Open in browser" variant="ghost" onPress={openInBrowser} testID="sview.browser" />
-            </View>
           ) : null}
           {peek.locked && unlockToken ? <Notice tone="success" icon="check" text="Email confirmed. You can open the secret now." testID="sview.unlocked" /> : null}
           {peek.notYet ? (
@@ -322,7 +324,12 @@ export default function SecretViewerRoute() {
             </View>
           ) : null}
           {err ? <Notice tone="error" text={err} /> : null}
-          {err.includes('onepeek.io instead') ? <Button title="Open in browser" variant="ghost" onPress={openInBrowser} testID="sview.browser" /> : null}
+          {err.includes('onepeek.io instead') ? (
+            <View style={styles.browser}>
+              <Button title="Open in browser" variant="ghost" onPress={openInBrowser} testID="sview.browser" />
+              <Text variant="meta" tone="muted" center testID="sview.browserNote">{BROWSER_NOTE}</Text>
+            </View>
+          ) : null}
           <Button title={phase === 'opening' ? 'Decrypting…' : 'Open secret'} busy={phase === 'opening'} disabled={needsCode || !!peek.notYet} onPress={open} testID="sview.open" />
         </View>
       ) : null}
@@ -405,6 +412,7 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
 
 const styles = StyleSheet.create({
   stack: { gap: spacing.md },
+  browser: { gap: spacing.xs },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   box: { gap: spacing.md, padding: spacing.lg, borderRadius: radii.lg, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line },
   countdown: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.surface },

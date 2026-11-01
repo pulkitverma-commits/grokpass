@@ -28,8 +28,8 @@ const MAX_TEXT_CHARS = 50_000;   // the web's MAX_TEXT_CHARS
 type Wifi = { ssid: string; password: string; security: 'WPA' | 'WEP' | 'nopass'; hidden: boolean };
 const WIFI_SECURITY = [{ value: 'WPA' as const, label: 'WPA/WPA2/WPA3' }, { value: 'WEP' as const, label: 'WEP' }, { value: 'nopass' as const, label: 'No password' }];
 
-/** The Wi-Fi template input. C4's `SecretInput` carries `{ kind: 'wifi', wifi }`; this branch's placeholder type predates it, hence the cast. */
-const wifiInput = (w: Wifi): SecretInput => ({ kind: 'wifi', wifi: { ssid: w.ssid.trim(), password: w.security === 'nopass' ? '' : w.password, security: w.security, hidden: w.hidden } } as unknown as SecretInput);
+/** The Wi-Fi template input (`SecretInput` `{ kind: 'wifi', wifi }`). */
+const wifiInput = (w: Wifi): SecretInput => ({ kind: 'wifi', wifi: { ssid: w.ssid.trim(), password: w.security === 'nopass' ? '' : w.password, security: w.security, hidden: w.hidden } });
 
 /** What "Send in this chat" hands back to the room screen (which owns the actual send). */
 export type InChatSecret = { kind: 'text'; text: string } | { kind: 'file'; picked: Picked };
@@ -46,19 +46,21 @@ type Props = {
   /** The chat this was opened from, or null from the Chats home (link only). */
   target: SecretTarget | null;
   initialText?: string;
-  /** A file handed over by another app (share target); not under the pickers' cache, never deleted here. */
+  /** A file handed over by another app (share target); not under the pickers' cache, never deleted here: the owner is told through `onLinkMade`. */
   initialFile?: Picked | null;
   /** Hide the pickers and "Send in this chat": the share target already chose what to send. */
   fixed?: boolean;
   onSendInChat?: (s: InChatSecret) => Promise<void>;
   onSendLinkInChat?: (link: string) => Promise<void>;
+  /** The link exists: the input (text or `initialFile`) has been encrypted and is no longer needed. The share target deletes its copy here (P2-3). */
+  onLinkMade?: () => void;
   onDone: () => void;
 };
 
 /** Secret text stays out of the keyboard's dictionary and autofill (same flags as the Secret-room composer). */
 const SECRET_INPUT = { autoCorrect: false, spellCheck: false, autoCapitalize: 'none', autoComplete: 'off', importantForAutofill: 'no', textContentType: 'none' } as const;
 
-export function SecretComposer({ target, initialText = '', initialFile = null, fixed = false, onSendInChat, onSendLinkInChat, onDone }: Props) {
+export function SecretComposer({ target, initialText = '', initialFile = null, fixed = false, onSendInChat, onSendLinkInChat, onLinkMade, onDone }: Props) {
   const [text, setText] = useState(initialText);
   const [picked, setPicked] = useState<Picked | null>(initialFile);
   const [mode, setMode] = useState<'text' | 'wifi'>('text');
@@ -112,6 +114,7 @@ export function SecretComposer({ target, initialText = '', initialFile = null, f
       setText(''); setWifi((w) => ({ ...w, password: '' }));
       if (p && p !== initialFile) deletePicked(p);
       if (p) setPicked(null);
+      onLinkMade?.();
     } catch (e) {
       setErr(friendlyError(errorCode(e)));
     } finally { setBusy(null); }

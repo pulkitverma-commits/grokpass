@@ -1,8 +1,8 @@
 # Gate 1: Secret Chat core
 
 Date: 2026-11-01. Branch: `mobile/integration` (93 commits after Gate 0 approval, about 190 files, +25k lines).
-Decision requested from the human: **approve Phase 1 as code-complete with device verification deferred**, and
-unblock the device checks (section 5). Every gate criterion that a device can prove is still unproven: this Mac
+Decision: **approved by the human on 2026-11-01 with device verification deferred.** The device checks run once the
+accounts in section 5 exist; results are appended to section 1. Every gate criterion that a device can prove is still unproven: this Mac
 has no Xcode, Android Studio, Java or emulator, and no Expo or Apple account exists yet (same blocker as Gate 0).
 
 Security verdict: **no open high or critical findings** (`security-review/phase-1-close-out.md`). Every high and medium raised this phase (W1-1 high; W1-2, W1-3, W1-4, W2-1, W2-2, W3-1 medium) is fixed with a test that fails without the fix. Open lows are listed in the close-out report with owners and carried into Phase 2.

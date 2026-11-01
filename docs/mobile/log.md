@@ -4,6 +4,14 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- **Human approved Gate 1 with device verification deferred** (2026-11-01). Phase 2 starts: C4 secrets in core,
+  U8 (send-as-secret sheet, share target, QR scanner, block member, report chat), N6 (share extension / share intent,
+  FLAG_SECURE on the secret viewer, Universal Links with the fragment on device), B5 (report endpoint, ids only), Q5
+  (cross-platform secret tests). Carry-overs assigned: W2-8 re-register after sign-in (mobile-ui), W3-3 sink lint (qa),
+  Supabase AppState token refresh (core-crypto). Contract fixed by the lead: `apps/mobile/lib/secrets.ts`
+  (`createSecretLink`, `peekSecretLink`, `openSecretLink`) implemented by core-crypto on top of
+  `packages/core/src/secrets.ts`; the web's `create_secret` RPC, `/api/open` route and `/s/<id>#<key>` format are
+  the spec; nothing new on the server for secrets.
 - W3 fixes merged (W3-1 hidden Secret parent never quoted in a sent bubble; W3-2 the invite link unmasks only when
   `extra.e2e` is true, which only the `e2e` EAS profile sets; W3-4 `treeText()` deny-list; W3-5 no backend call between
   `verifyOtp` and the login-CSRF sign-out). Totals: web 123, core 194, mobile 203; 17 flows clean. **Gate 1 reached:**

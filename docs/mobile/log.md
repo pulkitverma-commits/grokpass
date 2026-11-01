@@ -4,6 +4,11 @@ Newest first. One line per decision, blocker or agent report.
 
 ## 2026-11-01
 
+- Full-report app fixes merged (F-1 sign-out wipes the chat keystore like the web and the room screen refuses rooms
+  not in `myRooms()`; F-2 wording; F-4 QR behind a tap; F-7 `/reset` not deep-linkable; F-9 one notify per send;
+  accessibility labels, held-text announcement, 7.06:1 destructive contrast; location notice in the secret viewer).
+  Store docs corrected. Mobile 442 (`--no-cache`). **Gate 3 reached:** `docs/mobile/gates/phase-3.md`. Stopping for
+  the human: F-2 decision (core fix changes the live website's safety numbers) and the Gate 3 decision.
 - core-crypto sync hardening merged: `applyRows` writes state then `lastSeq` once per page (undecryptable rows skipped,
   the ratchet never saved ahead of a failed page; a stale-state overwrite after a failed nickname announce fixed on the
   way), `sync()` drains up to 20 pages of 200, `subscribe()` reopens the channel with backoff after

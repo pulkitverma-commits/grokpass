@@ -3,6 +3,8 @@
 // in-memory hand-off so a full secret link (whose #fragment is the decryption key) can travel from
 // the place it was found (a bubble, the scanner, the share sheet) to the viewer screen WITHOUT going
 // through navigation params, which expo-router would keep in its history and could put in a URL.
+// A parked link lives for HANDOFF_TTL_MS at most (review P3-2): a stash whose screen never mounted
+// (a relock in between, a viewer that read the launch URL instead) is not handed to the next reader.
 // Nothing here logs, stores or sends anything.
 import { isSecretLink } from './secrets';
 import { inviteTokenFrom } from './format';
@@ -60,20 +62,35 @@ export function classify(text: string | null | undefined): Classified {
 // ---------------------------------------------------------------------------- hand-off
 
 type Slot = 'secret' | 'invite';
-const slots: Partial<Record<Slot, string>> = {};
+type Stashed = { value: string; at: number };
+
+/**
+ * How long a parked link waits for its screen. A stash is written right before `router.push` /
+ * `replace` and read in the destination's first render, so 30 s is generous for the slowest phone;
+ * anything older was never taken (P3-2) and is dropped by `takeHandoff` instead of being handed to
+ * whichever viewer or Join mounts next.
+ */
+export const HANDOFF_TTL_MS = 30_000;
+
+const slots: Partial<Record<Slot, Stashed>> = {};
 
 /** Parks a full link for the next screen. Read once by `takeHandoff`; a second read gets null. */
 export function stashHandoff(slot: Slot, value: string): void {
-  slots[slot] = value;
+  slots[slot] = { value, at: Date.now() };
 }
 
+/** The parked link, once; null when nothing is parked or the stash is older than HANDOFF_TTL_MS. */
 export function takeHandoff(slot: Slot): string | null {
-  const v = slots[slot] ?? null;
+  const s = slots[slot];
   delete slots[slot];
-  return v;
+  if (!s || Date.now() - s.at > HANDOFF_TTL_MS) return null;
+  return s.value;
 }
 
-/** Test and reset helper: forgets anything parked. */
+/**
+ * Forgets anything parked. Called when the app relocks (security/SecurityProvider: the Stack unmounts
+ * and the destination will never read its stash) and by `resetThisPhone()` (lib/chat); tests too.
+ */
 export function clearHandoffs(): void {
   delete slots.secret;
   delete slots.invite;

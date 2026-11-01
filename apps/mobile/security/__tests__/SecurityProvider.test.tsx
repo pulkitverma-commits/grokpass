@@ -32,6 +32,10 @@ jest.mock('@/modules/screen-state', () => {
     __emitCaptured: (c: boolean) => listener?.(c),
   };
 });
+// lib/links pulls lib/secrets and the core in; the provider only needs to be seen calling clearHandoffs (P3-2).
+const mockLinks = { clearHandoffs: jest.fn() };
+jest.mock('@/lib/links', () => ({ clearHandoffs: () => mockLinks.clearHandoffs() }));
+
 jest.mock('@/lib/chat', () => {
   let flag = false;
   const store = {
@@ -200,6 +204,25 @@ describe('SecurityProvider', () => {
     await flush();
     expect(t.queryByText('SECRET CONTENT')).toBeNull();
     expect(getLockStore().get()).toBe(false);
+  });
+
+  test('P3-2: every relock (lockNow, panic, auto-lock) drops the links parked in lib/links; an unlock does not', async () => {
+    const { sec, unlock } = await unlockedTree();
+    expect(mockLinks.clearHandoffs).not.toHaveBeenCalled();   // mount and the first unlock park nothing and clear nothing
+    await act(async () => { sec().lockNow(); });
+    await flush();
+    expect(mockLinks.clearHandoffs).toHaveBeenCalledTimes(1);
+    expect(await unlock()).toBe(true);
+    expect(mockLinks.clearHandoffs).toHaveBeenCalledTimes(1);
+    await act(async () => { sec().panic(); });
+    await flush();
+    expect(mockLinks.clearHandoffs).toHaveBeenCalledTimes(2);
+    expect(await unlock()).toBe(true);
+    await appState('background');
+    jest.advanceTimersByTime(AUTO_LOCK_MS + 1);
+    await appState('active');
+    expect(sec().locked).toBe(true);
+    expect(mockLinks.clearHandoffs).toHaveBeenCalledTimes(3);
   });
 
   test('captured (iOS recording) shows the cover without locking; independent of the app-switcher cover', async () => {

@@ -4,6 +4,8 @@
 // Once captured here, the launch URL is forgotten (`forgetLinkingURL`, P2-2): the token stays in
 // this screen's state for the redeem and leaves the native initial-URL cache and the Android Intent.
 // The QR scanner and the share target arrive here too, with the link parked in lib/links' hand-off.
+// When both exist the tapped Universal Link wins (P3-2): a stash is at most HANDOFF_TTL_MS old and
+// came from this user's own earlier action, but the link in hand is what they just asked to open.
 import { useLinkingURL } from 'expo-linking';
 import { useEffect, useState } from 'react';
 import { forgetLinkingURL } from '@/security';
@@ -14,7 +16,7 @@ import { takeHandoff } from '@/lib/links';
 export default function JoinDeepLinkRoute() {
   const url = useLinkingURL();
   const [handed] = useState(() => takeHandoff('invite'));
-  const token = inviteTokenFrom(handed) ?? inviteTokenFrom(url);
+  const token = inviteTokenFrom(url) ?? inviteTokenFrom(handed);
   useEffect(() => { if (token) forgetLinkingURL(); }, [token]);
   return <JoinScreen key={token ?? ''} initialToken={token} />;
 }

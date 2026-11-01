@@ -2,12 +2,14 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react-native';
 import JoinRoute from '../join';
 import JoinDeepLinkRoute from '../chat/join';
+import { clearHandoffs, stashHandoff, takeHandoff } from '../../lib/links';
 import { auth, chat, chatError, resetChatMock } from '../../test/chat-mock';
 import { resetRouter, router } from '../../test/expo-router-mock';
 import { renderScreen } from '../../test/render';
 
 jest.mock('expo-router', () => require('../../test/expo-router-mock'));
 jest.mock('@/lib/chat', () => require('../../test/chat-mock').chatMock);
+jest.mock('@/lib/secrets', () => require('../../test/secrets-mock').secretsMock);
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 const mockSecurity = { forgetLinkingURL: jest.fn() };
 jest.mock('@/security', () => ({ ...jest.requireActual('@/security/constants'), forgetLinkingURL: () => mockSecurity.forgetLinkingURL() }));
@@ -16,7 +18,28 @@ const TOKEN = 'k'.repeat(40) + 'XYZ';
 const mockLink: { url: string | null } = { url: null };
 jest.mock('expo-linking', () => ({ useLinkingURL: () => mockLink.url }));
 
-beforeEach(() => { resetChatMock(); resetRouter(); mockLink.url = null; mockSecurity.forgetLinkingURL.mockClear(); });
+beforeEach(() => { resetChatMock(); resetRouter(); mockLink.url = null; mockSecurity.forgetLinkingURL.mockClear(); clearHandoffs(); });
+
+const STALE_TOKEN = 's'.repeat(40) + 'OLD';
+
+test('P3-2: a stash from the scanner or the share sheet is used when no link opened the screen, and read once', async () => {
+  stashHandoff('invite', `https://onepeek.io/chat/join#${TOKEN}`);
+  await renderScreen(<JoinDeepLinkRoute />);
+  await waitFor(() => expect(chat.peekInvite).toHaveBeenCalledWith(TOKEN));
+  expect(takeHandoff('invite')).toBeNull();
+  expect(JSON.stringify(screen.toJSON())).not.toContain(TOKEN);
+});
+
+test('P3-2: when a stash AND a tapped link both exist, the link in hand wins and the stash is consumed, not redeemed', async () => {
+  stashHandoff('invite', `https://onepeek.io/chat/join#${STALE_TOKEN}`);
+  mockLink.url = `https://onepeek.io/chat/join#${TOKEN}`;
+  await renderScreen(<JoinDeepLinkRoute />);
+  await waitFor(() => expect(chat.peekInvite).toHaveBeenCalledWith(TOKEN));
+  expect(chat.peekInvite).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(chat.peekInvite.mock.calls)).not.toContain(STALE_TOKEN);
+  expect(takeHandoff('invite')).toBeNull();   // taken (and dropped) on mount: it does not wait for the next Join
+  expect(mockSecurity.forgetLinkingURL).toHaveBeenCalledTimes(1);
+});
 
 test('deep link: reads the token from the URL fragment, peeks, asks for code and nickname, redeems', async () => {
   mockLink.url = `https://onepeek.io/chat/join#${TOKEN}`;

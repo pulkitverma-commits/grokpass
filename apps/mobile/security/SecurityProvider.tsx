@@ -26,6 +26,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { getChat, getLockStore } from '@/lib/chat';
+import { clearHandoffs } from '@/lib/links';
 import { addCapturedListener, isCaptured } from '@/modules/screen-state';
 
 import { excludeChatDbFromBackup } from './backup';
@@ -80,6 +81,9 @@ export function SecurityProvider({ children, cover, now = Date.now }: SecurityPr
   const relock = useCallback(() => {
     generation.current += 1;
     unlocking.current = false;   // a fresh unlock may start; the stale one is discarded by generation
+    // The Stack below unmounts with the children: a link parked for a screen that will now never mount
+    // (lib/links' hand-off) must not wait for the next viewer or Join after the unlock (P3-2).
+    clearHandoffs();
     setLocked(true);
   }, []);
 

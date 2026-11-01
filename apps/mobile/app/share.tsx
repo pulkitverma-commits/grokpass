@@ -1,5 +1,7 @@
 // Share target (design 10): another app handed OnePeek some text or a file through the native share
-// sheet (native-security's share extension / share intent routes here with `{ text?, uris? }`).
+// sheet (native-security's share extension / share intent routes here with `{ text?, uris?, nonce?,
+// dropped? }`: `nonce` names this share's own cache directory, `dropped` counts items the receiver
+// skipped, P3-3 / P3-6).
 // Choices: send it into one of this phone's chats (the room's own send / sendFile, view-once for
 // files), or make a onepeek.io link with the secret composer. Shared text that is itself a secret
 // or invite link goes straight to the viewer / join flow (P2-5: classified on arrival, parked in
@@ -7,9 +9,10 @@
 // history; the bridge-side fix, classifying before routing so the text never travels as a param,
 // belongs to native-security's `security/shareIntent.ts`). The shared content stays in component
 // state; the file is read by the core when it is encrypted and is never copied by this screen.
-// Whatever the bridge left in <cache>/share-intent/ is removed with `consumeShare()` as soon as this
-// screen is done with it: after a send (success or failure), on cancel, after a link was made, or
-// when the text was a OnePeek link (P2-3). Exactly once per share.
+// Whatever the bridge left in <cache>/share-intent/<nonce>/ is removed with `consumeShare(nonce)` as
+// soon as this screen is done with it: after a send (success or failure), on cancel, after a link was
+// made, or when the text was a OnePeek link (P2-3). Exactly once per share, and only this share's
+// directory: a second share that arrived meanwhile keeps its copies (P3-3).
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Switch, View } from 'react-native';
@@ -52,7 +55,7 @@ function firstUri(v: string | string[] | undefined): string | null {
 }
 
 export default function ShareScreen() {
-  const params = useLocalSearchParams<{ text?: string; uris?: string | string[] }>();
+  const params = useLocalSearchParams<{ text?: string; uris?: string | string[]; nonce?: string; dropped?: string }>();
   const router = useRouter();
   const { chat, guard } = useChat();
   useSecureScreen('share');
@@ -63,6 +66,8 @@ export default function ShareScreen() {
     () => (Array.isArray(params.uris) ? params.uris.length : (params.uris ?? '').split(',').filter(Boolean).length) - 1,
     [params.uris],
   );
+  const nonce = typeof params.nonce === 'string' ? params.nonce : undefined;
+  const skipped = Number(params.dropped) > 0;
   const [file] = useState<Picked | null>(() => (uri ? pickedFromUri(uri) : null));
   const [text, setText] = useState(sharedText);
   const [rooms, setRooms] = useState<Room[] | null>(null);
@@ -78,10 +83,10 @@ export default function ShareScreen() {
   const consume = useCallback(() => {
     if (consumed.current) return;
     consumed.current = true;
-    void consumeShare().catch(() => {
-      /* best effort: the next launch sweeps */
+    void consumeShare(nonce).catch(() => {
+      /* best effort: a later launch sweeps the directory once it is old enough */
     });
-  }, []);
+  }, [nonce]);
 
   // A shared OnePeek link is not something to forward: it is opened. The text is consumed here and
   // the route replaced, so the link does not stay reachable as a `/share` param (P2-5).
@@ -222,6 +227,11 @@ export default function ShareScreen() {
       {extra > 0 ? (
         <Text variant="meta" tone="muted" style={styles.hint}>
           Only the first file is sent. Share the others one at a time.
+        </Text>
+      ) : null}
+      {skipped ? (
+        <Text variant="meta" tone="muted" style={styles.hint} testID="share.skipped">
+          Some items were skipped.
         </Text>
       ) : null}
       {tooBig ? <Notice tone="error" text="Files can be up to 50 MB." /> : null}

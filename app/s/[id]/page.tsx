@@ -5,14 +5,14 @@ import SiteFooter from '@/app/components/SiteFooter';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-import { importKey, decryptJson, decryptText, decryptBytes, wifiQrPayload, type SecretHeader, type WifiSecret } from '@/lib/crypto';
+import { importKey, decryptJson, decryptText, decryptBytes, wifiQrPayload, derivePassKeys, derivePassContentKey, PASS_LINK_PREFIX, type SecretHeader, type WifiSecret } from '@/lib/crypto';
 import { countryName, countryFlag } from '@/lib/countries';
 import Icon from '@/app/components/Icon';
 import { tzLabel } from '@/lib/time';
 import { bestPosition } from '@/lib/geo';
 import QrCode from '@/app/components/QrCode';
 
-type Phase = 'loading' | 'ready' | 'opening' | 'revealed' | 'vanished' | 'error';
+type Phase = 'loading' | 'passphrase' | 'ready' | 'opening' | 'revealed' | 'vanished' | 'error';
 type Peek = {
   header: string; share_location?: boolean; fence_radius_m?: number | null; fence_label?: string | null;
   max_views?: number | null; views_left?: number | null; lock_hint?: string | null;
@@ -67,6 +67,12 @@ export default function RevealPage() {
   const [lockBusy, setLockBusy] = useState(false);
   const [lockMsg, setLockMsg] = useState('');
   const [unlockToken, setUnlockToken] = useState('');
+  // Passphrase shares (#p1.<linkPart>): the key is derived after the passphrase is confirmed.
+  const [passSalt, setPassSalt] = useState('');
+  const [passInput, setPassInput] = useState('');
+  const [passBusy, setPassBusy] = useState(false);
+  const [passMsg, setPassMsg] = useState('');
+  const passLinkRef = useRef('');
   // After opening
   const [viewsLeft, setViewsLeft] = useState(0);
   const [finalView, setFinalView] = useState(true);
@@ -89,6 +95,29 @@ export default function RevealPage() {
       if (!supabase) {
         setError('Secure storage is not configured.');
         setPhase('error');
+        return;
+      }
+      if (keyB64.startsWith(PASS_LINK_PREFIX)) {
+        // Passphrase share: check it exists and fetch the KDF salt; nothing is decrypted yet.
+        const linkPart = keyB64.slice(PASS_LINK_PREFIX.length);
+        const [{ data: peekData }, { data: salt }] = await Promise.all([
+          supabase.rpc('peek_secret', { p_id: id }), supabase.rpc('peek_pass', { p_id: id }),
+        ]);
+        const prow = (Array.isArray(peekData) ? peekData[0] : null) as Peek | null;
+        if (!/^[A-Za-z0-9_-]{43}$/.test(linkPart)) {
+          setError('This link is damaged. Ask the sender to share it again.');
+          setPhase('error');
+          return;
+        }
+        if (!prow || typeof salt !== 'string' || !salt) {
+          setError('This secret has already been opened, or it has expired.');
+          setPhase('error');
+          return;
+        }
+        passLinkRef.current = linkPart;
+        setPassSalt(salt);
+        setPeek(prow);
+        setPhase('passphrase');
         return;
       }
       try {
@@ -115,6 +144,49 @@ export default function RevealPage() {
       }
     })();
   }, [id]);
+
+  // Passphrase: derive locally, prove the auth half to OnePeek, receive the server half and a
+  // one-use open token, then derive the content key. The passphrase never leaves this page.
+  async function unlockWithPassphrase() {
+    if (!passInput || passBusy || !peek) return;
+    setPassBusy(true);
+    setPassMsg('');
+    try {
+      const { authKeyB64, wrapKey } = await derivePassKeys(passInput, passSalt);
+      const res = await fetch('/api/v1/pass/unlock', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, authKey: authKeyB64 }),
+      });
+      const info = await res.json().catch(() => ({})) as { token?: string; serverHalf?: string; error?: { code?: string; attemptsLeft?: number } };
+      if (res.ok && info.token && info.serverHalf) {
+        const key = await derivePassContentKey(passLinkRef.current, wrapKey, info.serverHalf);
+        keyRef.current = key;
+        setHeader(await decryptJson<SecretHeader>(key, peek.header));
+        setUnlockToken(info.token);
+        setPassInput('');
+        setPhase('ready');
+        return;
+      }
+      const code = info.error?.code;
+      if (code === 'wrong_passphrase') {
+        const left = info.error?.attemptsLeft ?? 0;
+        setPassMsg(`That passphrase isn’t right. ${left} ${left === 1 ? 'try' : 'tries'} left before this secret is deleted.`);
+      } else if (code === 'locked') {
+        setError('Too many wrong passphrases. This secret has been deleted.');
+        setPhase('error');
+      } else if (code === 'not_found') {
+        setError('This secret has already been opened, or it has expired.');
+        setPhase('error');
+      } else if (code === 'rate_limited') {
+        setPassMsg('Too many attempts from this network. Wait a few minutes and try again.');
+      } else {
+        setPassMsg('We couldn’t check the passphrase right now. Nothing has been opened. Try again in a moment.');
+      }
+    } catch {
+      setPassMsg('This link and passphrase don’t match this secret. Check both and try again.');
+    } finally {
+      setPassBusy(false);
+    }
+  }
 
   // Wipe decrypted data from memory when leaving the page.
   useEffect(() => () => { if (urlRef.current) URL.revokeObjectURL(urlRef.current); }, []);
@@ -247,6 +319,7 @@ export default function RevealPage() {
           case 'timelock_window': setGeoMsg(`This secret only opens ${windowText ? `between ${windowText}` : 'during set hours'}. Try again then.${kept}`); break;
           case 'country_blocked': setGeoMsg(`This secret can’t be opened from ${info.country ? countryName(info.country) : 'where you are'}. If you’re using a VPN, turn it off and try again.${kept}`); break;
           case 'recipient_locked': setUnlockToken(''); setCodeSent(false); setCode(''); setGeoMsg(`Confirm your email with a new code first.${kept}`); break;
+          case 'passphrase_required': setUnlockToken(''); setPassMsg(`Enter the passphrase again to continue.${kept}`); setPhase('passphrase'); return;
           default: setGeoMsg(`We couldn’t confirm your location. Allow location access and try again.${kept}`);
         }
         setPhase('ready');
@@ -403,6 +476,20 @@ export default function RevealPage() {
           <div className="tool-body" style={{ gap: 18 }}>
             {(phase === 'loading') && (
               <p style={{ color: '#A3ABB6', textAlign: 'center', margin: 0 }}>Checking your link…</p>
+            )}
+
+            {phase === 'passphrase' && (
+              <>
+                <h2 style={{ margin: 0, fontSize: '1.6rem', fontWeight: 400, color: '#F4F5F6' }}>This secret is protected</h2>
+                <div className="lock-step">
+                  <p><Icon name="lock" size={15} strokeWidth={2} /><span>Enter the passphrase the sender gave you. It’s checked without revealing it, and after 5 wrong tries the secret is deleted.</span></p>
+                  <form className="lock-row" onSubmit={e => { e.preventDefault(); unlockWithPassphrase(); }}>
+                    <input className="field-input" type="password" autoComplete="off" autoCapitalize="off" spellCheck={false} placeholder="Passphrase" value={passInput} onChange={e => setPassInput(e.target.value)} aria-label="Passphrase" />
+                    <button type="submit" className="gp-btn" disabled={passBusy || !passInput}>{passBusy ? 'Checking…' : 'Unlock'}</button>
+                  </form>
+                  {passMsg && <p className="field-hint" role="status">{passMsg}</p>}
+                </div>
+              </>
             )}
 
             {phase === 'error' && (

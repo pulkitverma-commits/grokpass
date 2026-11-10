@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { waitUntil } from '@vercel/functions';
 import { adminClient, anonClient, siteUrl } from '@/lib/server';
+import { clientIp, rateOk } from '@/lib/appapi';
 import { notifyOpened } from '@/lib/alerts';
 import { reversePlace } from '@/lib/geo';
 
@@ -30,12 +31,16 @@ function networkGeo(req: Request) {
   };
 }
 
-const LOCK_ERRORS = /(geofence_location_required|geofence_imprecise|geofence_outside|timelock_until|timelock_window|country_blocked|recipient_locked)(?::([A-Z0-9]*))?/;
+const LOCK_ERRORS = /(geofence_location_required|geofence_imprecise|geofence_outside|timelock_until|timelock_window|country_blocked|recipient_locked|passphrase_required)(?::([A-Z0-9]*))?/;
 
 export async function POST(req: Request) {
   const admin = adminClient();
   const supabase = admin || anonClient();
   if (!supabase) return NextResponse.json({ error: 'not_configured' }, { status: 500 });
+  // Abuse limit per IP (opening is atomic per secret already; this stops bulk scanning).
+  if (admin && !(await rateOk(admin, `open:${clientIp(req)}`, 120, 600))) {
+    return NextResponse.json({ error: 'rate_limited' }, { status: 429, headers: { 'Retry-After': '60' } });
+  }
 
   let body: { id?: unknown; precise?: { lat?: unknown; lon?: unknown; accuracy?: unknown }; unlockToken?: unknown } = {};
   try { body = await req.json(); } catch { /* ignore */ }

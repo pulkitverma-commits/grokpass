@@ -3,7 +3,8 @@ import { adminClient, isCronRequest } from '@/lib/server';
 
 export const dynamic = 'force-dynamic';
 
-// Daily cron (see vercel.json): deletes expired secrets and any leftover encrypted files.
+// Daily cron (see vercel.json): deletes expired secrets, leftover encrypted files, and uploads
+// that never became a secret (abandoned web/mobile uploads, unused app upload slots).
 // Only Vercel Cron may call it (CRON_SECRET), and it runs with the service role.
 export async function GET(req: Request) {
   if (!isCronRequest(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
@@ -11,9 +12,12 @@ export async function GET(req: Request) {
   if (!supabase) return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
 
   const { data, error } = await supabase.rpc('reap_expired_secrets');
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return NextResponse.json({ error: 'reap_failed' }, { status: 500 });
+  // Migration 011: uploads that never became a secret.
+  const { data: orphans, error: oErr } = await supabase.rpc('reap_orphan_uploads');
+  if (oErr) return NextResponse.json({ error: 'orphan_reap_failed' }, { status: 500 });
 
-  const paths = (data as string[] | null) ?? [];
+  const paths = Array.from(new Set([...((data as string[] | null) ?? []), ...((orphans as string[] | null) ?? [])]));
   let removed = 0;
   for (let i = 0; i < paths.length; i += 100) {
     const batch = paths.slice(i, i + 100);

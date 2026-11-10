@@ -9,6 +9,12 @@ const nextConfig = {
       { source: '/:path*', headers: baseHeaders },
       // Report-only until confirmed; /chat gets its own enforced policy from middleware.ts.
       { source: '/((?!chat(?:/|$)).*)', headers: [{ key: 'Content-Security-Policy-Report-Only', value: siteCsp() }] },
+      // Share pages decrypt in the browser: never send their URL onward, never cache, never index.
+      { source: '/s/:id*', headers: [
+        { key: 'Referrer-Policy', value: 'no-referrer' },
+        { key: 'Cache-Control', value: 'no-store' },
+        { key: 'X-Robots-Tag', value: 'noindex, nofollow' },
+      ] },
     ];
   },
   webpack(config) {

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { adminClient, sha256Hex } from '@/lib/server';
 import { emailConfigured, sendEmail, layout } from '@/lib/email';
+import { clientIp, rateOk } from '@/lib/appapi';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +17,12 @@ export async function POST(req: Request) {
   const email = String(body.email || '').trim().toLowerCase();
   if (!/^[A-Za-z0-9]{6,32}$/.test(id) || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 254) {
     return NextResponse.json({ error: 'invalid' }, { status: 400 });
+  }
+
+  // Atomic caps (the sends counter below is read-then-write, so parallel requests could pass it):
+  // at most 6 emails per secret per day and 20 per IP per hour.
+  if (!(await rateOk(admin, `unlocksend:${id}`, 6, 86400)) || !(await rateOk(admin, `unlocksendip:${clientIp(req)}`, 20, 3600))) {
+    return NextResponse.json({ error: 'too_many' }, { status: 429 });
   }
 
   const { data: s } = await admin.from('secrets').select('lock_email, expires_at').eq('id', id).gt('expires_at', new Date().toISOString()).maybeSingle();

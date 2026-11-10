@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 
 // "Lock to a recipient", step 2 (5 attempts per code): check the code and hand back a one-use token for /api/open.
 // The attempt counter is checked and incremented atomically in the database
-// (unlock_check_code, migration 010); it used to be read-then-write here, so parallel guesses
+// (unlock_check_code, migration 011); it used to be read-then-write here, so parallel guesses
 // could get past the 5-attempt limit.
 export async function POST(req: Request) {
   const admin = adminClient();

@@ -1,4 +1,4 @@
--- 010: an authenticated API for apps (TopShelf "Send Securely") and security fixes.
+-- 011: an authenticated API for apps (TopShelf "Send Securely") and security fixes.
 --
 -- What this adds
 --   * app_installs   — one row per app install. The install proves itself with a random secret
@@ -13,13 +13,14 @@
 --     (/s/<id>#key) and the atomic open_secret keep working unchanged.
 --
 -- Security fixes to existing behaviour
---   * reap_expired_secrets is no longer callable by anon/authenticated (anyone could trigger it).
+--   * reap_expired_secrets is no longer callable by anon/authenticated (same as 010_lock_cleanup;
+--     repeated here so 011 is safe on databases where 010 was not yet applied).
 --   * reap_orphan_uploads deletes encrypted uploads that never became a secret (web, mobile, app).
 --   * unlock_check_code makes the email-code attempt counter atomic (parallel guesses could
 --     exceed the 5-attempt limit when it was read-then-write in the route).
 --
 -- Every function here is SECURITY DEFINER with a fixed search_path and executable by
--- service_role only, except peek_pass (salt lookup, anon/authenticated). Rollback: 010_app_api_down.sql.
+-- service_role only, except peek_pass (salt lookup, anon/authenticated). Rollback: 011_app_api_down.sql.
 
 -- ---------------------------------------------------------------------------------------
 -- Tables

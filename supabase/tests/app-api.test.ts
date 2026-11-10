@@ -1,5 +1,5 @@
-// Migration 010 (app API for TopShelf "Send Securely", passphrase shares, security fixes),
-// tested on Postgres (PGlite) on top of the full production history (schema.sql, 002–009),
+// Migration 011 (app API for TopShelf "Send Securely", passphrase shares, security fixes),
+// tested on Postgres (PGlite) on top of the full production history (schema.sql, 002–010),
 // calling each function with the role the real caller has: service_role for the server routes,
 // anon/authenticated for anything a browser could reach.
 //
@@ -16,7 +16,7 @@ import path from 'node:path';
 const dir = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
 const read = (f: string) => readFileSync(path.join(dir, f), 'utf8');
 const history = readdirSync(path.join(dir, 'migrations'))
-  .filter(f => /^\d{3}_.*\.sql$/.test(f) && !f.endsWith('_down.sql') && !f.startsWith('010_')).sort();
+  .filter(f => /^\d{3}_.*\.sql$/.test(f) && !f.endsWith('_down.sql') && !f.startsWith('011_')).sort();
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const b64u = (n: number) => randomBytes(n).toString('base64url');
@@ -56,7 +56,7 @@ beforeAll(async () => {
   await db.exec(read('tests/supabase-stubs.sql'));
   await db.exec(read('schema.sql'));
   for (const m of history) await db.exec(read(`migrations/${m}`));
-  await db.exec(read('migrations/010_app_api.sql'));
+  await db.exec(read('migrations/011_app_api.sql'));
 }, 120_000);
 
 beforeEach(async () => {
@@ -65,14 +65,14 @@ beforeEach(async () => {
              delete from public.api_rate; delete from storage.objects;`);
 });
 
-describe('migration 010: install and permissions', () => {
+describe('migration 011: install and permissions', () => {
   it('applies on top of the production history and rolls back cleanly', async () => {
     const t = (await sys(`select tablename from pg_tables where schemaname='public' and tablename like 'app_%' order by 1`)).map((r: any) => r.tablename);
     expect(t).toEqual(['app_installs', 'app_shares', 'app_uploads']);
-    await db.exec(read('migrations/010_app_api_down.sql'));
+    await db.exec(read('migrations/011_app_api_down.sql'));
     expect((await sys(`select count(*)::int n from pg_tables where schemaname='public' and tablename like 'app_%'`))[0].n).toBe(0);
     expect((await sys(`select count(*)::int n from information_schema.columns where table_name='secrets' and column_name like 'pass_%'`))[0].n).toBe(0);
-    await db.exec(read('migrations/010_app_api.sql'));
+    await db.exec(read('migrations/011_app_api.sql'));
     expect((await sys(`select count(*)::int n from pg_tables where schemaname='public' and tablename like 'app_%'`))[0].n).toBe(3);
   });
 
@@ -112,7 +112,7 @@ describe('migration 010: install and permissions', () => {
   });
 });
 
-describe('migration 010: shares', () => {
+describe('migration 011: shares', () => {
   it('creates a text share the existing viewer can peek and open', async () => {
     const a = await install();
     const s = await share(a.id, { views: 1 });
@@ -212,7 +212,7 @@ describe('migration 010: shares', () => {
   });
 });
 
-describe('migration 010: uploads', () => {
+describe('migration 011: uploads', () => {
   it('only accepts the install’s own, present, unused upload within its size cap', async () => {
     const a = await install(), b = await install();
     const p1 = (await svc(`select public.app_begin_upload($1, 1000) p`, [a.id]))[0].p as string;
@@ -253,7 +253,7 @@ describe('migration 010: uploads', () => {
   });
 });
 
-describe('migration 010: passphrase shares', () => {
+describe('migration 011: passphrase shares', () => {
   const pass = () => ({ salt: b64u(16), auth: b64u(32), half: b64u(32) });
 
   it('needs a passphrase token to open, and the token works once', async () => {
@@ -294,7 +294,7 @@ describe('migration 010: passphrase shares', () => {
   });
 });
 
-describe('migration 010: fixes to existing behaviour', () => {
+describe('migration 011: fixes to existing behaviour', () => {
   it('counts email-code attempts atomically and locks after five', async () => {
     await sys(`insert into public.secrets (id, header, body, expires_at, lock_email) values ('lockedone1', 'h', 'b', now() + interval '1 hour', 'a@b.co')`);
     await sys(`insert into public.secret_unlocks (id, code_hash, code_expires) values ('lockedone1', $1, now() + interval '10 minutes')`, [sha('lockedone1:123456')]);

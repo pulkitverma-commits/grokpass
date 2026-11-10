@@ -1,4 +1,4 @@
--- Rollback of 010_app_api.sql. Restores 004's open_secret and reaper grants; drops the app API.
+-- Rollback of 011_app_api.sql. Restores 004's open_secret and reaper grants; drops the app API.
 -- Shares created through the API stay in public.secrets as ordinary secrets (their passphrase
 -- columns are dropped, so passphrase shares become unopenable — revoke or let them expire first).
 

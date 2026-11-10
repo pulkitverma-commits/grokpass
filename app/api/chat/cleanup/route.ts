@@ -1,16 +1,14 @@
 import { NextResponse } from 'next/server';
-import { adminClient } from '@/lib/server';
+import { adminClient, isCronRequest } from '@/lib/server';
 
 export const dynamic = 'force-dynamic';
 
 // Secret Chat housekeeping (Vercel cron, see vercel.json). pg_cron already runs chat_reap()
 // every minute; this is the backstop, and it deletes the encrypted files whose rows are gone.
-// When CRON_SECRET is set, Vercel sends it as a Bearer token and anything else is refused.
+// Only Vercel Cron may call it: it must send CRON_SECRET, and with none configured every
+// call is refused.
 export async function GET(req: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (secret && req.headers.get('authorization') !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  }
+  if (!isCronRequest(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const admin = adminClient();
   if (!admin) return NextResponse.json({ error: 'not_configured' }, { status: 500 });
 

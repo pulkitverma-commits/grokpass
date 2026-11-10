@@ -7,6 +7,7 @@ import Link from 'next/link';
 import ProcessAnim from './components/ProcessAnim';
 import LimitModal from './components/LimitModal';
 import Icon from './components/Icon';
+import BrandIcon from './components/BrandIcon';
 import TypeWord from './components/TypeWord';
 import { getClientId, captureRef, isPaid, PLAN_NAME, type Quota } from '@/lib/quota';
 import UserAvatar from './components/UserAvatar';
@@ -302,10 +303,11 @@ export default function Home() {
       <header className="container" style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 24px'}}>
         <Link href="/" className="logo" aria-label="OnePeek home">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/onepeek-logo.png" alt="OnePeek" className="logo-img" width={149} height={56} />
+          <img src="/onepeek-logo.svg" alt="OnePeek" className="logo-img" width={129} height={34} />
         </Link>
         <nav>
           <a href="#how">How it works</a>
+          <Link href="/secret-chat">Secret Chat</Link>
           <Link href="/use-cases">Use cases</Link>
           <Link href="/pricing">Pricing</Link>
           <Link href="/encryption">Encryption</Link>
@@ -492,9 +494,9 @@ export default function Home() {
                   <span className="field-label">Send it with</span>
                   <div className="share-btns">
                     {canShare && <button type="button" className="share-btn" onClick={shareNative}><Icon name="send" size={14} strokeWidth={2} />Share…</button>}
-                    <a className="share-btn" href={`https://teams.microsoft.com/share?href=${encodeURIComponent(link)}&msgText=${encodeURIComponent(shareText)}&preview=false`} target="_blank" rel="noopener noreferrer">Microsoft Teams</a>
-                    <button type="button" className="share-btn" onClick={shareSlack}>Slack</button>
-                    <a className="share-btn" href={`https://wa.me/?text=${encodeURIComponent(`${shareText} ${link}`)}`} target="_blank" rel="noopener noreferrer">WhatsApp</a>
+                    <a className="share-btn" href={`https://teams.microsoft.com/share?href=${encodeURIComponent(link)}&msgText=${encodeURIComponent(shareText)}&preview=false`} target="_blank" rel="noopener noreferrer"><BrandIcon brand="teams" />Microsoft Teams</a>
+                    <button type="button" className="share-btn" onClick={shareSlack}><BrandIcon brand="slack" />Slack</button>
+                    <a className="share-btn" href={`https://wa.me/?text=${encodeURIComponent(`${shareText} ${link}`)}`} target="_blank" rel="noopener noreferrer"><BrandIcon brand="whatsapp" />WhatsApp</a>
                   </div>
                   {slackCopied && (
                     <p className="field-hint" role="status" style={{marginTop:6}}>
@@ -625,6 +627,32 @@ export default function Home() {
                 <div><strong>1</strong><span>view, then deleted</span></div>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="section-pad container">
+        <div className="chat-promo">
+          <div className="chat-promo-copy">
+            <span className="eyebrow">NEW · SECRET CHAT</span>
+            <h2 className="section-title" style={{ marginTop: 12 }}>Need a conversation, not just a secret?</h2>
+            <p className="section-sub" style={{ marginBottom: 20 }}>Start an end-to-end encrypted chat with a link. Messages and files disappear on a timer, guests join without an account, and you can burn the whole chat in one tap.</p>
+            <ul className="checks">
+              <li><Icon name="check" className="ic-accent" />Encrypted on every device with MLS, the IETF messaging standard</li>
+              <li><Icon name="check" className="ic-accent" />Disappearing messages, view-once files and access codes</li>
+              <li><Icon name="check" className="ic-accent" />Safety numbers, Burn Chat and Panic Exit</li>
+            </ul>
+            <div className="cta-btns" style={{ justifyContent: 'flex-start', marginTop: 22 }}>
+              <Link href="/chat/new" className="gp-btn">Start a secret chat →</Link>
+              <Link href="/secret-chat" className="gp-btn gp-ghost">See how it works</Link>
+            </div>
+          </div>
+          <div className="chat-promo-demo" aria-hidden="true">
+            <div className="cpd-head"><span className="cpd-dot" /><strong>Secret Chat</strong><small>End-to-end encrypted · 30s after reading</small></div>
+            <div className="cpd-msg theirs">Can you send the vendor login?<em>0:24</em></div>
+            <div className="cpd-msg mine">Sent as a view-once file<em>0:30</em></div>
+            <div className="cpd-msg theirs blurred">Tap to reveal</div>
+            <div className="cpd-burn"><Icon name="flame" size={14} />Burn chat</div>
           </div>
         </div>
       </section>

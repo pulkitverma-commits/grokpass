@@ -1,0 +1,16 @@
+{
+  "name": "@onepeek/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OnePeek platform-neutral core: AES-GCM helpers, the MLS adapter and the Secret Chat client behind small platform ports.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "ts-mls": "^1.6.4"
+  }
+}

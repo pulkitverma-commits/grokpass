@@ -1,4 +1,4 @@
--- 008: only the server may run secret cleanup.
+-- 010: only the server may run secret cleanup.
 --
 -- /api/cleanup used to call reap_expired_secrets() with the public anon key, so the function
 -- had to be executable by anyone. The route now requires Vercel's CRON_SECRET and runs with

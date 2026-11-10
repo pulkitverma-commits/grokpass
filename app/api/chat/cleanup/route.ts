@@ -3,30 +3,27 @@ import { adminClient, isCronRequest } from '@/lib/server';
 
 export const dynamic = 'force-dynamic';
 
-// Daily cron (see vercel.json). pg_cron already reaps expired chat rows every minute; this
-// is the backstop for that, and it deletes encrypted chat files whose rows are gone
-// (Supabase only allows removing storage objects through the Storage API, not from SQL).
-// Idempotent: a retry finds nothing left to do.
+// Secret Chat housekeeping (Vercel cron, see vercel.json). pg_cron already runs chat_reap()
+// every minute; this is the backstop, and it deletes the encrypted files whose rows are gone.
+// Only Vercel Cron may call it: it must send CRON_SECRET, and with none configured every
+// call is refused.
 export async function GET(req: Request) {
   if (!isCronRequest(req)) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  const supabase = adminClient();
-  if (!supabase) return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
+  const admin = adminClient();
+  if (!admin) return NextResponse.json({ error: 'not_configured' }, { status: 500 });
 
-  const reaped = await supabase.rpc('chat_reap');
-  if (reaped.error) return NextResponse.json({ error: reaped.error.message }, { status: 500 });
+  const { data: reaped, error } = await admin.rpc('chat_reap');
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  const { data: trash } = await admin.from('chat_storage_trash').select('object_path').order('queued_at').limit(1000);
+  const paths = (trash || []).map(t => t.object_path as string);
   let removed = 0;
-  for (;;) {
-    const { data: rows, error } = await supabase.from('chat_storage_trash').select('object_path').limit(100);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    const paths = (rows ?? []).map(r => r.object_path as string);
-    if (!paths.length) break;
-    // Already-missing objects count as done, so a half-finished earlier run can't wedge the queue.
-    const { error: rmErr } = await supabase.storage.from('chat-attachments').remove(paths);
-    if (rmErr) return NextResponse.json({ error: rmErr.message, removed }, { status: 500 });
-    await supabase.from('chat_storage_trash').delete().in('object_path', paths);
-    removed += paths.length;
-    if (paths.length < 100) break;
+  for (let i = 0; i < paths.length; i += 100) {
+    const batch = paths.slice(i, i + 100);
+    const { error: rmErr } = await admin.storage.from('chat-attachments').remove(batch);
+    if (rmErr) continue;
+    await admin.from('chat_storage_trash').delete().in('object_path', batch);
+    removed += batch.length;
   }
-  return NextResponse.json({ ok: true, reaped: reaped.data, files_removed: removed });
+  return NextResponse.json({ ok: true, reaped, files_removed: removed });
 }

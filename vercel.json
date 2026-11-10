@@ -1,6 +1,6 @@
 {
   "crons": [
     { "path": "/api/cleanup", "schedule": "17 3 * * *" },
-    { "path": "/api/chat/cleanup", "schedule": "29 3 * * *" }
+    { "path": "/api/chat/cleanup", "schedule": "43 3 * * *" }
   ]
 }

@@ -1,0 +1,28 @@
+# 07 (peer, runs FIRST) Device B: a system screenshot is taken while the room is open.
+# Maestro's own takeScreenshot goes through the test driver and does not fire the OS event, and
+# it would save the screen to disk, so it is never used. The relay runs the platform's trigger
+# instead (scripts/relay-trigger.js → relay/server.mjs): iOS Simulator "Save Screen" (⌘S) posts
+# UIApplicationUserDidTakeScreenshotNotification; Android `input keyevent KEYCODE_SYSRQ` takes a
+# system screenshot. The relay deletes the resulting image at once (README "What is never kept").
+# Android: with FLAG_SECURE the image is black, and the app learns of the screenshot only on
+# Android 14+ (Activity.registerScreenCaptureCallback); on older Android the notice does not appear
+# and this journey is a manual check there (test-plan §4). MAESTRO_DEVICE is this device's udid /
+# serial, passed by the run script.
+appId: io.onepeek.app
+name: 07-screenshot-notice.peer
+tags:
+  - ios
+  - android
+  - two-device
+  - device-b
+env:
+  MAESTRO_RELAY: http://127.0.0.1:4311
+  MAESTRO_DEVICE: ""
+---
+- runFlow: _common/open-room.yaml
+- runScript:
+    file: ../scripts/relay-trigger.js
+    env:
+      RELAY_ACTION: screenshot
+- assertVisible:
+    id: "room.screen"

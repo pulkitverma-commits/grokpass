@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import BrandIcon from '../components/BrandIcon';
 import { getClientId, type Quota } from '@/lib/quota';
 
 export default function ReferLink() {
@@ -33,9 +34,9 @@ export default function ReferLink() {
         <button type="button" onClick={copy} disabled={!link}>{copied ? 'Copied' : 'Copy'}</button>
       </div>
       <div className="share-btns">
-        <a className="share-btn" href={link ? `https://wa.me/?text=${encodeURIComponent(`${text} ${link}`)}` : undefined} target="_blank" rel="noopener noreferrer">WhatsApp</a>
-        <a className="share-btn" href={link ? `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(link)}` : undefined} target="_blank" rel="noopener noreferrer">LinkedIn</a>
-        <a className="share-btn" href={link ? `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(link)}` : undefined} target="_blank" rel="noopener noreferrer">X</a>
+        <a className="share-btn" href={link ? `https://wa.me/?text=${encodeURIComponent(`${text} ${link}`)}` : undefined} target="_blank" rel="noopener noreferrer"><BrandIcon brand="whatsapp" />WhatsApp</a>
+        <a className="share-btn" href={link ? `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(link)}` : undefined} target="_blank" rel="noopener noreferrer"><BrandIcon brand="linkedin" />LinkedIn</a>
+        <a className="share-btn" href={link ? `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(link)}` : undefined} target="_blank" rel="noopener noreferrer"><BrandIcon brand="x" />X</a>
         {canShare && <button type="button" className="share-btn" onClick={() => navigator.share({ title: 'OnePeek', text, url: link }).catch(() => {})}>More…</button>}
       </div>
       {q && <p className="refer-stats">{q.referred} friend{q.referred === 1 ? '' : 's'} joined · {q.quota === null ? 'Unlimited' : `${q.quota} secrets`} a month on this {q.plan === 'free' ? 'browser' : 'account'}</p>}

@@ -1,0 +1,19 @@
+// Shape follows expo-module-template-local (expo-module-gradle-plugin, SDK 58), same as modules/screen-state.
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'io.onepeek.shareintent'
+version = '1.0.0'
+
+android {
+  namespace "io.onepeek.shareintent"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}

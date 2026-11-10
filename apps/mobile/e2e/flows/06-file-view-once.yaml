@@ -1,0 +1,65 @@
+# 06 Device A: attach a photo as view-once and send. The system picker is not under the testID
+# contract; the first photo is picked by the OS label (seed one with `xcrun simctl addmedia` /
+# `adb push` before the run; the picker labels are confirmed on the first device run). In a Secret
+# room the view-once switch starts ON, so the flow asserts it and never taps it.
+appId: io.onepeek.app
+name: 06-file-view-once
+tags:
+  - ios
+  - android
+  - two-device
+  - device-a
+---
+- runFlow: _common/open-room.yaml
+# The reply from 05.peer closes the round trip.
+- extendedWaitUntil:
+    visible:
+      id: "msg\\..+"
+      index: 1
+    timeout: 30000
+- tapOn:
+    id: "room.attach"
+- assertVisible:
+    id: "attach.sheet"
+- assertVisible:
+    id: "attach.viewOnce"
+    checked: true
+- assertVisible:
+    id: "attach.send"
+    enabled: false
+- tapOn:
+    id: "attach.photo"
+# System picker (expo-image-picker). Labels to confirm on the first run.
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn:
+          text: "Photo.*"
+          index: 0
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn:
+          text: "Photo.*"
+          index: 0
+- extendedWaitUntil:
+    visible:
+      id: "attach.picked"
+    timeout: 15000
+- assertVisible:
+    id: "attach.viewOnce"
+    checked: true
+- tapOn:
+    id: "attach.send"
+- assertNotVisible:
+    id: "attach.sheet"
+- extendedWaitUntil:
+    visible:
+      id: "file\\..+"
+    timeout: 30000
+# The sender cannot open its own view-once file.
+- assertVisible:
+    id: "file\\..+"
+    enabled: false

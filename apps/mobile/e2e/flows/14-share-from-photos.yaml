@@ -1,0 +1,78 @@
+# 14 One device, in the room from 05 (any room works): share a photo from the system Photos app to
+# OnePeek → the share-target route (`share.*`, screen 10) → "Send to a chat" → pick the room → view-once
+# stays on → send → the file bubble appears in the room. The photo is the seeded e2e PNG (README), never
+# asserted on; `share.item` shows kind and size, not the file name.
+#
+# DEVICE steps (marked below): launching Photos, the system share sheet and picking "OnePeek" in it are
+# outside our testID contract and differ by OS version and OEM. They are written for a stock iOS 17+/18
+# simulator and a Pixel emulator with Google Photos; the labels are confirmed on the first device run.
+# The share extension (iOS) / share intent (Android) itself is native-security's N6; the device checks
+# S21+ in MANUAL-CHECKS.md cover what Maestro cannot see (the extension's memory, FLAG_SECURE on it).
+appId: io.onepeek.app
+name: 14-share-from-photos
+tags:
+  - ios
+  - android
+  - two-device
+  - device-a
+  - phase-2
+  - share
+---
+- runFlow: _common/open-room.yaml
+- runFlow: _common/back-to-chats.yaml
+# DEVICE: open Photos and share the first photo.
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - launchApp: com.apple.mobileslideshow
+      - tapOn:
+          text: "Photo.*"
+          index: 0
+      - tapOn:
+          text: "Share"         # iOS share button (system label, outside our contract)
+      - tapOn:
+          text: "OnePeek"       # our share extension in the sheet (second row; swipe left if needed)
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - launchApp: com.google.android.apps.photos
+      - tapOn:
+          text: "Photo.*"
+          index: 0
+      - tapOn:
+          text: "Share"
+      - tapOn:
+          text: "OnePeek"       # our share intent target in the chooser
+# Back in OnePeek: the share target. Content is a file row with kind and size only.
+- extendedWaitUntil:
+    visible:
+      id: "share.screen"
+    timeout: 30000
+- assertVisible:
+    id: "share.item"
+- assertVisible:
+    id: "share.viewOnce"
+    checked: true
+- tapOn:
+    id: "share.toChat"
+- tapOn:
+    id: "share.room"
+    index: 0
+- tapOn:
+    id: "share.send"
+- assertNotVisible:
+    id: "share.screen"
+- extendedWaitUntil:
+    visible:
+      id: "room.screen"
+    timeout: 20000
+- extendedWaitUntil:
+    visible:
+      id: "file\\..+"
+    timeout: 30000
+# Our own view-once file cannot be opened by us (same as 06).
+- assertVisible:
+    id: "file\\..+"
+    enabled: false

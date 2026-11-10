@@ -1,0 +1,15 @@
+# 01 Welcome → Continue as guest → Chats home. Runs on both platforms, one device.
+appId: io.onepeek.app
+name: 01-welcome-guest
+tags:
+  - ios
+  - android
+  - single
+---
+- runFlow: _common/guest-home.yaml
+- assertVisible:
+    id: "chats.new"
+- assertVisible:
+    id: "chats.settings"
+- assertNotVisible:
+    id: "chats.room"

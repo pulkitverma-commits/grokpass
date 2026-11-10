@@ -1,6 +1,7 @@
-node_modules/
+node_modules
 .next/
 .env*.local
 .vercel
 tsconfig.tsbuildinfo
 .claude/launch.json
+.claude/worktrees/

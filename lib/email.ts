@@ -4,7 +4,7 @@ import { escapeHtml } from './server';
 type Mail = { to: string; subject: string; html: string; text: string };
 
 const FROM = process.env.EMAIL_FROM || 'OnePeek Secret <secret@onepeek.io>';
-const LOGO = `${process.env.NEXT_PUBLIC_SITE_URL || 'https://onepeek.io'}/onepeek-logo.png`;
+const LOGO = `${process.env.NEXT_PUBLIC_SITE_URL || 'https://onepeek.io'}/email-logo.png`;
 
 export function emailConfigured() {
   return !!(process.env.RESEND_API_KEY || process.env.MANDRILL_API_KEY);
@@ -51,7 +51,7 @@ export function layout(opts: { title: string; body: string; button?: { label: st
     : '';
   return `<!doctype html><html><body style="margin:0;background:#f4f5f6;">
   <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:520px;margin:0 auto;padding:28px 24px;color:#14171c;">
-    <div style="margin-bottom:20px;"><img src="${LOGO}" alt="OnePeek" height="40" style="display:block;height:40px;width:auto;border:0;" /></div>
+    <div style="margin-bottom:20px;"><img src="${LOGO}" alt="OnePeek" height="32" style="display:block;height:32px;width:auto;border:0;" /></div>
     <div style="background:#fff;border-radius:14px;padding:24px;border:1px solid #e3e6ea;">
       <h1 style="font-size:20px;margin:0 0 12px;font-weight:600;">${escapeHtml(opts.title)}</h1>
       ${opts.body}

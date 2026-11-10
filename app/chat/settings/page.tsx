@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import Icon from '../../components/Icon';
 import SignIn from '../SignIn';
+import ChatNotifications from '../Notifications';
+import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import * as chat from '@/lib/chat/client';
 
@@ -16,6 +18,7 @@ export default function ChatSettingsPage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [thisDevice, setThisDevice] = useState('');
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const load = useCallback(async () => {
     const s = await chat.ensureSession(false).catch(() => null);
@@ -28,6 +31,10 @@ export default function ChatSettingsPage() {
     setDevices(await chat.listDevices().catch(() => []));
     const d = await chat.keystore.get<{ id: string }>(`device:${s.user.id}`);
     setThisDevice(d?.id ?? '');
+    if (!s.user.is_anonymous) {
+      const { error } = await supabase.rpc('chat_admin_stats');
+      setIsAdmin(!error);
+    }
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -88,14 +95,31 @@ export default function ChatSettingsPage() {
       </section>
 
       <section className="c-section">
+        <p className="c-label">Notifications</p>
+        <ul className="c-card c-list">
+          <ChatNotifications userId={user.id} />
+        </ul>
+      </section>
+
+      <section className="c-section">
         <p className="c-label">Privacy</p>
         <ul className="c-card c-list">
           <li className="c-row"><div className="c-row-main"><div className="c-row-title">Panic Exit</div>
             <div className="c-row-meta">Press Shift + Esc twice, or tap Exit. Chats lock on this device until you unlock them.</div></div></li>
           <li className="c-row"><div className="c-row-main"><div className="c-row-title">Screenshots</div>
-            <div className="c-row-meta">Content blurs when you switch away, but no browser can fully block screenshots or cameras.</div></div></li>
+            <div className="c-row-meta">Screenshot shortcuts blur the chat and tell everyone in it. Secret Chat messages show only while you hold them, and every screen carries a faint watermark of who is viewing. No browser can block a phone’s screenshot buttons or a camera.</div></div></li>
         </ul>
       </section>
+
+      {isAdmin && (
+        <section className="c-section">
+          <p className="c-label">Administration</p>
+          <ul className="c-card c-list">
+            <li><Link className="c-row" href="/chat/admin"><div className="c-row-main"><div className="c-row-title">Chat health dashboard</div>
+              <div className="c-row-meta">Totals and security events. No content.</div></div></Link></li>
+          </ul>
+        </section>
+      )}
 
       <div className="c-section">
         <button className="c-btn ghost block" onClick={async () => { await chat.keystore.wipe(); await supabase?.auth.signOut(); window.location.replace('/chat'); }}>

@@ -4,7 +4,7 @@ const BASE = (process.env.NEXT_PUBLIC_SITE_URL || 'https://onepeek.io').replace(
 
 export default function robots(): MetadataRoute.Robots {
   return {
-    rules: [{ userAgent: '*', allow: '/', disallow: ['/s/', '/r/', '/api/', '/dashboard', '/login'] }],
+    rules: [{ userAgent: '*', allow: '/', disallow: ['/s/', '/r/', '/api/', '/dashboard', '/login', '/chat'] }],
     sitemap: `${BASE}/sitemap.xml`,
     host: BASE,
   };

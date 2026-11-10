@@ -24,6 +24,23 @@ export function shortId(id: string) {
   return id.replace(/-/g, '').slice(0, 4).toUpperCase();
 }
 
+/** Security review f2-tree-keys.md (F2-1, F2-2, F2-5): copy for member keys. */
+export const UNLISTED_NOTE = 'Not listed by the server: this device can still read the chat';
+export const KEY_HISTORY_NOTE = 'The server once showed a different key for them; compare again.';
+export function readersLine(n: number) { return `${n} ${n === 1 ? 'device can' : 'devices can'} read this chat`; }
+/** Re-review F2-7: the same sentence with or without the owner pinned (the device check is always asked for). */
+export function verifyLine(name: string) {
+  return `Compare these numbers in person or on a call. If they match on both screens, your messages reach ${name}’s real device. Everyone who can read this chat is in the member list: check that both screens show the same devices, and verify each one you don’t recognise.`;
+}
+/** Third pass F2-10: an invite made by a member who joined with an older (unpinned) link. */
+export const INVITE_UNPINNED_NOTE = 'This invite can’t carry the owner’s key because you joined with an older link.';
+/** Third pass F2-11: the stored owner pin no longer matches the device that changes the group. */
+export const OWNER_UNRECOGNISED_NOTICE = 'Your copy of this chat no longer recognises its owner. Don’t trust it until you’ve checked with them.';
+/** Sync codes the room page shows as a notice. */
+export const KEY_SYNC_CODES = ['member_key_mismatch', 'invite_owner_mismatch'];
+/** Shown in a room joined from a link without the owner pin (made before F2-7). */
+export const UNPINNED_NOTICE = 'This invite didn’t carry the owner’s key, so the app can’t confirm who runs this chat. Ask for a new invite.';
+
 export function friendlyError(code: string) {
   switch (code) {
     case 'access_code_wrong': return 'That access code isn’t right.';
@@ -34,6 +51,14 @@ export function friendlyError(code: string) {
     case 'room_closed': return 'This chat has ended.';
     case 'weak_code': return 'Use an access code of at least 6 characters.';
     case 'not_configured': return 'Chat isn’t configured on this deployment yet.';
+    case 'file_too_large': return 'Files can be up to 50 MB.';
+    case 'empty_file': return 'That file is empty.';
+    case 'upload_failed': return 'The file couldn’t be uploaded. Try again.';
+    case 'view_once_sent': return 'You sent this as view once, so it can’t be opened on your side.';
+    case 'gone': return 'That file has already been opened or has expired.';
+    case 'no_local_state': return 'You haven’t been let into this chat yet. Wait for the owner, then try again.';
+    case 'invite_owner_mismatch': return 'We couldn’t confirm this chat: the device letting you in isn’t the owner your invite named. Don’t trust this chat. Check with the person who invited you, and ask the owner for a new invite.';
+    case 'member_key_mismatch': return 'This member’s key doesn’t match the chat. Don’t trust this chat until you’ve checked with them.';
     default: return 'Something went wrong. Try again.';
   }
 }

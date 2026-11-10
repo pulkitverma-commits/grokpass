@@ -14,9 +14,10 @@ export default function SiteShell({ children, wide = true }: { children: React.R
       <header className="container site-header">
         <Link href="/" className="logo" aria-label="OnePeek home">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/onepeek-logo.png" alt="OnePeek" className="logo-img" width={149} height={56} />
+          <img src="/onepeek-logo.svg" alt="OnePeek" className="logo-img" width={129} height={34} />
         </Link>
         <nav className="site-nav" aria-label="Main">
+          <Link href="/secret-chat">Secret Chat</Link>
           <Link href="/use-cases">Use cases</Link>
           <Link href="/pricing">Pricing</Link>
           <Link href="/encryption">Security</Link>

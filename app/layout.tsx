@@ -6,7 +6,8 @@ export const metadata: Metadata = {
   title: 'OnePeek — Send secrets that disappear',
   description: 'Zero-knowledge one-time secret sharing. Encrypted in your browser, deleted after it’s viewed.',
   applicationName: 'OnePeek',
-  openGraph: { title: 'OnePeek — Send secrets that disappear', description: 'Encrypted in your browser. Read once. Gone for good.', siteName: 'OnePeek', images: ['/icon-512.png'] },
+  openGraph: { title: 'OnePeek — Send secrets that disappear', description: 'Encrypted in your browser. Read once. Gone for good.', siteName: 'OnePeek' },
+  twitter: { card: 'summary_large_image' },
   icons: { icon: [{ url: '/favicon.ico', sizes: 'any' }, { url: '/icon-192.png', type: 'image/png' }], apple: '/apple-touch-icon.png' },
 };
 

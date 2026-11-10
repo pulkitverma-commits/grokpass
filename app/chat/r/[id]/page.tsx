@@ -5,13 +5,18 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Icon from '../../../components/Icon';
 import QrCode from '../../../components/QrCode';
-import { panicExit } from '../../ChatShell';
+import { SHOT_EVENT, panicExit } from '../../ChatShell';
 import * as chat from '@/lib/chat/client';
 import type { LocalMessage, RoomSummary } from '@/lib/chat/client';
-import { KIND_NAME, TIMERS, countdown, friendlyError, shortId, ttlLabel } from '../../format';
+import { INVITE_UNPINNED_NOTE, KEY_HISTORY_NOTE, KEY_SYNC_CODES, KIND_NAME, OWNER_UNRECOGNISED_NOTICE, TIMERS, UNLISTED_NOTE, UNPINNED_NOTICE, countdown, friendlyError, readersLine, shortId, ttlLabel, verifyLine } from '../../format';
 
 type Member = Awaited<ReturnType<typeof chat.members>>[number];
-type Sheet = null | 'menu' | 'invite' | 'timer' | 'members' | 'verify' | 'burn' | 'leave';
+type Sheet = null | 'menu' | 'invite' | 'timer' | 'members' | 'verify' | 'burn' | 'leave' | 'file';
+type Viewer = { url: string; name: string; mime: string; size: number; viewOnce: boolean; text?: string };
+
+function fileSize(n: number) {
+  return n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+}
 
 export default function ConversationPage() {
   const { id: roomId } = useParams<{ id: string }>();
@@ -21,7 +26,9 @@ export default function ConversationPage() {
   const [msgs, setMsgs] = useState<LocalMessage[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [me, setMe] = useState<string>('');
-  const [joined, setJoined] = useState(true);
+  // Off until the first sync confirms we've been let in and hold the room's keys.
+  const [joined, setJoined] = useState(false);
+  const [synced, setSynced] = useState(false);
   const [ended, setEnded] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [ttl, setTtl] = useState(60);
@@ -29,24 +36,62 @@ export default function ConversationPage() {
   const [sheet, setSheet] = useState<Sheet>(search.get('invite') ? 'invite' : null);
   const [now, setNow] = useState(Date.now());
   const [err, setErr] = useState('');
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [viewer, setViewer] = useState<Viewer | null>(null);
+  const [fileBusy, setFileBusy] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  // Screenshot protection: Secret Chat shows someone else's message only while it is held down,
+  // and everything blurs on screenshot shortcuts (and, in Secret Chat, when the pointer leaves).
+  const [held, setHeld] = useState<string | null>(null);
+  const [viewerHeld, setViewerHeld] = useState(false);
+  const [shotShield, setShotShield] = useState(false);   // a screenshot shortcut was just pressed
+  const [outside, setOutside] = useState(false);         // Secret Chat: the pointer left the window
+  const shield = shotShield || outside;
+  const lastAlert = useRef(0);
   const listRef = useRef<HTMLDivElement>(null);
-  const syncing = useRef(false);
+  // Messages shown on screen while they are still being sent, by id.
+  const outgoing = useRef(new Map<string, LocalMessage>());
 
   const isOwner = room?.role === 'owner';
   const secret = room?.kind === 'secret';
   const keyWarnings = members.filter(chat.keyChanged);
 
-  const refresh = useCallback(async () => {
-    if (syncing.current) return;
-    syncing.current = true;
+  /** Shows stored messages plus any still on their way out. */
+  const showStored = useCallback(async () => {
+    const stored = await chat.messages(roomId);
+    const ids = new Set(stored.map(m => m.id));
+    for (const id of Array.from(outgoing.current.keys())) if (ids.has(id)) outgoing.current.delete(id);
+    setMsgs([...stored, ...Array.from(outgoing.current.values())]);
+  }, [roomId]);
+
+  /** Fast path for a new-message ping: one fetch, decrypt, show. */
+  const pullOnce = useCallback(async () => {
     try {
       const r = await chat.sync(roomId);
       if (r.removed) { setEnded(e => e ?? 'This chat has ended, or you were removed.'); return; }
+      if (r.newMessages || r.newAlerts || r.joined) await showStored();
+      if (r.joined) void refresh();
+    } catch (e) {
+      if (e instanceof chat.ChatError && e.code === 'not_signed_in') router.replace('/chat');
+      if (e instanceof chat.ChatError && KEY_SYNC_CODES.includes(e.code)) setErr(friendlyError(e.code));
+    }
+  }, [roomId, router, showStored]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Full refresh: room details, members, and the owner's admit/remove duties. */
+  const refreshOnce = useCallback(async () => {
+    try {
+      // A sync refused for a key mismatch (F-2) still loads the room and its members, so the page can
+      // say so and name the member.
+      let r: Awaited<ReturnType<typeof chat.sync>> | null = null;
+      try { r = await chat.sync(roomId); }
+      catch (e) { if (!(e instanceof chat.ChatError && KEY_SYNC_CODES.includes(e.code))) throw e; setErr(friendlyError(e.code)); }
+      if (r?.removed) { setEnded(e => e ?? 'This chat has ended, or you were removed.'); return; }
       const rooms = await chat.myRooms();
       const current = rooms.find(x => x.id === roomId) ?? null;
       if (!current) { setEnded(e => e ?? 'This chat has ended.'); await chat.forgetRoom(roomId); return; }
       setRoom(current);
       setJoined(current.memberState === 'active' && !!(await chat.keystore.get(`room:${roomId}:state`)));
+      setSynced(true);
       if (current.role === 'owner') {
         // Owner's device keeps the group in step: admit joiners (Business rooms wait for approval)
         // and cryptographically remove anyone the server has already removed.
@@ -54,27 +99,38 @@ export default function ConversationPage() {
         await chat.commitRemovals(roomId);
       }
       setMembers(await chat.members(roomId));
-      setMsgs(await chat.messages(roomId));
+      await showStored();
     } catch (e) {
       if (e instanceof chat.ChatError && e.code === 'not_signed_in') router.replace('/chat');
-    } finally {
-      syncing.current = false;
     }
-  }, [roomId, router]);
+  }, [roomId, router, showStored]);
 
-  // First load, Realtime pings, and a slow poll as a fallback for missed pings.
+  // A ping that arrives mid-sync is queued, not dropped, so no message waits for the next poll.
+  const pull = useCoalesced(pullOnce);
+  const refresh = useCoalesced(refreshOnce);
+
+  // First load, Realtime pings, and a poll as a fallback for missed pings.
   useEffect(() => {
     let alive = true;
     chat.ensureDevice().then(d => alive && setMe(d.id)).catch(() => router.replace('/chat'));
     refresh();
     const off = chat.subscribe(roomId, (event) => {
       if (event === 'burned') { setEnded(e => e ?? 'The owner burned this chat.'); chat.forgetRoom(roomId); return; }
-      refresh();
+      if (event === 'msg') pull(); else refresh();
     });
-    const poll = setInterval(refresh, 8000);
+    const visible = () => document.visibilityState === 'visible';
+    const fast = setInterval(() => { if (visible()) pull(); }, 4000);
+    const slow = setInterval(() => { if (visible()) refresh(); }, 15000);
+    const back = () => { if (visible()) pull(); };
+    document.addEventListener('visibilitychange', back);
+    window.addEventListener('focus', back);
     const tick = setInterval(() => setNow(Date.now()), 1000);
-    return () => { alive = false; off(); clearInterval(poll); clearInterval(tick); };
-  }, [roomId, refresh, router]);
+    return () => {
+      alive = false; off(); clearInterval(fast); clearInterval(slow); clearInterval(tick);
+      document.removeEventListener('visibilitychange', back);
+      window.removeEventListener('focus', back);
+    };
+  }, [roomId, refresh, pull, router]);
 
   useEffect(() => { if (room) setTtl(room.ttl); }, [room?.ttl]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -88,6 +144,51 @@ export default function ConversationPage() {
   }, [now, msgs, roomId]);
 
   useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' }); }, [msgs.length]);
+
+  // A screenshot shortcut blurs the chat for a moment and tells everyone in it.
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const onShot = () => {
+      setHeld(null); setViewerHeld(false); setShotShield(true);
+      if (t) clearTimeout(t);
+      t = setTimeout(() => setShotShield(false), 3000);
+      const now = Date.now();
+      if (!joined || ended || now - lastAlert.current < 10_000) return;
+      lastAlert.current = now;
+      chat.sendScreenshotAlert(roomId, room?.ttl ?? ttl)
+        .then(m => setMsgs(list => list.some(x => x.id === m.id) ? list : [...list, m]))
+        .catch(() => { /* best effort */ });
+    };
+    window.addEventListener(SHOT_EVENT, onShot);
+    return () => { if (t) clearTimeout(t); window.removeEventListener(SHOT_EVENT, onShot); };
+  }, [roomId, joined, ended, room?.ttl, ttl]);
+
+  // Let go of anything held when the page loses focus; in Secret Chat also blur when the pointer
+  // leaves the window (on the way to a screenshot tool or another app).
+  useEffect(() => {
+    const release = () => { setHeld(null); setViewerHeld(false); };
+    const out = (e: MouseEvent) => { if (secret && !e.relatedTarget) { release(); setOutside(true); } };
+    const back = () => setOutside(false);
+    window.addEventListener('blur', release);
+    document.addEventListener('visibilitychange', release);
+    document.addEventListener('mouseout', out);
+    document.addEventListener('mouseover', back);
+    return () => {
+      window.removeEventListener('blur', release);
+      document.removeEventListener('visibilitychange', release);
+      document.removeEventListener('mouseout', out);
+      document.removeEventListener('mouseover', back);
+    };
+  }, [secret]);
+
+  /** Press and hold to see a Secret Chat message; the first hold starts its timer. */
+  const hold = (m: LocalMessage) => {
+    if (shield || document.visibilityState !== 'visible') return;
+    setHeld(m.id);
+    if (m.expiresAt === null) void open(m);
+  };
+  const release = () => setHeld(null);
+  const noCopy = (e: React.SyntheticEvent) => { if (secret) e.preventDefault(); };
 
   const open = useCallback(async (m: LocalMessage) => {
     if (m.mine || m.expiresAt || document.visibilityState !== 'visible') return;
@@ -112,15 +213,70 @@ export default function ConversationPage() {
     if (!text.trim()) return;
     setErr('');
     const body = text;
+    const reply = replyTo;
+    // Show it straight away; it is encrypted and sent in the background.
+    const id = crypto.randomUUID();
+    const draft: LocalMessage = {
+      id, seq: Number.MAX_SAFE_INTEGER, mine: true, sender: me, body: body.trim(), ttl,
+      sentAt: Date.now(), expiresAt: null, replyTo: reply?.id, pending: true,
+    };
+    outgoing.current.set(id, draft);
+    setMsgs(list => [...list, draft]);
     setText('');
+    setReplyTo(null);
     try {
-      const m = await chat.send(roomId, body, ttl, replyTo?.id);
-      setReplyTo(null);
-      if (m) setMsgs(list => [...list, m]);
+      const m = await chat.send(roomId, body, ttl, reply?.id, id);
+      outgoing.current.delete(id);
+      if (m) setMsgs(list => list.some(x => x.id === id) ? list.map(x => x.id === id ? m : x) : [...list, m]);
     } catch (e) {
-      setText(body);
+      outgoing.current.delete(id);
+      setMsgs(list => list.filter(x => x.id !== id));
+      setText(t => t || body);
+      setReplyTo(r => r ?? reply);
       setErr(friendlyError(e instanceof chat.ChatError ? e.code : ''));
     }
+  }
+
+  function pickFile(f: File | undefined) {
+    if (!f) return;
+    setErr('');
+    if (f.size > chat.MAX_ATTACHMENT_BYTES) { setErr('Files can be up to 50 MB.'); return; }
+    setPendingFile(f);
+    setSheet('file');
+  }
+
+  async function sendPendingFile(viewOnce: boolean) {
+    if (!pendingFile) return;
+    const f = pendingFile;
+    setSheet(null); setPendingFile(null); setErr(''); setFileBusy('sending');
+    try {
+      const m = await chat.sendFile(roomId, f, ttl, viewOnce);
+      setMsgs(list => [...list, m]);
+    } catch (e) {
+      setErr(friendlyError(e instanceof chat.ChatError ? e.code : ''));
+    } finally { setFileBusy(null); }
+  }
+
+  async function openFile(m: LocalMessage) {
+    if (!m.file || fileBusy) return;
+    setErr(''); setFileBusy(m.id); setViewerHeld(false);
+    if (secret && !m.mine && m.expiresAt === null) void open(m);
+    try {
+      const blob = await chat.openFile(roomId, m);
+      const f = m.file;
+      const text = f.mime.startsWith('text/') && blob.size < 200_000 ? await blob.text() : undefined;
+      setViewer({ url: URL.createObjectURL(blob), name: f.name, mime: f.mime, size: f.size, viewOnce: f.viewOnce, text });
+      if (f.viewOnce) setMsgs(list => list.map(x => x.id === m.id ? { ...x, viewed: true } : x));
+    } catch (e) {
+      const code = e instanceof chat.ChatError ? e.code : '';
+      if (code === 'gone' && m.file.viewOnce) setMsgs(list => list.map(x => x.id === m.id ? { ...x, viewed: true } : x));
+      setErr(code === 'gone' ? 'That file has already been opened or has expired.' : friendlyError(code));
+    } finally { setFileBusy(null); }
+  }
+
+  function closeViewer() {
+    if (viewer) URL.revokeObjectURL(viewer.url);
+    setViewer(null);
   }
 
   const nameOf = useCallback((device: string) => {
@@ -139,8 +295,12 @@ export default function ConversationPage() {
     </div></div>
   );
 
+  const myName = members.find(x => x.deviceId === me)?.nickname || `Device ${me ? shortId(me) : '…'}`;
+  const stamp = new Date(now).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const mark = `${myName} · ${me ? shortId(me) : ''} · ${stamp}`;
+
   return (
-    <div className="c-convo">
+    <div className={`c-convo${secret ? ' is-secret' : ''}${shield ? ' c-shielded' : ''}`}>
       <header className="c-chead">
         <Link href="/chat" className="c-back" aria-label="Back to chats">‹</Link>
         <div className="c-chead-title">
@@ -150,47 +310,85 @@ export default function ConversationPage() {
         <button className="c-icon-btn" aria-label="Room menu" onClick={() => setSheet('menu')}>⋯</button>
       </header>
 
-      <div className="c-msgs" ref={listRef} aria-live="polite">
-        <p className="c-notice">Messages are encrypted on each device and disappear on a timer. Anyone in the chat can still take a screenshot or photo.</p>
+      <div className="c-msgs-wrap">
+      <Watermark text={mark} />
+      <div className="c-msgs" ref={listRef} aria-live="polite" onCopy={noCopy} onCut={noCopy} onContextMenu={noCopy} onDragStart={noCopy}>
+        <p className="c-notice">{secret
+          ? 'Press and hold a message to read it. Screenshot shortcuts blur the chat and everyone is told. No website can stop a camera, so share carefully.'
+          : 'Messages are encrypted on each device and disappear on a timer. Screenshot shortcuts blur the chat and everyone is told.'}</p>
+        {members.some(m => m.role === 'owner' && m.changedGroup) && <p className="c-notice" style={{ color: 'var(--c-danger)' }}>{OWNER_UNRECOGNISED_NOTICE}</p>}
+        {room && !room.ownerPinned && <p className="c-notice" style={{ color: 'var(--c-danger)' }}>{UNPINNED_NOTICE}</p>}
         {keyWarnings.map(m => (
           <p key={m.deviceId} className="c-notice" style={{ color: 'var(--c-danger)' }}>
-            {nameOf(m.deviceId)}’s security key changed. <button className="c-link" onClick={() => setSheet('verify')}>Verify again</button>
+            {m.keyMismatch ? `${nameOf(m.deviceId)}: ${friendlyError('member_key_mismatch')}` : m.unlisted ? `${nameOf(m.deviceId)}: ${UNLISTED_NOTE}.` : `${nameOf(m.deviceId)}’s security key changed.`} <button className="c-link" onClick={() => setSheet('verify')}>Verify again</button>
           </p>
         ))}
-        {!joined && <p className="c-notice">Waiting for the owner to let you in. Messages will appear once you’re admitted.</p>}
+        {synced && !joined && <p className="c-notice">Waiting for the owner to let you in. Messages will appear once you’re admitted.</p>}
         {msgs.map(m => {
           const left = m.expiresAt === null ? null : m.expiresAt - now;
-          const hidden = secret && !m.mine && m.expiresAt === null;
+          if (m.alert) return (
+            <p key={m.id} className={`c-notice c-alert${left !== null && left <= 0 ? ' leaving' : ''}`}>
+              <Icon name="eye" size={12} /> {m.mine ? 'You pressed a screenshot shortcut. Everyone in the chat was told.' : `${nameOf(m.sender)} may have taken a screenshot.`}
+            </p>
+          );
+          // Secret Chat: someone else's text is only in the page while it is being held.
+          const guarded = secret && !m.mine && !m.file;
+          const hidden = guarded && held !== m.id;
           const parent = m.replyTo ? byId.get(m.replyTo) : undefined;
+          const guardProps = guarded ? {
+            role: 'button', tabIndex: 0, 'aria-label': 'Press and hold to read this message',
+            onPointerDown: () => hold(m), onPointerUp: release, onPointerLeave: release, onPointerCancel: release,
+            onKeyDown: (e: React.KeyboardEvent) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); hold(m); } },
+            onKeyUp: release, onBlur: release,
+          } : {};
           return (
-            <div key={m.id} data-id={m.id} {...(!m.mine && m.expiresAt === null ? { 'data-unread': '' } : {})}
-              className={`c-msg ${m.mine ? 'mine' : 'theirs'}${left !== null && left <= 0 ? ' leaving' : ''}`}>
-              <div className={`c-bubble${hidden ? ' hidden' : ''}`} onClick={() => hidden && open(m)} role={hidden ? 'button' : undefined} aria-label={hidden ? 'Tap to reveal message' : undefined}>
-                {parent && <div className="c-reply">{parent.body}</div>}
-                {hidden ? 'Tap to reveal' : m.body}
+            <div key={m.id} data-id={m.id} {...(!m.mine && m.expiresAt === null && !secret ? { 'data-unread': '' } : {})}
+              className={`c-msg ${m.mine ? 'mine' : 'theirs'}${m.pending ? ' pending' : ''}${left !== null && left <= 0 ? ' leaving' : ''}`}>
+              <div className={`c-bubble${hidden ? ' hidden' : ''}${guarded ? ' guarded' : ''}`} {...guardProps}>
+                {parent && !hidden && <div className="c-reply">{parent.file ? (secret ? 'File' : parent.file.name) : parent.body}</div>}
+                {hidden ? <span className="c-hold"><Icon name="eye" size={14} /> Hold to read</span> : m.file ? (
+                  <button type="button" className="c-file" onClick={() => openFile(m)}
+                    disabled={(m.file.viewOnce && (m.mine || m.viewed)) || fileBusy === m.id}>
+                    <span className="c-file-icon"><Icon name={m.file.mime.startsWith('image/') ? 'image' : 'file'} size={18} /></span>
+                    <span className="c-file-main">
+                      <strong>{m.file.viewOnce ? (m.mine ? 'View-once file' : m.viewed ? 'Opened' : 'View-once file') : secret && !m.mine ? 'Encrypted file' : m.file.name}</strong>
+                      <small>{fileBusy === m.id ? 'Decrypting…' : m.file.viewOnce
+                        ? (m.mine ? `Sent · ${fileSize(m.file.size)}` : m.viewed ? 'Already viewed' : `Tap to view once · ${fileSize(m.file.size)}`)
+                        : `${fileSize(m.file.size)} · tap to open`}</small>
+                    </span>
+                  </button>
+                ) : m.body}
               </div>
               <div className="c-meta">
                 {!m.mine && members.length > 2 && <span>{nameOf(m.sender)}</span>}
-                <span className={`c-timer${left !== null && left < 10_000 ? ' soon' : ''}`}>
-                  {left === null ? `${ttlLabel(m.ttl)} once read` : countdown(left)}
-                </span>
-                {!hidden && <button onClick={() => setReplyTo(m)}>Reply</button>}
+                {m.pending ? <span>Sending…</span> : <>
+                  <span className={`c-timer${left !== null && left < 10_000 ? ' soon' : ''}`}>
+                    {left === null ? `${ttlLabel(m.ttl)} once read` : countdown(left)}
+                  </span>
+                  {!hidden && <button onClick={() => setReplyTo(m)}>Reply</button>}
+                </>}
               </div>
             </div>
           );
         })}
+      </div>
       </div>
 
       <div className="c-composer">
         {replyTo && <div className="c-replying"><span>Replying to “{replyTo.body.slice(0, 40)}”</span><button className="c-link" onClick={() => setReplyTo(null)}>Cancel</button></div>}
         <div className="c-compose-row">
           <button className="c-ttl" onClick={() => setSheet('timer')} aria-label={`Message timer: ${ttlLabel(ttl)}`}><Icon name="clock" size={13} /> {ttlLabel(ttl)}</button>
-          <textarea rows={1} value={text} placeholder={joined ? 'Message' : 'Waiting to be let in…'} disabled={!joined} maxLength={4000}
+          <button className="c-attach" onClick={() => fileInput.current?.click()} disabled={!joined || !!fileBusy} aria-label="Send an encrypted file" title="Send a file">
+            <Icon name="file" size={17} />
+          </button>
+          <input ref={fileInput} type="file" hidden onChange={e => { pickFile(e.target.files?.[0]); e.target.value = ''; }} />
+          <textarea rows={1} value={text} placeholder={joined ? 'Message' : synced ? 'Waiting to be let in…' : 'Loading…'} disabled={!joined} maxLength={4000}
             autoComplete="off" autoCorrect="on" spellCheck
             onChange={e => setText(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
           <button className="c-send" onClick={send} disabled={!joined || !text.trim()} aria-label="Send"><Icon name="send" size={17} /></button>
         </div>
+        {fileBusy === 'sending' && <p className="c-hint">Encrypting and sending the file…</p>}
         {err && <p className="c-error">{err}</p>}
       </div>
 
@@ -216,10 +414,11 @@ export default function ConversationPage() {
                 </ul>
               </>
             )}
+            {sheet === 'file' && pendingFile && <FileSheet file={pendingFile} ttl={ttl} secret={secret} onSend={sendPendingFile} onCancel={() => { setPendingFile(null); setSheet(null); }} />}
             {sheet === 'timer' && room && <TimerSheet room={room} ttl={ttl} setTtl={setTtl} isOwner={isOwner} close={() => setSheet(null)} />}
             {sheet === 'invite' && room && <InviteSheet room={room} />}
             {sheet === 'members' && room && <MembersSheet room={room} members={members} me={me} nameOf={nameOf} isOwner={isOwner} onChange={refresh} />}
-            {sheet === 'verify' && <VerifySheet roomId={roomId} members={members.filter(m => m.deviceId !== me && m.state === 'active')} nameOf={nameOf} onChange={refresh} />}
+            {sheet === 'verify' && <VerifySheet roomId={roomId} members={members.filter(m => m.deviceId !== me && m.state === 'active')} readers={members.filter(m => m.inGroup).length} nameOf={nameOf} onChange={refresh} />}
             {sheet === 'burn' && <ConfirmSheet title="Burn this chat?" danger="Burn chat"
               body="Every message, invite and file is deleted from OnePeek’s servers now, everyone loses access, and this device forgets its keys. Copies someone already saved or photographed can’t be recalled."
               onConfirm={async () => { await chat.burn(roomId); router.replace('/chat'); }} onCancel={() => setSheet('menu')} />}
@@ -229,7 +428,62 @@ export default function ConversationPage() {
           </div>
         </div>
       )}
+
+      {viewer && (
+        <div className="c-viewer" role="dialog" aria-modal="true" aria-label={viewer.name}
+          onContextMenu={e => (viewer.viewOnce || secret) && e.preventDefault()} onCopy={noCopy} onDragStart={noCopy}>
+          {(() => {
+            const shown = viewer.mime.startsWith('image/') ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={viewer.url} alt={viewer.name} draggable={false} />
+            ) : viewer.text !== undefined ? <pre>{viewer.text}</pre> : (
+              <div className="c-empty"><Icon name="file" size={34} /><p>{viewer.name}<br /><small>{fileSize(viewer.size)}</small></p></div>
+            );
+            const preview = viewer.mime.startsWith('image/') || viewer.text !== undefined;
+            // In Secret Chat a picture or text file is only on screen while it is held.
+            if (!secret || !preview) return <div className="c-viewer-body"><Watermark text={mark} />{shown}</div>;
+            return (
+              <div className={`c-viewer-body guarded${viewerHeld ? '' : ' hidden'}`} role="button" tabIndex={0} aria-label="Press and hold to view"
+                onPointerDown={() => !shield && setViewerHeld(true)} onPointerUp={() => setViewerHeld(false)}
+                onPointerLeave={() => setViewerHeld(false)} onPointerCancel={() => setViewerHeld(false)}
+                onKeyDown={e => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); if (!shield) setViewerHeld(true); } }}
+                onKeyUp={() => setViewerHeld(false)}>
+                <Watermark text={mark} />
+                {viewerHeld ? shown : <span className="c-hold big"><Icon name="eye" size={18} /> Press and hold to view</span>}
+              </div>
+            );
+          })()}
+          {viewer.viewOnce && <p>View once: this is the only time it opens. Closing it removes it from this device.</p>}
+          <div className="c-viewer-bar">
+            {!viewer.viewOnce && <a className="c-btn" href={viewer.url} download={viewer.name}>Save to device</a>}
+            {viewer.viewOnce && !viewer.mime.startsWith('image/') && viewer.text === undefined && <a className="c-btn" href={viewer.url} download={viewer.name}>Save to device</a>}
+            <button className="c-btn ghost" onClick={closeViewer}>Close</button>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function FileSheet({ file, ttl, secret, onSend, onCancel }: { file: File; ttl: number; secret: boolean; onSend: (viewOnce: boolean) => void; onCancel: () => void }) {
+  const [viewOnce, setViewOnce] = useState(secret);
+  return (
+    <>
+      <h2>Send a file</h2>
+      <div className="c-pending-file">
+        <span className="c-file-icon" style={{ background: 'var(--c-seg-on)', color: 'var(--c-accent)' }}><Icon name={file.type.startsWith('image/') ? 'image' : 'file'} size={18} /></span>
+        <span className="c-file-main"><strong>{file.name}</strong><small style={{ color: 'var(--c-muted)' }}>{fileSize(file.size)} · disappears {ttlLabel(ttl)} after it’s read</small></span>
+      </div>
+      <label className="c-check">
+        <input type="checkbox" checked={viewOnce} onChange={e => setViewOnce(e.target.checked)} />
+        <span>View once<small>It can be opened one time, then it’s gone for everyone. You won’t be able to open it either.</small></span>
+      </label>
+      <p className="c-hint">Encrypted on this device before upload. OnePeek never sees the file, its name or its key.</p>
+      <div style={{ height: 14 }} />
+      <button className="c-btn block" onClick={() => onSend(viewOnce)}>Encrypt and send</button>
+      <div style={{ height: 8 }} />
+      <button className="c-btn ghost block" onClick={onCancel}>Cancel</button>
+    </>
   );
 }
 
@@ -262,6 +516,7 @@ function InviteSheet({ room }: { room: RoomSummary }) {
   const [expires, setExpires] = useState(86400);
   const [uses, setUses] = useState(1);
   const [copied, setCopied] = useState(false);
+  const [pinned, setPinned] = useState(true);
   const [invites, setInvites] = useState<Awaited<ReturnType<typeof chat.listInvites>>>([]);
   const [err, setErr] = useState('');
   const load = useCallback(() => chat.listInvites(room.id).then(setInvites).catch(() => {}), [room.id]);
@@ -271,7 +526,7 @@ function InviteSheet({ room }: { room: RoomSummary }) {
     setErr('');
     try {
       const r = await chat.createInvite(room.id, { expiresIn: expires, maxUses: uses, approval: room.kind === 'business' });
-      setLink(r.link); load();
+      setLink(r.link); setPinned(r.ownerPinned); load();
     } catch (e) { setErr(friendlyError(e instanceof chat.ChatError ? e.code : '')); }
   }
 
@@ -297,6 +552,7 @@ function InviteSheet({ room }: { room: RoomSummary }) {
             <button className="c-btn sm" onClick={async () => { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
               <Icon name="copy" size={14} />{copied ? 'Copied' : 'Copy'}</button>
           </div>
+          {!pinned && <p className="c-error">{INVITE_UNPINNED_NOTE}</p>}
           <p className="c-hint">Only this chat. {room.kind === 'secret' ? 'They’ll also need the access code — share it another way.' : 'Anyone with the link can join until it’s used up or expires.'}</p>
         </>
       )}
@@ -337,32 +593,40 @@ function MembersSheet({ room, members, me, nameOf, isOwner, onChange }: { room: 
           if (confirm(`Remove ${nameOf(m.deviceId)}? They lose access to new messages immediately.`)) { await chat.removeMember(room.id, m.deviceId); onChange(); }
         }}>
           <Icon name={m.verified && !chat.keyChanged(m) ? 'check' : 'user'} />{nameOf(m.deviceId)}{m.role === 'owner' ? ' · owner' : ''}
-          {isOwner && m.deviceId !== me && <small>Remove</small>}
+          {m.unlisted ? <small>{UNLISTED_NOTE}</small> : isOwner && m.deviceId !== me && <small>Remove</small>}
         </button></li>
       ))}</ul>
     </>
   );
 }
 
-function VerifySheet({ roomId, members, nameOf, onChange }: { roomId: string; members: Member[]; nameOf: (d: string) => string; onChange: () => void }) {
+function VerifySheet({ roomId, members, readers, nameOf, onChange }: { roomId: string; members: Member[]; readers: number; nameOf: (d: string) => string; onChange: () => void }) {
   const [who, setWho] = useState<Member | null>(members.length === 1 ? members[0] : null);
   const [num, setNum] = useState('');
-  useEffect(() => { if (who) chat.safetyNumberWith(roomId, who.deviceId).then(setNum); }, [who, roomId]);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    if (!who) return;
+    setNum(''); setErr('');
+    chat.safetyNumberWith(roomId, who.deviceId).then(setNum, e => setErr(friendlyError(e instanceof chat.ChatError ? e.code : '')));
+  }, [who, roomId]);
 
   if (!members.length) return <><h2>Verify people</h2><p className="c-sub">Nobody else is in this chat yet.</p></>;
   if (!who) return (
     <>
       <h2>Verify people</h2>
       <ul className="c-menu">{members.map(m => <li key={m.deviceId}><button onClick={() => setWho(m)}><Icon name="shield" />{nameOf(m.deviceId)}
-        <small>{m.verified ? (chat.keyChanged(m) ? 'Key changed' : 'Verified') : 'Not verified'}</small></button></li>)}</ul>
+        <small>{m.keyMismatch ? 'Key mismatch' : m.unlisted ? 'Not listed by the server' : m.verified ? (chat.keyChanged(m) ? 'Key changed' : 'Verified') : 'Not verified'}</small></button></li>)}</ul>
     </>
   );
   const groups = num.match(/.{5}/g) ?? [];
   return (
     <>
       <h2>Verify {nameOf(who.deviceId)}</h2>
-      <p className="c-sub">Compare these numbers in person or on a call. If they match on both screens, nobody is intercepting this chat.</p>
-      {num ? <div className="c-digits" aria-label="Safety number">{groups.map((g, i) => <span key={i}>{g}</span>)}</div> : <p className="c-empty">Calculating…</p>}
+      <p className="c-sub">{verifyLine(nameOf(who.deviceId))}</p>
+      {who.unlisted && <p className="c-error">{UNLISTED_NOTE}.</p>}
+      {who.keyHistory && <p className="c-notice">{KEY_HISTORY_NOTE}</p>}
+      {num ? <div className="c-digits" aria-label="Safety number">{groups.map((g, i) => <span key={i}>{g}</span>)}</div> : err ? <p className="c-error">{err}</p> : <p className="c-empty">Calculating…</p>}
+      {num && <p className="c-sub">{readersLine(readers)}</p>}
       <div className="c-qr"><QrCode value={`onepeek-verify:${num}`} size={150} /></div>
       <button className="c-btn block" disabled={!num} onClick={async () => { await chat.markVerified(roomId, who.deviceId); onChange(); setWho(null); }}>They match — mark verified</button>
     </>
@@ -384,5 +648,29 @@ function ConfirmSheet({ title, body, danger, onConfirm, onCancel }: { title: str
       <button className="c-btn ghost block" onClick={onCancel} disabled={busy}>Cancel</button>
       {err && <p className="c-error">{err}</p>}
     </>
+  );
+}
+
+/** Runs `fn` one at a time. Calls made while it runs collapse into one more run afterwards. */
+function useCoalesced(fn: () => Promise<void>) {
+  const running = useRef(false);
+  const again = useRef(false);
+  const latest = useRef(fn);
+  latest.current = fn;
+  return useCallback(async () => {
+    if (running.current) { again.current = true; return; }
+    running.current = true;
+    try {
+      do { again.current = false; await latest.current(); } while (again.current);
+    } finally { running.current = false; }
+  }, []);
+}
+
+/** A faint, repeated stamp of who is looking and when, so a photo or screenshot shows its source. */
+function Watermark({ text }: { text: string }) {
+  return (
+    <div className="c-wm" aria-hidden="true">
+      {Array.from({ length: 24 }, (_, i) => <span key={i}>{text}</span>)}
+    </div>
   );
 }

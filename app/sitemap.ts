@@ -11,6 +11,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return [
     page('/', 1),
     page('/pricing', 0.9),
+    page('/secret-chat', 0.9),
     page('/encryption', 0.8),
     page('/use-cases', 0.8),
     page('/playbooks', 0.7),

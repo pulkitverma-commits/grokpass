@@ -37,6 +37,7 @@ const TEAMS = [
 
 const FAQ = [
   { q: 'Can I cancel any time?', a: 'Yes. Cancel from your dashboard and your plan stays active until the end of the month you’ve paid for. After that you’re back on Free. Nothing you’ve already sent is affected.' },
+  { q: 'Is Secret Chat included?', a: 'Yes. End-to-end encrypted Secret Chat is included on every plan, including Free, while it’s in early access.' },
   { q: 'How do I pay?', a: 'Payments are handled by Razorpay: UPI, cards, net banking and wallets. Plans renew monthly until you cancel.' },
   { q: 'Do paid plans change the encryption?', a: 'No. Every plan uses the same AES-256-GCM encryption in your browser. We never see your secrets or the keys, whatever you pay.' },
   { q: 'What happens when I hit my monthly limit?', a: 'You can still open secrets sent to you. To send more, wait for the next month, refer a friend (Free plan: up to 50 a month) or upgrade.' },

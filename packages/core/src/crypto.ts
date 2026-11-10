@@ -140,3 +140,49 @@ export async function decryptWithPrivateKey(privateB64: string, blobB64: string)
 // 50 MB, minus room for the 28 bytes AES-GCM adds, so the encrypted file fits a 50 MB storage limit.
 export const MAX_FILE_BYTES = 50 * 1024 * 1024 - 1024;
 export const MAX_TEXT_CHARS = 50_000;
+
+// ---------------------------------------------------------------------------- passphrase shares
+//
+// A passphrase share's content key is never in the link on its own:
+//   P   = PBKDF2-SHA256(passphrase, salt, PASS_ITERATIONS) → 64 bytes
+//   authKey = P[0..32)  — sent to the server once, compared as SHA-256(authKey)
+//   wrapKey = P[32..64) — never leaves the device
+//   K   = HKDF-SHA256(ikm = linkPart ‖ wrapKey, salt = serverHalf, info = PASS_INFO) → AES-256-GCM key
+// The link (`#p1.<linkPart>`) carries linkPart. The server keeps salt, SHA-256(authKey) and
+// serverHalf, and releases serverHalf only after a correct authKey (5 tries). Without the server
+// half an attacker holding the link cannot test passphrases offline; without linkPart and wrapKey
+// the server cannot decrypt. Deleting the secret destroys serverHalf.
+
+export const PASS_ITERATIONS = 600_000;
+export const PASS_INFO = 'onepeek-pass-v1';
+export const PASS_LINK_PREFIX = 'p1.';
+
+/** Derives the auth key (base64url, for the server) and the wrap key (stays here). */
+export async function derivePassKeys(passphrase: string, saltB64: string): Promise<{ authKeyB64: string; wrapKey: Uint8Array }> {
+  const salt = fromB64Url(saltB64);
+  if (salt.length < 16) throw new Error('Invalid salt');
+  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase.normalize('NFC')) as BufferSource, 'PBKDF2', false, ['deriveBits']);
+  const bits = new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: salt as BufferSource, iterations: PASS_ITERATIONS }, material, 512));
+  return { authKeyB64: toB64Url(bits.slice(0, 32)), wrapKey: bits.slice(32) };
+}
+
+/** The AES-256-GCM content key of a passphrase share. */
+export async function derivePassContentKey(linkPartB64: string, wrapKey: Uint8Array, serverHalfB64: string, usages: KeyUsage[] = ['decrypt']): Promise<CryptoKey> {
+  const linkPart = fromB64Url(linkPartB64);
+  const serverHalf = fromB64Url(serverHalfB64);
+  if (linkPart.length !== 32 || wrapKey.length !== 32 || serverHalf.length !== 32) throw new Error('Invalid key material');
+  const ikm = new Uint8Array(64);
+  ikm.set(linkPart, 0);
+  ikm.set(wrapKey, 32);
+  const base = await crypto.subtle.importKey('raw', ikm as BufferSource, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: serverHalf as BufferSource, info: new TextEncoder().encode(PASS_INFO) as BufferSource },
+    base, { name: 'AES-GCM', length: 256 }, false, usages);
+}
+
+/** SHA-256 as lowercase hex (what the server stores for tokens and auth keys). */
+export async function sha256Hex(data: string | Uint8Array): Promise<string> {
+  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as BufferSource));
+  return Array.from(d).map(b => b.toString(16).padStart(2, '0')).join('');
+}

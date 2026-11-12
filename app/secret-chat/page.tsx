@@ -4,7 +4,7 @@ import SiteShell from '../components/SiteShell';
 import Icon, { type IconName } from '../components/Icon';
 
 export const metadata: Metadata = {
-  title: 'Secret Chat: end-to-end encrypted chats that disappear · OnePeek',
+  title: 'Secret Chat: encrypted chats that disappear · OnePeek',
   description: 'Start a private chat with a link. Messages and files are end-to-end encrypted on your device with MLS, disappear on a timer, and the whole chat can be burned in one tap. Guests join without an account.',
   alternates: { canonical: '/secret-chat' },
   openGraph: {

@@ -29,6 +29,11 @@ export default function UseCasesPage() {
       </section>
 
       <section className="pg-section">
+        <h2 className="pg-h2">Why a link instead of a message</h2>
+        <p className="pg-sub">Passwords, ID scans, bank details and API keys usually travel by chat or email, where they stay in history, backups and search for years. A OnePeek link carries the secret encrypted in your browser with AES-256-GCM. It opens the number of times you choose, then it is gone, and the key never reaches our servers. Each use case above lists the risks for that team, real examples and step-by-step playbooks with the exact settings to use.</p>
+      </section>
+
+      <section className="pg-section">
         <p className="pg-sub">Looking for a single checklist? <Link href="/playbooks">See all playbooks on one page</Link>.</p>
       </section>
     </SiteShell>

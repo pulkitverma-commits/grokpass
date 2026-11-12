@@ -1,7 +1,11 @@
 import type { Metadata } from 'next';
 import LegalPage from '../components/LegalPage';
 
-export const metadata: Metadata = { title: 'Privacy Policy · OnePeek' };
+export const metadata: Metadata = {
+  title: 'Privacy Policy · OnePeek',
+  description: 'What OnePeek collects, what it can never see, how long data is kept and your rights. Secrets are encrypted in your browser before upload.',
+  alternates: { canonical: '/privacy' },
+};
 
 export default function PrivacyPage() {
   return (

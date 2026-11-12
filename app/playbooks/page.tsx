@@ -5,7 +5,7 @@ import PlaybookCard from '../use-cases/PlaybookCard';
 import { USE_CASES } from '@/lib/content/use-cases';
 
 export const metadata: Metadata = {
-  title: 'Playbooks: how to share secrets safely, step by step · OnePeek',
+  title: 'Playbooks: share secrets safely, step by step · OnePeek',
   description: 'Step-by-step playbooks for sharing passwords, ID documents, API keys, payroll details and customer credentials with OnePeek.',
   alternates: { canonical: '/playbooks' },
 };

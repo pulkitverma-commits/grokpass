@@ -18,7 +18,7 @@ export const SEO_PAGES: SeoPage[] = [
   {
     slug: 'share-passwords-securely',
     short: 'Share passwords securely',
-    title: 'How to share a password securely (free, no sign-up) · OnePeek',
+    title: 'How to share a password securely, free · OnePeek',
     description: 'Share a password with a one-time link that is encrypted in your browser and deleted after it’s opened. Free, no account needed.',
     h1: 'Share a password securely',
     intro: 'Sending a password over WhatsApp, Slack or email leaves a copy in chat history, backups and every linked device. A OnePeek link carries the password encrypted, opens once, and then the password is gone for good.',
@@ -43,7 +43,7 @@ export const SEO_PAGES: SeoPage[] = [
   {
     slug: 'send-sensitive-documents',
     short: 'Send sensitive documents',
-    title: 'Send sensitive documents securely with a self-destructing link · OnePeek',
+    title: 'Send sensitive documents securely · OnePeek',
     description: 'Send ID scans, contracts, payslips and medical reports with an encrypted link that opens once and can block downloads.',
     h1: 'Send sensitive documents securely',
     intro: 'ID scans, offer letters, payslips and reports end up stored in inboxes and chat backups long after they were needed. OnePeek encrypts the file in your browser and deletes it after it’s viewed.',
@@ -157,6 +157,10 @@ export const SEO_PAGES: SeoPage[] = [
     ],
     faqs: [
       { q: 'Can I share it with several guests?', a: 'Yes. Allow more views, or create a separate link for each guest so you can see who opened theirs.' },
+      { q: 'Can OnePeek see my Wi-Fi password?', a: 'No. The network name and password are encrypted in your browser with AES-256-GCM before anything is uploaded. The key is only in the part of the link after the #, which browsers never send to a server.' },
+      { q: 'Does my guest need an app or an account?', a: 'No. They open the link in any browser, see the password and scan the QR code with their phone camera to join.' },
+      { q: 'What happens after the guest opens it?', a: 'Once the link has been opened the number of times you allowed, or it reaches its expiry, it shows nothing. There is no copy left in your chats to forward or leak later.' },
+      { q: 'Is it free?', a: 'Yes. You can send up to 10 secrets a month without signing up, Wi-Fi links included.' },
     ],
     related: ['everyday'],
   },

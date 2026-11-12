@@ -1,7 +1,11 @@
 import type { Metadata } from 'next';
 import LegalPage from '../components/LegalPage';
 
-export const metadata: Metadata = { title: 'Terms of Service · OnePeek' };
+export const metadata: Metadata = {
+  title: 'Terms of Service · OnePeek',
+  description: 'The terms for using OnePeek’s one-time secret links, Secret Chat, plans and API, including acceptable use and limits of liability.',
+  alternates: { canonical: '/terms' },
+};
 
 export default function TermsPage() {
   return (

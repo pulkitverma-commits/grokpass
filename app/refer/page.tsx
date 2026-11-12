@@ -29,6 +29,14 @@ export default function ReferPage() {
         </ol>
         <p className="pg-sub" style={{ marginTop: 20 }}>Need more than 50? <Link href="/pricing">Plus gives you 250 a month</Link>.</p>
       </section>
+
+      <section className="pg-section">
+        <h2 className="pg-h2">Good to know</h2>
+        <ul className="step-list">
+          <li><span className="step-num">?</span><span><strong>Does my friend need to sign up?</strong> No. They only need to open OnePeek with your link. Anyone can send a secret without an account.</span></li>
+          <li><span className="step-num">?</span><span><strong>What does my friend get?</strong> The same free plan as everyone: one-time links encrypted in the browser, for text, files and Wi-Fi details.</span></li>
+        </ul>
+      </section>
     </SiteShell>
   );
 }

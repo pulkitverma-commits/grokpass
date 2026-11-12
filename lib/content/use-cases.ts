@@ -13,6 +13,8 @@ export type UseCase = {
   slug: string;
   short: string;
   title: string;
+  /** <title> tag, kept under 60 characters. */
+  seoTitle: string;
   description: string;
   intro: string;
   risks: string[];
@@ -26,6 +28,7 @@ export const USE_CASES: UseCase[] = [
     slug: 'everyday',
     short: 'Everyday sharing',
     title: 'Share passwords and private details with family and friends',
+    seoTitle: 'Share passwords with family and friends · OnePeek',
     description: 'Send a Wi-Fi password, a streaming login, an ID scan or bank details to family and friends without leaving them in your chats forever.',
     intro: 'Most private details get shared over WhatsApp, SMS or email, where they sit in chat history and backups for years. With OnePeek you send a link instead. It opens once, then the secret is gone.',
     risks: [
@@ -61,6 +64,7 @@ export const USE_CASES: UseCase[] = [
     slug: 'hr',
     short: 'HR teams',
     title: 'OnePeek for HR: onboarding logins, payroll details and employee documents',
+    seoTitle: 'Share logins and payroll details safely: HR · OnePeek',
     description: 'Give new joiners their first passwords, collect bank details and ID documents, and send salary information without leaving it in inboxes.',
     intro: 'HR handles some of the most sensitive data in a company: bank accounts, ID numbers, salaries and first-day credentials. Email keeps all of it searchable forever. OnePeek lets HR send and collect it through links that open once.',
     risks: [
@@ -96,6 +100,7 @@ export const USE_CASES: UseCase[] = [
     slug: 'developers',
     short: 'Developers',
     title: 'OnePeek for developers: share API keys, .env files and database credentials safely',
+    seoTitle: 'Share API keys and .env files securely · OnePeek',
     description: 'Hand off API keys, SSH keys, .env files and database passwords to teammates, contractors and clients without leaving them in Slack, Git or email.',
     intro: 'Secrets pasted into Slack, Jira or email end up in search indexes, exports and backups. A leaked key in a chat log is a common way in. OnePeek gives you a one-time link: the secret is encrypted in your browser, and the server only ever holds ciphertext.',
     risks: [
@@ -131,6 +136,7 @@ export const USE_CASES: UseCase[] = [
     slug: 'support',
     short: 'Support teams',
     title: 'OnePeek for support teams: temporary passwords and account access without ticket leaks',
+    seoTitle: 'Temporary passwords for support teams · OnePeek',
     description: 'Send temporary passwords and collect account details from customers without leaving them in your helpdesk, chat transcripts or email threads.',
     intro: 'Support tickets are read by many agents, exported to analytics tools and kept for years. Every password typed into a ticket is a liability. With OnePeek, the ticket only ever holds a link that stops working once it’s opened.',
     risks: [
@@ -165,6 +171,7 @@ export const USE_CASES: UseCase[] = [
     slug: 'it',
     short: 'IT & MSPs',
     title: 'OnePeek for IT teams and MSPs: device handovers, admin passwords and client credentials',
+    seoTitle: 'Share admin passwords securely: IT and MSPs · OnePeek',
     description: 'Hand over devices, Wi-Fi, router and admin passwords to staff and clients with one-time links, QR codes and geofences.',
     intro: 'IT teams and managed service providers move credentials between staff, vendors and clients every day: routers, NVRs, firewalls, Wi-Fi and admin accounts. OnePeek makes each handover a link that opens once, can be limited to a place or time, and tells you when it was opened.',
     risks: [
@@ -199,6 +206,7 @@ export const USE_CASES: UseCase[] = [
     slug: 'finance',
     short: 'Finance & accounts',
     title: 'OnePeek for finance teams: bank details, tax documents and statements',
+    seoTitle: 'Send bank details and tax documents securely · OnePeek',
     description: 'Share bank account details, tax documents and statements with clients, auditors and vendors through links that open once.',
     intro: 'Changed bank details are the oldest trick in invoice fraud, and statements and tax documents are exactly what attackers look for in a mailbox. OnePeek keeps them out of email threads: each document or detail opens once, for the person you meant.',
     risks: [

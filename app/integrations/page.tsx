@@ -4,7 +4,7 @@ import SiteShell from '../components/SiteShell';
 import Icon, { type IconName } from '../components/Icon';
 
 export const metadata: Metadata = {
-  title: 'Integrations: Slack, Microsoft Teams, WhatsApp and email · OnePeek',
+  title: 'Integrations: Slack, Teams, WhatsApp, email · OnePeek',
   description: 'Send OnePeek secret links straight to Slack, Microsoft Teams, WhatsApp or email. Slack and Teams apps and the OnePeek API are coming soon.',
   alternates: { canonical: '/integrations' },
 };

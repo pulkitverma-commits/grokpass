@@ -9,6 +9,7 @@ import './encryption.css';
 export const metadata: Metadata = {
   title: 'How our encryption works · OnePeek',
   description: 'How OnePeek encrypts secrets in your browser, what our servers store, and the limits you should know about.',
+  alternates: { canonical: '/encryption' },
 };
 
 const SEND_STEPS: { icon: IconName; title: string; body: React.ReactNode }[] = [

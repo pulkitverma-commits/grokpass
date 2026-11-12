@@ -16,7 +16,7 @@ export function generateMetadata({ params }: { params: { slug: string } }): Meta
   const u = useCase(params.slug);
   if (!u) return {};
   return {
-    title: `${u.title} · OnePeek`,
+    title: u.seoTitle,
     description: u.description,
     alternates: { canonical: `/use-cases/${u.slug}` },
     openGraph: { title: u.title, description: u.description, url: `/use-cases/${u.slug}` },

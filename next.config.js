@@ -1,3 +1,4 @@
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- Next's CommonJS config loads the shared CommonJS header module.
 const { siteCsp, baseHeaders } = require('./lib/security-headers');
 
 /** @type {import('next').NextConfig} */

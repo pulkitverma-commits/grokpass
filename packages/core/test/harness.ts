@@ -21,11 +21,11 @@ export const WEB_ORIGIN = 'https://onepeek.test';
 export type SqlCall = { fn: string; args: Record<string, unknown> };
 export type FakeUser = { id: string; is_anonymous?: boolean };
 
-/** Chat migrations, in order: 006 and everything after it except rollbacks and the non-chat 007
- *  (it redefines create_request from 005, whose tables are not part of this schema). */
+/** Ordered production migrations, including the secret-schema prerequisites required by
+ *  later shared migrations such as 010_lock_cleanup. Rollbacks are excluded. */
 export function chatMigrations(): string[] {
   return readdirSync(path.join(ROOT, 'supabase/migrations'))
-    .filter(f => /^\d{3}_.*\.sql$/.test(f) && !f.endsWith('_down.sql') && Number(f.slice(0, 3)) >= 6 && !f.startsWith('007_'))
+    .filter(f => /^\d{3}_.*\.sql$/.test(f) && !f.endsWith('_down.sql'))
     .sort();
 }
 
@@ -39,6 +39,7 @@ export async function bootDb() {
   // Set after PGlite starts: a global `window` makes it think it is running in a browser.
   (globalThis as { window?: unknown }).window = { location: { origin: WEB_ORIGIN } };
   await db.exec(readFileSync(path.join(ROOT, 'supabase/tests/supabase-stubs.sql'), 'utf8'));
+  await db.exec(readFileSync(path.join(ROOT, 'supabase/schema.sql'), 'utf8'));
   for (const m of chatMigrations()) await db.exec(readFileSync(path.join(ROOT, 'supabase/migrations', m), 'utf8'));
 
   /** Every RPC from every fake client, in order. */

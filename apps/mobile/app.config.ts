@@ -9,7 +9,7 @@ const BUNDLE_ID = 'io.onepeek.app';
 // Android local/CI builds may omit FCM; Android distribution builds must have it.
 // The EAS file variable contains a path, never the server-side service account.
 export function androidFirebaseFile(
-  env: NodeJS.ProcessEnv = process.env,
+  env: Partial<Record<'GOOGLE_SERVICES_JSON' | 'EAS_BUILD_PLATFORM' | 'EAS_BUILD_PROFILE', string>> = process.env,
   exists: (path: string) => boolean = existsSync,
 ): string | undefined {
   const supplied = env.GOOGLE_SERVICES_JSON?.trim();

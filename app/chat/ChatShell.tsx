@@ -54,26 +54,29 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
     try {
       bc = new BroadcastChannel('onepeek-chat');
       bc.onmessage = (e) => {
-        if (e.data?.t === 'lock') { keystore.passkey.lockNow(); setLocked(true); }
+        if (e.data?.t === 'lock') { setLocked(true); keystore.passkey.lockWhenIdle().catch(() => {}); }
         // Another tab turned the passkey lock on or off: reload to pick up the new state.
         if (e.data?.t === 'keystore' && e.data.from !== KEYSTORE_TAB_ID) window.location.reload();
       };
     } catch { /* ignore */ }
     // Hide content when the app is backgrounded (app switcher previews, glances).
-    // Long enough in the background and the passkey-unlocked key is dropped.
-    let hiddenAt = 0;
+    // Long enough in the background and the passkey-unlocked key is dropped while still hidden
+    // (once any chat operation in progress has saved), so it isn't in memory meanwhile and the
+    // lock screen is already up on return.
+    let relock: ReturnType<typeof setTimeout> | undefined;
     const vis = () => {
       const hidden = document.visibilityState !== 'visible';
       setVeiled(hidden);
-      if (hidden) { hiddenAt = Date.now(); return; }
-      if (hiddenAt && Date.now() - hiddenAt > IDLE_RELOCK_MS) {
-        keystore.passkey.status().then(st => {
-          if (st !== 'unlocked') return;
-          keystore.passkey.lockNow();
+      if (relock) { clearTimeout(relock); relock = undefined; }
+      if (!hidden) return;
+      relock = setTimeout(async () => {
+        try {
+          if ((await keystore.passkey.status()) !== 'unlocked') return;
+          await keystore.passkey.lockWhenIdle();
           setKeysLocked(true);
           setLocked(true);
-        }).catch(() => {});
-      }
+        } catch { /* ignore */ }
+      }, IDLE_RELOCK_MS);
     };
     const blur = () => setVeiled(true);
     const focus = () => setVeiled(false);
@@ -109,6 +112,7 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
     window.addEventListener('keyup', shot, true);
     return () => {
       if (unveil) clearTimeout(unveil);
+      if (relock) clearTimeout(relock);
       window.removeEventListener('keyup', shot, true);
       bc?.close();
       document.removeEventListener('visibilitychange', vis);

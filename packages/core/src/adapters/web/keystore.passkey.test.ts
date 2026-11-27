@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createWebKeyStore, KeystoreLockedError, type PrfProvider } from './keystore';
+import { createWebKeyStore, chatOperation, KeystoreLockedError, type PrfProvider } from './keystore';
 
 // A simulated authenticator. Each passkey has a secret; PRF(salt) = SHA-256(secret || salt), so the
 // same passkey and salt always give the same 32 bytes and a different passkey gives different ones.
@@ -194,6 +194,62 @@ describe('keystore passkey lock', () => {
     reload();
     if (await ks.passkey.status() === 'locked') await ks.passkey.unlock();
     expect(await ks.get('room:r1:state')).toBeNull();
+  });
+
+  it('turning the lock on waits for a chat operation to save its state', async () => {
+    let finish!: () => void;
+    const serverDone = new Promise<void>(r => { finish = r; });
+    // A room operation: the server already has the change; the local save comes after.
+    const operation = chatOperation(async () => {
+      await serverDone;
+      await ks.put('room:r1:state', { s: 'after-commit' });
+    });
+    const enabling = ks.passkey.enable();
+    await new Promise(r => setTimeout(r, 20));
+    expect(await ks.passkey.status()).toBe('off');           // still waiting for the operation
+    finish();
+    await Promise.all([operation, enabling]);
+    reload();
+    await ks.passkey.unlock();
+    expect(await ks.get('room:r1:state')).toEqual({ s: 'after-commit' });
+  });
+
+  it('the idle re-lock waits for a chat operation, and nested operations do not deadlock', async () => {
+    await ks.passkey.enable();
+    let finish!: () => void;
+    const step = new Promise<void>(r => { finish = r; });
+    const operation = chatOperation(async () => {
+      await step;
+      // An operation inside an operation (e.g. a room lock inside createRoom) while a re-lock waits.
+      await chatOperation(() => ks.put('room:r1:state', { s: 'nested' }));
+    });
+    const relocking = ks.passkey.lockWhenIdle();
+    await new Promise(r => setTimeout(r, 20));
+    expect(await ks.passkey.status()).toBe('unlocked');
+    finish();
+    await Promise.all([operation, relocking]);
+    expect(await ks.passkey.status()).toBe('locked');
+    await ks.passkey.unlock();
+    expect(await ks.get('room:r1:state')).toEqual({ s: 'nested' });
+  });
+
+  it('a key unlocked from a lock that was since replaced is not used', async () => {
+    await ks.passkey.enable();                               // this page holds the data key unlocked
+    // Another tab turns the lock off and on again: a new lock record (new salt, new data key).
+    // Simulated by replacing the record on disk while this page keeps its key in memory.
+    await new Promise<void>((resolve) => {
+      const req = indexedDB.open('onepeek-chat', 1);
+      req.onsuccess = () => {
+        const t = req.result.transaction('meta', 'readwrite');
+        const st = t.objectStore('meta');
+        const g = st.get('pk');
+        g.onsuccess = () => st.put({ ...g.result, salt: crypto.getRandomValues(new Uint8Array(32)) }, 'pk');
+        t.oncomplete = () => { req.result.close(); resolve(); };
+      };
+    });
+    expect(await ks.passkey.status()).toBe('locked');
+    await expect(ks.put('room:r1:state', { s: 'stale' })).rejects.toBeInstanceOf(KeystoreLockedError);
+    await expect(ks.get('room:r1:state')).rejects.toBeInstanceOf(KeystoreLockedError);
   });
 
   it('wipe removes the passkey lock too', async () => {

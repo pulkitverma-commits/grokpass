@@ -3,6 +3,7 @@
 // lib/chat/client.ts. Globals are read at call time, never captured at import.
 
 import type { ChatEnv, ChatPlatform, FileSource, KeyStore, LockStore, OpenedFile, SupabaseLike, SupabaseSession } from '../../chat/ports';
+import { chatOperation } from './keystore';
 
 function deviceLabel() {
   if (typeof navigator === 'undefined') return 'Browser';
@@ -83,5 +84,5 @@ export function withBlobUploads<S extends SupabaseSession>(sb: SupabaseLike<S>):
  * second, unintended instance.
  */
 export function createWebPlatform<S extends SupabaseSession>(opts: { supabase: SupabaseLike<S> | null; keystore: KeyStore }): ChatPlatform<S> {
-  return { supabase: opts.supabase && withBlobUploads(opts.supabase), keystore: opts.keystore, env: webEnv, lock: webLock };
+  return { supabase: opts.supabase && withBlobUploads(opts.supabase), keystore: opts.keystore, env: webEnv, lock: webLock, operation: chatOperation };
 }

@@ -73,30 +73,6 @@ Plain statements of what Secret Chat does not do. The public page (/secret-chat)
    whose key changes on the server afterwards is shown as a key mismatch and can't be marked verified.
    Every device in the encrypted group is in the member list, and the verify screen says how many
    devices can read the chat: check that both screens show the same devices.
-
-16. **The passkey lock (web, opt-in) protects what is written after it is turned on.** With the lock on,
-   this browser's chat keys are sealed under a key that only the passkey's WebAuthn PRF output can open,
-   after Face ID, Touch ID or a PIN, on each page load and again after 10 minutes in the background or a
-   Panic Exit. What it does not cover:
-   - **Copies made before.** Turning it on deletes the old device key and re-seals the records, but the
-     browser's storage files (and any backup taken earlier) can still hold the old key and old records
-     until they are overwritten, and the device's signing and MLS keys are not rotated. An old copy can
-     therefore still decrypt. For a clean start, sign the device out and turn the lock on before chatting.
-   - **Metadata.** Record names (which chats, message ids) and expiry times are stored unencrypted, and
-     the Supabase session in the same browser profile still signs in.
-   - **Script on onepeek.io.** PRF output is handed to page JavaScript. Script running on any onepeek.io
-     page (the site-wide CSP is still report-only outside /chat) could show a passkey prompt and, if the
-     person approves it, derive the key, as could a page on a onepeek.io subdomain. Before the lock, such
-     script could already use the device key without any prompt.
-   - **Synced passkeys.** A passkey synced through iCloud Keychain or Google Password Manager gives the
-     same PRF output on every device it syncs to.
-   - **Losing the passkey.** If that passkey is deleted from the authenticator, the keys can't be
-     opened; "Erase chat keys on this device" is the way out, and the device then has to be signed out
-     from another device.
-   - **Browser support.** It needs PRF: current Chrome, Edge, Android, Safari 18+ with iCloud Keychain
-     and some password managers. Elsewhere it can't be turned on.
-   - **Not tied to the account.** The lock belongs to the browser profile; another account signed in to
-     the same profile meets the lock screen too and can only erase.
    When the Welcome arrives, the pinned device must also be the device the server lists as the
    owner; a link that pins anyone else is refused ("We couldn’t confirm this chat: the device letting
    you in isn’t the owner your invite named. …").
@@ -133,3 +109,27 @@ Plain statements of what Secret Chat does not do. The public page (/secret-chat)
      refused change later applies with an agreeing listing, when that device leaves the group, or when
      the member is verified again on a key that agrees; until then a member whose key agrees again shows
      "The server once showed a different key for them; compare again."
+
+16. **The passkey lock (web, opt-in) protects what is written after it is turned on.** With the lock on,
+   this browser's chat keys are sealed under a key that only the passkey's WebAuthn PRF output can open,
+   after Face ID, Touch ID or a PIN, on each page load and again after 10 minutes in the background or a
+   Panic Exit. What it does not cover:
+   - **Copies made before.** Turning it on deletes the old device key and re-seals the records, but the
+     browser's storage files (and any backup taken earlier) can still hold the old key and old records
+     until they are overwritten, and the device's signing and MLS keys are not rotated. An old copy can
+     therefore still decrypt. For a clean start, sign the device out and turn the lock on before chatting.
+   - **Metadata.** Record names (which chats, message ids) and expiry times are stored unencrypted, and
+     the Supabase session in the same browser profile still signs in.
+   - **Script on onepeek.io.** PRF output is handed to page JavaScript. Script running on any onepeek.io
+     page (the site-wide CSP is still report-only outside /chat) could show a passkey prompt and, if the
+     person approves it, derive the key, as could a page on a onepeek.io subdomain. Before the lock, such
+     script could already use the device key without any prompt.
+   - **Synced passkeys.** A passkey synced through iCloud Keychain or Google Password Manager gives the
+     same PRF output on every device it syncs to.
+   - **Losing the passkey.** If that passkey is deleted from the authenticator, the keys can't be
+     opened; "Erase chat keys on this device" is the way out, and the device then has to be signed out
+     from another device.
+   - **Browser support.** It needs PRF: current Chrome, Edge, Android, Safari 18+ with iCloud Keychain
+     and some password managers. Elsewhere it can't be turned on.
+   - **Not tied to the account.** The lock belongs to the browser profile; another account signed in to
+     the same profile meets the lock screen too and can only erase.

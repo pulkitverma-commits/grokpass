@@ -67,6 +67,7 @@ function open(): Promise<IDBDatabase> {
     req.onupgradeneeded = () => { for (const s of STORES) if (!req.result.objectStoreNames.contains(s)) req.result.createObjectStore(s); };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
+    req.onblocked = () => reject(new Error('keystore_blocked'));
   });
 }
 
@@ -112,6 +113,7 @@ async function readMeta(): Promise<{ wrap?: CryptoKey; pk?: PasskeyMeta }> {
       const p = s.get(PK);
       t.oncomplete = () => resolve({ wrap: w.result as CryptoKey | undefined, pk: p.result as PasskeyMeta | undefined });
       t.onerror = () => reject(t.error);
+      t.onabort = () => reject(t.error ?? new Error('aborted'));
     });
   } finally {
     db.close();
@@ -128,6 +130,7 @@ async function allSealed(): Promise<[string, Sealed][]> {
       c.onsuccess = () => { const cur = c.result; if (cur) { rows.push([String(cur.key), cur.value as Sealed]); cur.continue(); } };
       t.oncomplete = () => resolve();
       t.onerror = () => reject(t.error);
+      t.onabort = () => reject(t.error ?? new Error('aborted'));
     });
   } finally { db.close(); }
   return rows;
@@ -150,15 +153,57 @@ function withLock<T>(mode: LockMode, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+// Chat operations (send to the server, then save state) hold OPS_LOCK shared for their whole run;
+// anything that drops or changes the key (turning the lock on/off, re-locking) takes it
+// exclusively, so it waits for in-flight operations instead of leaving a room's saved state behind
+// the server's. Shared holds are counted per page, so nested operations never queue behind a
+// waiting exclusive request (which would deadlock). The cost: a page that is constantly busy
+// re-locks only once it goes quiet.
+const OPS_LOCK = 'onepeek-chat-operations';
+let opsActive = 0;
+let opsHeld: Promise<void> | null = null;
+let opsRelease: (() => void) | null = null;
+
+/** Runs a chat operation while holding the operations lock shared (re-entrant within the page). */
+export async function chatOperation<T>(fn: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  if (!locks?.request) return fn();
+  if (opsActive++ === 0) {
+    opsHeld = new Promise<void>((acquired, failed) => {
+      locks.request(OPS_LOCK, { mode: 'shared' }, () => new Promise<void>(done => { opsRelease = done; acquired(); })).catch(failed);
+    });
+  }
+  try {
+    await opsHeld;
+    return await fn();
+  } finally {
+    if (--opsActive === 0) { opsRelease?.(); opsRelease = null; opsHeld = null; }
+  }
+}
+
+/** Waits until no chat operation runs in any tab, then runs `fn` with new ones held off. */
+function quietly<T>(fn: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  if (!locks?.request) return fn();
+  return locks.request(OPS_LOCK, { mode: 'exclusive' }, fn) as Promise<T>;
+}
+
 // ---------------------------------------------------------------------------- keys
 
-// Data keys unlocked with a passkey in this page, per database. Memory only: a reload locks again.
-const unlockedKeys = new Map<string, CryptoKey>();
+// Data keys unlocked with a passkey in this page, per database, with the salt of the lock record
+// they came from. Memory only: a reload locks again.
+const unlockedKeys = new Map<string, { key: CryptoKey; salt: Uint8Array }>();
+
+/** The unlocked key, only if it belongs to the lock record on disk now (not one since replaced). */
+function unlockedFor(pk: PasskeyMeta): CryptoKey | null {
+  const u = unlockedKeys.get(DB);
+  return u && sameBytes(u.salt, pk.salt) ? u.key : null;
+}
 
 /** The key records are sealed with right now, or null when none exists yet. Throws while locked. */
 function currentKey(meta: { wrap?: CryptoKey; pk?: PasskeyMeta }): CryptoKey | null {
   if (meta.pk) {
-    const k = unlockedKeys.get(DB);
+    const k = unlockedFor(meta.pk);
     if (!k) throw new KeystoreLockedError();
     return k;
   }
@@ -317,8 +362,9 @@ export function createWebKeyStore(opts: { prf?: PrfProvider } = {}): KeyStore & 
 
   const passkey: PasskeyLock = {
     async status() {
-      if (!(await readMeta()).pk) return 'off';
-      return unlockedKeys.has(DB) ? 'unlocked' : 'locked';
+      const pk = (await readMeta()).pk;
+      if (!pk) return 'off';
+      return unlockedFor(pk) ? 'unlocked' : 'locked';
     },
 
     async enable() {
@@ -329,7 +375,7 @@ export function createWebKeyStore(opts: { prf?: PrfProvider } = {}): KeyStore & 
       if (!r.output) throw new Error('prf_unsupported');
       try {
         const kek = await kekFrom(r.output, r.credId);
-        await withLock('exclusive', async () => {
+        await quietly(() => withLock('exclusive', async () => {
           const meta = await readMeta();
           if (meta.pk) throw new Error('already_on');
           const fresh = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
@@ -344,8 +390,8 @@ export function createWebKeyStore(opts: { prf?: PrfProvider } = {}): KeyStore & 
             m.put(pk, PK);
             m.delete('wrap');
           });
-          unlockedKeys.set(DB, dataKey);
-        });
+          unlockedKeys.set(DB, { key: dataKey, salt });
+        }));
         announceKeyChange();
       } finally {
         r.output.fill(0);
@@ -366,7 +412,7 @@ export function createWebKeyStore(opts: { prf?: PrfProvider } = {}): KeyStore & 
           if (!pk || !sameBytes(pk.salt, before.salt) || !sameBytes(pk.credId, before.credId)) throw new Error('changed');
           let dataKey: CryptoKey;
           try { dataKey = await unwrapDataKey(pk.wrapped, kek); } catch { throw new Error('wrong_passkey'); }
-          unlockedKeys.set(DB, dataKey);
+          unlockedKeys.set(DB, { key: dataKey, salt: pk.salt });
         });
       } finally {
         r.output.fill(0);
@@ -377,11 +423,15 @@ export function createWebKeyStore(opts: { prf?: PrfProvider } = {}): KeyStore & 
       unlockedKeys.delete(DB);
     },
 
+    lockWhenIdle() {
+      return quietly(async () => { unlockedKeys.delete(DB); });
+    },
+
     async disable() {
-      await withLock('exclusive', async () => {
+      await quietly(() => withLock('exclusive', async () => {
         const meta = await readMeta();
         if (!meta.pk) return;
-        const dataKey = unlockedKeys.get(DB);
+        const dataKey = unlockedFor(meta.pk);
         if (!dataKey) throw new KeystoreLockedError();
         const device = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
         const records = await reseal(dataKey, device);
@@ -392,7 +442,7 @@ export function createWebKeyStore(opts: { prf?: PrfProvider } = {}): KeyStore & 
           m.delete(PK);
         });
         unlockedKeys.delete(DB);
-      });
+      }));
       announceKeyChange();
     },
   };
@@ -412,6 +462,9 @@ export interface PasskeyLock {
   status(): Promise<PasskeyLockStatus>;
   enable(): Promise<void>;
   unlock(): Promise<void>;
+  /** Drops the key immediately (the page is about to go away, e.g. Panic Exit). */
   lockNow(): void;
+  /** Drops the key once no chat operation is running in any tab (idle re-lock, Panic elsewhere). */
+  lockWhenIdle(): Promise<void>;
   disable(): Promise<void>;
 }

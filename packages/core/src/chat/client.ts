@@ -172,6 +172,7 @@ export type ChatClient<S extends SupabaseSession = SupabaseSession> = ReturnType
 export function createChatClient<S extends SupabaseSession = SupabaseSession>(platform: ChatPlatform<S>) {
   const ks = platform.keystore;
   const env = platform.env;
+  const op: <T>(fn: () => Promise<T>) => Promise<T> = platform.operation ?? (fn => fn());
 
   function sb(): SupabaseLike<S> {
     if (!platform.supabase) throw new Error('not_configured');
@@ -246,7 +247,7 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
   const roomLocks = new Map<string, Promise<unknown>>();
   function withRoomLock<T>(roomId: string, fn: () => Promise<T>): Promise<T> {
     const prev = roomLocks.get(roomId) ?? Promise.resolve();
-    const run = prev.then(fn, fn);
+    const run = prev.then(() => op(fn), () => op(fn));
     const tail = run.then(() => undefined, () => undefined);
     roomLocks.set(roomId, tail);
     void tail.then(() => { if (roomLocks.get(roomId) === tail) roomLocks.delete(roomId); });
@@ -295,7 +296,11 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
    * announced to members inside an encrypted `nick` control message, the same one a joiner sends
    * (see redeemInvite). Like every message, the server only ever sees its ciphertext.
    */
-  async function createRoom(opts: { kind: RoomKind; ttl: number; mode: ExpiryMode; lifetime: number; accessCode?: string | null; name?: string | null; nickname?: string | null }) {
+  /** Runs as one platform operation (see ChatPlatform.operation). */
+  function createRoom(opts: { kind: RoomKind; ttl: number; mode: ExpiryMode; lifetime: number; accessCode?: string | null; name?: string | null; nickname?: string | null }) {
+    return op(() => createRoomUnwrapped(opts));
+  }
+  async function createRoomUnwrapped(opts: { kind: RoomKind; ttl: number; mode: ExpiryMode; lifetime: number; accessCode?: string | null; name?: string | null; nickname?: string | null }) {
     const dev = await ensureDevice();
     const roomId = await rpc<string>('chat_create_room', {
       p_device: dev.id, p_kind: opts.kind, p_ttl_s: opts.ttl, p_expiry_mode: opts.mode,
@@ -391,7 +396,11 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
   }
 
   /** Joins with an invite. Signs in as a guest when needed. Returns the room id (membership is pending until admitted). */
-  async function redeemInvite(invite: string, nickname: string, accessCode?: string) {
+  /** Runs as one platform operation (see ChatPlatform.operation). */
+  function redeemInvite(invite: string, nickname: string, accessCode?: string) {
+    return op(() => redeemInviteUnwrapped(invite, nickname, accessCode));
+  }
+  async function redeemInviteUnwrapped(invite: string, nickname: string, accessCode?: string) {
     const { token, pin } = inviteParts(invite);
     await ensureSession(true);
     const dev = await ensureDevice();

@@ -126,4 +126,11 @@ export interface ChatPlatform<S extends SupabaseSession = SupabaseSession> {
   keystore: KeyStore;
   env: ChatEnv;
   lock: LockStore;
+  /**
+   * Optional. Wraps each chat operation that changes the server and then saves local state
+   * (room-locked work, creating a room, redeeming an invite), so the platform can keep its keys
+   * usable until the save is done. The web uses it to stop the passkey lock from dropping or
+   * changing the key in between. Must be re-entrant: operations can nest.
+   */
+  operation?: <T>(fn: () => Promise<T>) => Promise<T>;
 }

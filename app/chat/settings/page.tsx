@@ -111,7 +111,7 @@ export default function ChatSettingsPage() {
               <div className="c-row-main">
                 <div className="c-row-title">Lock chat keys with your passkey · {keyLock === 'off' ? 'Off' : 'On'}</div>
                 <div className="c-row-meta">{keyLock === 'off'
-                  ? 'The keys that decrypt your chats in this browser are opened with your passkey (Face ID, Touch ID or your PIN) each time you load chat, and again after 10 minutes in the background. A copy of this browser’s data made after you turn this on can’t decrypt your messages without that passkey.'
+                  ? 'Chat data this browser saves from now on is sealed under a key only your passkey (Face ID, Touch ID or your PIN) can open. You’ll be asked for it each time you load chat, and again after 10 minutes in the background.'
                   : 'Opening chats in this browser needs your passkey. If that passkey is deleted from your password manager or device, these chat keys can’t be opened again.'}</div>
               </div>
               <button className={keyLock === 'off' ? 'c-btn sm' : 'c-btn ghost sm'} disabled={keyLockBusy || (keyLock === 'off' && passkeys.length === 0)} onClick={toggleKeyLock}>
@@ -119,7 +119,7 @@ export default function ChatSettingsPage() {
             </li>
           </ul>
           {keyLock === 'off' && passkeys.length === 0 && <p className="c-hint">Add a passkey above first.</p>}
-          <p className="c-hint">It doesn’t protect copies of this browser’s data made before you turn it on: for that, sign this device out below and start fresh with the lock on. It also doesn’t hide which chats you’re in or when messages expire. A passkey synced through iCloud or Google unlocks these keys on your other devices too.</p>
+          <p className="c-hint">What it doesn’t cover: data this browser saved before you turned it on, which can linger in its storage files and backups (for a clean start, sign this device out below, then turn the lock on before your next chat); this browser’s OnePeek sign-in, which stays signed in; which chats you’re in and when messages expire. A passkey synced through iCloud or Google opens these keys on your other devices too.</p>
           {keyLockMsg && <p className={keyLockMsg.ok ? 'c-hint' : 'c-error'}>{keyLockMsg.text}</p>}
         </section>
       )}

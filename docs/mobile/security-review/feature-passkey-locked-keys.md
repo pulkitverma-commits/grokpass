@@ -286,3 +286,155 @@ Code: `keystore.ts:131-154`, `276-325`, `app/chat/settings/page.tsx:116`.
 | PK-10 | low | `ChatShell.tsx:45-48`; `keystore.ts:271-274` | Gate fails open; deleting `pk` silently downgrades to "off" |
 | PK-11 | low | `keystore.ts:206-207`; `client.ts:217-223` | Locked store reports absent keys as empty, so orphan device registrations happen; lock not bound to an account |
 | PK-12 | low | `keystore.ts:131-154, 276-325` | Any credential accepted on enable; UV bit not checked; raw key and PRF output in the JS heap; AAD does not bind meta |
+
+## Second pass: commit b2177fa
+
+Reviewer: security-reviewer. Date: 2026-11-27. Read-only review of `git show b2177fa` and the files it touches at that commit. No tests or builds run. Line numbers below are at b2177fa.
+
+### Verdict
+
+Most of the first pass is fixed. The fixes hold up:
+- a cross-tab Web Lock around every keystore operation;
+- no cached device key;
+- the re-seal fails instead of dropping records;
+- a locked store throws even for missing records;
+- the data key is wrapped with AES-KW and unwrapped straight to non-extractable;
+- the user-verified flag is checked;
+- `unlock` detects a lock that changed while the prompt was open;
+- the gate fails closed.
+
+There are no deadlocks from nested Web Locks: no locked section calls another locked function, and `put` takes its exclusive lock only after the shared one is released.
+
+What is left:
+1. **One real issue (S-1, medium).** The keystore-level race is closed, but the *client-level* one is not, and the fix adds two new triggers: the idle re-lock and the Panic broadcast. Dropping or retiring the key while a multi-step chat operation is running can still fork an owner's room.
+2. **The Settings copy still contradicts the new known-limitations item** (PK-3 residual, medium).
+3. **Item 16 was inserted in the middle of item 15** in `docs/secret-chat/known-limitations.md`.
+4. A few lows.
+
+**PK-2 and PK-4 handled as documented limits.** This is acceptable for an opt-in feature and not a blocker, on one condition: the Settings sentence at `app/chat/settings/page.tsx:114` must stop claiming that copies made after turning the lock on are safe (see PK-3 below). PK-4's cheap follow-ups (hard navigation into /chat, enforcing the site CSP) should be tracked.
+
+### Status of the first-pass findings
+
+| ID | Status | Notes |
+|---|---|---|
+| PK-1 | **partly** | Closed inside the keystore. `put`/`get`/`del`/`delPrefix`/`keys`/`sweep` take the shared lock and read the current key inside it (`keystore.ts:254-308`). `enable`/`disable`/`wipe` take the exclusive lock and re-check state inside it (`keystore.ts:311-397`). Rollback, resurrection, writes under a retired key and an undone wipe are no longer possible. The new tests run under Node 24's real `navigator.locks`. Still open at the client level, and made more likely by the fix: see S-1. |
+| PK-2 | **accepted limit** | Documented in `known-limitations.md` item 16, with a real "start fresh" path: Settings › Devices › Sign out this device (`revokeDevice` → `wipe`), then turn the lock on before any device is registered. `settings/page.tsx` `load()` does not register a device, so this works. Acceptable for an opt-in feature **once the copy at `settings/page.tsx:114` is fixed** (PK-3). Note that "start fresh" protects future traffic only: already-decrypted messages sealed under the old key can still remain in leftover storage files. |
+| PK-3 | **partly (medium)** | The new text (`settings/page.tsx:114, 122`) is much better. Two problems remain. (1) Line 114 says "A copy of this browser's data made after you turn this on can't decrypt your messages without that passkey". Item 16 itself says that after turning the lock on, the storage files "can still hold the old key and old records until they are overwritten", so a copy made just after turning it on can still decrypt. (2) The Settings text does not mention that the Supabase session in the same profile still signs in. In non-business rooms, a signed-in copy can bring a new device into the room and be auto-admitted (`app/chat/r/[id]/page.tsx:98`). Fix: on line 114 say "…made after you start fresh with the lock on (see below)…", and on line 122 add "and your sign-in in this browser isn't protected by it". |
+| PK-4 | **accepted limit (low follow-ups)** | Documented in item 16. AES-KW now keeps the app's own copy of the data key non-extractable (`keystore.ts:182-185, 335-337`), but script that gets the PRF output can still unwrap it extractable. Not a blocker: before the lock, such script could use the device key with no prompt at all. Track the cheap mitigations: plain `<a href="/chat…">` instead of `<Link>` from non-chat pages (`DashboardChat.tsx:79`, `dashboard/page.tsx:263`, `HomeClient.tsx:646`, `secret-chat/page.tsx`), so unlock and decryption always run under the enforced `/chat` CSP; and enforce the site CSP. |
+| PK-5 | **partly (low)** | Panic now calls `lockNow` in the tab that ran it (`lib/chat/client.ts:34-37`) and in every `ChatShell` tab (`ChatShell.tsx:57`). The idle re-lock was added (`ChatShell.tsx:65-77`). Gaps: (1) both live only in `ChatShell`, so a page outside `/chat` that was reached by soft navigation from an unlocked `/chat` (e.g. `/dashboard`) keeps the key, ignores Panic and never re-locks; (2) see S-2 for the idle re-lock itself. Fix: move the `BroadcastChannel` listener and the idle timer into `lib/chat/client.ts` at module level. |
+| PK-6 | **closed** | `reseal` throws `unreadable_records` and nothing is committed (`keystore.ts:188-199`). The device key is read fresh inside the exclusive lock. `disable` with a stale data key now fails safely. Minor UX: records left unreadable by an older interrupted wipe make `enable` impossible forever ("Reload the page and try again" won't help). An explicit "drop unreadable data" option would fix that. |
+| PK-7 | **closed (copy)** | The erase prompt now says the device stays listed until it is signed out (`ChatShell.tsx:152`), and item 16 documents it. Automatic revocation was not added, which is acceptable as documented. The old device can also be signed out from this same browser's Settings after the erase, not only "from another device". |
+| PK-8 | **partly (low)** | Own-tab messages are ignored via `KEYSTORE_TAB_ID` (`keystore.ts:59-60, 203`; `ChatShell.tsx:59`); the id comes from the same module instance, so this is correct. Pages outside `ChatShell` still never hear the broadcast. With the cache gone, the only remaining effect is S-4. |
+| PK-9 | **closed** | `unlock` throws `not_on` when the passkey record (`pk`) is gone (`keystore.ts:356-357`), and `unlockChats` clears Panic only after the status reads `unlocked` (`lib/chat/client.ts:67-72`). |
+| PK-10 | **partly (low)** | The gate fails closed (`ChatShell.tsx:52`). Still open: deleting the `pk` record still silently reads as "off", and `put` then creates a fresh device key (`keystore.ts:264, 168-174`). There is no tripwire. New UX issue: when the failure is persistent, the generic lock screen has no way out, because the erase link appears only when `keysLocked` is true. |
+| PK-11 | **closed / accepted** | `get` checks the key before looking up the record (`keystore.ts:269-279`), so `ensureDevice` cannot register an orphan device while the store is locked. Not tying the lock to an account is documented in item 16. |
+| PK-12 | **mostly closed (low)** | AES-KW wrap/unwrap is in place (the raw data key never reaches JS), and the UV bit is checked (`keystore.ts:238-240`, byte 32, bit 0x04, correct). Still open: `enable` uses `allowCredentials: []` (`keystore.ts:229`), so any onepeek.io passkey can be chosen, including another account's, and the result is not checked against `supabase.auth.passkey.list()`. The PRF output still passes through JS (unavoidable, documented). |
+
+### New findings from the fixes
+
+#### S-1 (medium): retiring or dropping the key while a multi-step chat operation runs still forks an owner's room; the idle re-lock and the Panic broadcast are new triggers
+
+Code:
+- `ChatShell.tsx:57` (`'lock'` → `lockNow()`), `ChatShell.tsx:69-73` (idle re-lock → `lockNow()`), `lib/chat/client.ts:34-37`;
+- `keystore.ts:332-348`: after `enable` commits, other tabs have no key;
+- `packages/core/src/chat/client.ts`:
+  - `admitPendingLocked` 489-494, `commitRemovalsLocked` 520-526, `removeMemberLocked` 541-544: `chat_send` posts the commit, then `saveState` runs;
+  - `createRoom` 300-306: `chat_create_room`, then `saveState`;
+  - `redeemInvite` 399-407: `chat_redeem_invite`, then the `pending` key package is stored.
+
+The Web Lock covers one keystore call at a time. These client operations are *load, then RPC, then save*, so the lock is released while the RPC is in flight.
+
+Failure scenario:
+1. The owner has a non-business room open in tab A. The room page auto-admits on sync (`app/chat/r/[id]/page.tsx:98`).
+2. One of these happens while `admitPendingLocked` is waiting on its `chat_send`:
+   - tab B hits Panic, and A's `ChatShell` calls `lockNow()`;
+   - tab A comes back after more than 10 minutes in the background, and the idle re-lock runs, likely while the resubscribe-triggered sync is running;
+   - tab B turns the lock on, so A has no key until it reloads.
+3. The server accepts the commit, then `saveState` throws `KeystoreLockedError`.
+4. The owner's saved state is still the previous epoch, while the group has moved on with the owner's own commit, which the owner cannot process as a received message. The room is forked for the owner. The Welcomes are not sent, so the joiners are stuck.
+
+Variants: with `createRoom`, a room exists on the server with no local state. With `redeemInvite`, the device is pending with no private key package, so its Welcome can never be opened.
+
+Before this commit, `lockNow` was never called and the lock could only change by turning it on in another tab. Now it also happens on every idle return and every Panic.
+
+Fix, either of:
+- (a) In the client, save before sending for commits, the same way `send` already does at `client.ts:563-565`. Persist the advanced state (or a `pendingCommit` record) before `chat_send`, and roll forward or back on the next sync.
+- (b) Give the client a way to wait until in-flight operations finish (`client.drain()`: wait until `roomLocks` is empty and stop new work). Have `lockNow` callers (`lock()`, the idle re-lock, the `'lock'` handler) and `enable` wait for it first. Then take the exclusive Web Lock and drop the key.
+
+Option (a) also covers crashes, which can cause the same fork today.
+
+#### S-2 (low): the idle re-lock briefly shows chat content and depends on `visibilitychange`
+
+Code: `ChatShell.tsx:65-77, 79`.
+
+- On return, `setVeiled(false)` runs at once (line 67, and `focus` at line 79), but the re-lock waits for `status()`, an IndexedDB read. Decrypted messages are on screen for at least one frame, longer on a slow disk, before the lock screen. Fix: when the time limit is exceeded, keep `veiled` true (and skip the `focus` unveil) until the re-lock decision is made, or call `lockNow()` and `setLocked(true)` synchronously and check the status afterwards.
+- The key stays in memory for the whole time the tab is hidden; it is dropped only when the tab becomes visible again. A window left visible but unattended, or occluded on a platform that doesn't report that as hidden, never re-locks. The copy ("again after 10 minutes in the background") is accurate, so this is a limit, not an over-claim. Consider a timer that drops the key after 10 minutes hidden, rather than on return.
+
+#### S-3 (low): `put`'s retry loop recreates a device key after a wipe, so in-flight writes survive "Erase" and "Sign out"
+
+Code: `keystore.ts:254-267`, `168-174`.
+
+1. `wipe()` takes the exclusive lock. A `put` from an operation already in flight (a sync storing a decrypted message, a `saveState`) is queued behind it.
+2. When the wipe finishes, that `put` finds neither `wrap` nor `pk`, calls `ensureDeviceKey`, creates a new device key and writes the record.
+3. After "Sign out and erase chat keys on this device" (`settings/page.tsx:173`), "Sign out" of this device (`revokeDevice` → `wipe`), or "Erase chat keys" on the lock screen, the browser can still hold a decrypted message or a room state, together with a stored key that opens it.
+
+This existed before (the old `deviceKey` regenerated too). The retry loop makes it the defined behaviour.
+
+Fix: only an explicit initialisation (from `ensureDevice` registering a device) may create the device key. `put` with no key should throw. Alternatively, `wipe` writes a generation marker, and a `put` that started under an earlier generation is dropped.
+
+#### S-4 (low): the unlocked key is not tied to the passkey record it came from
+
+Code: `keystore.ts:155-166`.
+
+`currentKey` returns `unlockedKeys.get(DB)` whenever any `pk` exists. Scenario:
+1. A tab still holds data key K1. Either it was reached by soft navigation outside `ChatShell`, or it is a `ChatShell` tab whose reload is still pending.
+2. Another tab turns the lock off and on again, producing K2.
+3. The first tab now seals writes under K1, which nobody else can open. Its reads of K2 records return `null` (`keystore.ts:278`), which is the "looks empty" path; `ensureDevice` would register a new device.
+
+The trigger needs two missed broadcasts, so this is low. Fix: store `pk.salt` (or a key id) next to the unlocked key and have `currentKey` throw `KeystoreLockedError` when they don't match.
+
+#### S-5 (low): a cross-tab lock that never settles hangs chat in every tab
+
+Code: `keystore.ts:105-119` (`readMeta`) and `121-134` (`allSealed`) have no `onabort` handler; `open()` (`64-71`) has no `onblocked` handler.
+
+If one of these promises never settles (an aborted transaction, a `versionchange` that blocks), the Web Lock callback never returns. Every tab's `get`/`put` then waits forever, the chat UI hangs, and `wipe` and Panic-erase hang too, because they need the exclusive lock.
+
+Fix: reject on `onabort` and `onblocked`. Consider a timeout around each locked section so it errors instead of hanging. Use `AbortSignal.timeout` on `locks.request` only for the wait, since it does not limit how long the lock is held.
+
+#### S-6 (low, docs): item 16 was inserted inside item 15 of `known-limitations.md`
+
+Code: `docs/secret-chat/known-limitations.md:77-103`.
+
+Item 16 was added before the rest of item 15's text: "When the Welcome arrives, the pinned device must also be…" and the "What remains open:" list about `chat_send` and unpinned invite links. Those paragraphs now read as part of the passkey item. The public list therefore misdescribes both items. Fix: move item 16 after the end of item 15.
+
+#### S-7 (info): fallback when Web Locks is missing
+
+`keystore.ts:138-151` gives only a per-page queue, with no exclusion between tabs. This is acceptable: every browser that supports PRF (Chrome 116+, Safari 18+, Firefox 135+) has `navigator.locks` in secure contexts, so the passkey lock can never be on in a browser that uses the fallback. Tabs without the lock keep the old behaviour. To make that explicit, have `enable()` refuse (`'unsupported'`) when `navigator.locks` is missing.
+
+No nested-lock deadlock found. No locked section calls `withLock`, and `put` takes the exclusive lock only after the shared one is released (`keystore.ts:256-264`). Keep the warning comment at `keystore.ts:141-144`.
+
+### Second-pass summary
+
+| ID | Severity | Status |
+|---|---|---|
+| PK-1 | medium (residual) | partly: keystore races closed; client-level fork open (S-1) |
+| PK-2 | n/a | accepted as a documented limit, conditional on the PK-3 copy fix |
+| PK-3 | medium | partly: `settings/page.tsx:114` still over-claims; the session is not mentioned |
+| PK-4 | low | accepted as a documented limit; track hard navigation into /chat and enforcing the site CSP |
+| PK-5 | low | partly: pages outside `ChatShell` keep the key |
+| PK-6 | n/a | closed |
+| PK-7 | n/a | closed (copy, documented) |
+| PK-8 | low | partly: pages outside `ChatShell` don't listen (see S-4) |
+| PK-9 | n/a | closed |
+| PK-10 | low | partly: downgrade by deleting the `pk` record is undetected; no erase option when the gate fails |
+| PK-11 | n/a | closed / accepted |
+| PK-12 | low | mostly closed; `enable` accepts any onepeek.io passkey |
+| S-1 | medium | new trigger for the PK-1 residual: idle re-lock, Panic, or turning the lock on mid-commit forks the owner |
+| S-2 | low | new: idle re-lock flashes content; key kept for the whole time the tab is hidden |
+| S-3 | low | `put` recreates a key after a wipe; in-flight writes survive erase |
+| S-4 | low | unlocked key not tied to the `pk` record |
+| S-5 | low | a lock that never settles hangs every tab |
+| S-6 | low (docs) | item 16 splits item 15 in known-limitations |
+| S-7 | info | Web Locks fallback is acceptable; refuse `enable` without it |
+
+Before merge: S-1 (at least option (b), or don't call `lockNow` while room operations are in flight), the PK-3 copy fix and S-6. The rest can follow.

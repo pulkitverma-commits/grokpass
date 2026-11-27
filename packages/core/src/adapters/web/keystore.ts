@@ -424,7 +424,9 @@ export function createWebKeyStore(opts: { prf?: PrfProvider } = {}): KeyStore & 
     },
 
     lockWhenIdle() {
-      return quietly(async () => { unlockedKeys.delete(DB); });
+      // Only the key present now: if the person unlocks again while this waits, keep that one.
+      const requested = unlockedKeys.get(DB);
+      return quietly(async () => { if (requested && unlockedKeys.get(DB) === requested) unlockedKeys.delete(DB); });
     },
 
     async disable() {

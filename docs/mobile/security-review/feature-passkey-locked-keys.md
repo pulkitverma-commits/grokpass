@@ -536,3 +536,34 @@ Fix: wrap these four in `op(...)` too. They are short, and re-entrancy makes thi
 | T-4 | info | operations lock: lock order, nesting and starvation are fine |
 
 **Not merge-ready: fix T-1**, or remove "again after 10 minutes in the background" from `settings/page.tsx:114` and `known-limitations.md:115`. Then it can merge, with T-2, T-3 and the agreed lows tracked.
+
+## Fourth pass: commit 79ec2c9
+
+Reviewer: security-reviewer. Date: 2026-11-27. Read-only review of `git show 79ec2c9`. No tests or builds run.
+
+**T-1: closed.**
+- `ChatShell.tsx:72-93` keeps the timer while hidden and adds a hidden-time check on return. It uses `Date.now()`, which is wall-clock time, so suspended and sleeping pages are covered.
+- On return the check runs in the same `visibilitychange` handler as `setVeiled(false)`. When `keyLockOn.current` is true, `setLocked(true)` is set synchronously, so React renders the un-veil and the lock screen together and the chat is not shown.
+- The key is then dropped through `lockWhenIdle` once in-flight work has saved.
+
+**T-3: closed.** `ensureDevice`, `revokeDevice`, `openFile` and `markOpened` run under `op` (`client.ts:213-216, 237-240, 669-672, 1013-1016`).
+- When `ensureDevice` is called inside another operation, it only nests. `revokeDevice` → `wipe` takes the operations lock and then the keystore lock, the same order as everywhere else.
+- No new deadlock path.
+
+**New, all low, none blocking:**
+- **U-1: a pending `lockWhenIdle` can drop a key that was unlocked after it was requested** (`keystore.ts:426-428`). Scenario:
+  1. The person returns after more than 10 minutes while a chat operation is still running (a stuck RPC, as in T-2), so the re-lock is waiting.
+  2. The person unlocks with the passkey, and `unlockedKeys` is set.
+  3. The waiting `lockWhenIdle` then acquires the lock and deletes that new key.
+
+  The UI shows the chat, but every operation fails with `keystore_locked` until the next reload. This fails closed, so it is a usability bug, not a leak. Fix: capture the `unlockedKeys` entry when `lockWhenIdle` is called and delete it only if it is still that same object.
+- **U-2: `openFile` now holds the operations lock through the download** of up to 50 MB (`client.ts:681`). This lengthens the T-2 stall: while a big download runs, any waiting exclusive request blocks new chat operations in every tab. Fix: run only the claim and the `viewed` save under `op`, and download after it.
+- **U-3: `keyLockOn` is read once at mount** (`ChatShell.tsx:44, 54, 79-81`).
+  - Turned on in Settings during this visit: the re-lock on return goes through the async `status()` branch, so the chat can show for a moment before the lock screen.
+  - Turned off in this tab: after 10 minutes hidden, a passkey lock screen still appears. Unlocking works, so this is only cosmetic.
+
+  Fix: update `keyLockOn` from the Settings toggle, or broadcast to the tab's own `ChatShell`.
+
+T-2 stays a tracked low, as agreed.
+
+**Verdict: merge-ready.** All items that blocked merge are closed. Open lows to track: T-2, U-1, U-2, U-3, plus the earlier agreed lows (S-3, PK-5/PK-8 outside the chat shell, PK-10 erase on gate failure, PK-12 other-account passkey, S-7). PK-2 and PK-4 stay documented limits in known-limitations item 16.

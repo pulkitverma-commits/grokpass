@@ -27,8 +27,14 @@ export const {
   admitPending, commitRemovals, removeMember,
   send, sendScreenshotAlert, markViewed, notifyRoom, sync, markOpened, setTimer,
   safetyNumberWith, markVerified,
-  leave, burn, lock, isLocked, unlock, subscribe,
+  leave, burn, isLocked, unlock, subscribe,
 } = client;
+
+/** Panic lock: hides chats in every tab and forgets this page's passkey-unlocked key. */
+export function lock() {
+  ks.passkey.lockNow();
+  client.lock();
+}
 
 /**
  * Sends a file. It is encrypted on this device with a fresh AES-256-GCM key; only the
@@ -59,12 +65,10 @@ export async function chatsLocked() {
  * unlock (which asks for a passkey sign-in when the account has one).
  */
 export async function unlockChats() {
-  if ((await ks.passkey.status()) !== 'off') {
-    await ks.passkey.unlock();
-    webLock.clear();
-    return;
-  }
-  await unlock();
+  if ((await ks.passkey.status()) === 'off') { await unlock(); return; }
+  await ks.passkey.unlock(); // throws unless the passkey check passed and the keys opened
+  if ((await ks.passkey.status()) !== 'unlocked') throw new Error('not_unlocked');
+  webLock.clear();
 }
 
 export { ks as keystore };

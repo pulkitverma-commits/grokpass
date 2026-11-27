@@ -6,6 +6,10 @@ import { useCallback, useEffect, useState } from 'react';
 import Icon from '../components/Icon';
 import SiteFooter from '../components/SiteFooter';
 import { chatsLocked, lock, unlockChats, keystore } from '@/lib/chat/client';
+import { KEYSTORE_TAB_ID } from '@/lib/chat/keystore';
+
+/** Passkey-locked keys are forgotten after this long in the background. */
+const IDLE_RELOCK_MS = 10 * 60 * 1000;
 
 const NAV = [
   { href: '/chat', label: 'Chats' },
@@ -45,18 +49,32 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
     chatsLocked().then(async l => {
       setLocked(l);
       setKeysLocked((await keystore.passkey.status()) === 'locked');
-    }).catch(() => setLocked(false));
+    }).catch(() => setLocked(true)); // fail closed: if the lock state can't be read, show the lock screen
     let bc: BroadcastChannel | null = null;
     try {
       bc = new BroadcastChannel('onepeek-chat');
       bc.onmessage = (e) => {
-        if (e.data?.t === 'lock') setLocked(true);
-        // Another tab turned the passkey lock on or off: this tab's key is out of date.
-        if (e.data?.t === 'keystore') window.location.reload();
+        if (e.data?.t === 'lock') { keystore.passkey.lockNow(); setLocked(true); }
+        // Another tab turned the passkey lock on or off: reload to pick up the new state.
+        if (e.data?.t === 'keystore' && e.data.from !== KEYSTORE_TAB_ID) window.location.reload();
       };
     } catch { /* ignore */ }
     // Hide content when the app is backgrounded (app switcher previews, glances).
-    const vis = () => setVeiled(document.visibilityState !== 'visible');
+    // Long enough in the background and the passkey-unlocked key is dropped.
+    let hiddenAt = 0;
+    const vis = () => {
+      const hidden = document.visibilityState !== 'visible';
+      setVeiled(hidden);
+      if (hidden) { hiddenAt = Date.now(); return; }
+      if (hiddenAt && Date.now() - hiddenAt > IDLE_RELOCK_MS) {
+        keystore.passkey.status().then(st => {
+          if (st !== 'unlocked') return;
+          keystore.passkey.lockNow();
+          setKeysLocked(true);
+          setLocked(true);
+        }).catch(() => {});
+      }
+    };
     const blur = () => setVeiled(true);
     const focus = () => setVeiled(false);
     // Coming back via the back/forward cache must not show old content.
@@ -131,7 +149,7 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
               <p className="c-hint" style={{ marginTop: 18 }}>
                 Passkey gone?{' '}
                 <button className="c-link" onClick={async () => {
-                  if (!confirm('Erase the chat keys on this device? You’ll leave the chats on this browser and can’t read their messages here again. This can’t be undone.')) return;
+                  if (!confirm('Erase the chat keys on this device? You won’t be able to read these chats in this browser again. This can’t be undone. The device stays listed in your account until you sign it out from Chat Settings on another device.')) return;
                   await keystore.wipe();
                   window.location.reload();
                 }}>Erase chat keys on this device</button>

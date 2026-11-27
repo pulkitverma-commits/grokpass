@@ -77,8 +77,8 @@ describe('keystore passkey lock', () => {
     expect(await ks.passkey.status()).toBe('locked');
     await expect(ks.get('room:r1:state')).rejects.toBeInstanceOf(KeystoreLockedError);
     await expect(ks.put('room:r1:state', { s: 1 })).rejects.toBeInstanceOf(KeystoreLockedError);
-    // Missing records still read as missing, without needing the key.
-    expect(await ks.get('nope')).toBeNull();
+    // Even a missing record: a locked store must never look like an empty one.
+    await expect(ks.get('nope')).rejects.toBeInstanceOf(KeystoreLockedError);
     await ks.passkey.unlock();
     expect(auth.calls.at(-1)).toEqual({ credId: 'alice' });  // asks for the same passkey
     expect(await ks.get('room:r1:state')).toEqual({ s: new Uint8Array([1, 2, 3]) });
@@ -136,6 +136,64 @@ describe('keystore passkey lock', () => {
     await ks.put('msg:old', { b: 'x' }, Date.now() - 1);
     await ks.passkey.enable();
     expect(await ks.keys('msg:')).toEqual([]);
+  });
+
+  it('a write racing the turn-on is kept, under the new key', async () => {
+    const enabling = ks.passkey.enable();
+    const writing = ks.put('room:r1:state', { s: 'during' });
+    await Promise.all([enabling, writing]);
+    reload();
+    await ks.passkey.unlock();
+    expect(await ks.get('room:r1:state')).toEqual({ s: 'during' });
+  });
+
+  it('many writes racing the turn-on and turn-off are all kept', async () => {
+    const writes = Array.from({ length: 20 }, (_, i) => ks.put(`k${i}`, i));
+    await Promise.all([ks.passkey.enable(), ...writes]);
+    const more = Array.from({ length: 20 }, (_, i) => ks.put(`m${i}`, i));
+    await Promise.all([ks.passkey.disable(), ...more]);
+    reload();
+    for (let i = 0; i < 20; i++) {
+      expect(await ks.get(`k${i}`)).toBe(i);
+      expect(await ks.get(`m${i}`)).toBe(i);
+    }
+  });
+
+  it('a record it cannot open stops the turn-on and changes nothing', async () => {
+    // Plant a record sealed under some other key.
+    await new Promise<void>((resolve) => {
+      const req = indexedDB.open('onepeek-chat', 1);
+      req.onsuccess = () => {
+        const t = req.result.transaction('sealed', 'readwrite');
+        t.objectStore('sealed').put({ iv: new Uint8Array(12), ct: new ArrayBuffer(32) }, 'room:bad:state');
+        t.oncomplete = () => { req.result.close(); resolve(); };
+      };
+    });
+    await expect(ks.passkey.enable()).rejects.toThrow('unreadable_records');
+    expect(await ks.passkey.status()).toBe('off');
+    expect((await raw('meta')).keys).toEqual(['wrap']);
+    expect(await ks.get('room:r1:state')).toEqual({ s: new Uint8Array([1, 2, 3]) });
+  });
+
+  it('an unlock that started before the lock was turned off elsewhere fails cleanly', async () => {
+    await ks.passkey.enable();
+    reload();
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    const slow: PrfProvider = async (req) => { await gate; return fakePrf(auth)(req); };
+    const tab2 = createWebKeyStore({ prf: slow });
+    const unlocking = tab2.passkey.unlock();                  // prompt open in tab 2
+    await ks.passkey.unlock();                                 // meanwhile tab 1 unlocks...
+    await ks.passkey.disable();                                // ...and turns it off
+    release();
+    await expect(unlocking).rejects.toThrow('changed');
+  });
+
+  it('wipe and turn-on in parallel never leave old records readable', async () => {
+    await Promise.allSettled([ks.wipe(), ks.passkey.enable()]);
+    reload();
+    if (await ks.passkey.status() === 'locked') await ks.passkey.unlock();
+    expect(await ks.get('room:r1:state')).toBeNull();
   });
 
   it('wipe removes the passkey lock too', async () => {

@@ -66,6 +66,7 @@ export default function ChatSettingsPage() {
       const code = e instanceof Error ? e.message : '';
       setKeyLockMsg({ ok: false, text: code === 'cancelled' ? 'Cancelled. Nothing changed.'
         : code === 'prf_unsupported' ? 'This passkey or browser can’t lock keys (it doesn’t support the WebAuthn PRF extension). Try another passkey, or Chrome, Edge or Safari 18+. Nothing changed.'
+        : code === 'unreadable_records' ? 'Some chat data on this device can’t be opened, so nothing was changed. Reload the page and try again.'
         : 'Something went wrong. Nothing changed.' });
     } finally {
       setKeyLockBusy(false);
@@ -110,14 +111,15 @@ export default function ChatSettingsPage() {
               <div className="c-row-main">
                 <div className="c-row-title">Lock chat keys with your passkey · {keyLock === 'off' ? 'Off' : 'On'}</div>
                 <div className="c-row-meta">{keyLock === 'off'
-                  ? 'The keys that decrypt your chats on this device are opened with your passkey each time you open chat, so a copy of this browser’s data is useless without Face ID, Touch ID or your PIN.'
-                  : 'Opening chats on this device needs your passkey. If you delete that passkey, these chat keys can’t be opened again.'}</div>
+                  ? 'The keys that decrypt your chats in this browser are opened with your passkey (Face ID, Touch ID or your PIN) each time you load chat, and again after 10 minutes in the background. A copy of this browser’s data made after you turn this on can’t decrypt your messages without that passkey.'
+                  : 'Opening chats in this browser needs your passkey. If that passkey is deleted from your password manager or device, these chat keys can’t be opened again.'}</div>
               </div>
               <button className={keyLock === 'off' ? 'c-btn sm' : 'c-btn ghost sm'} disabled={keyLockBusy || (keyLock === 'off' && passkeys.length === 0)} onClick={toggleKeyLock}>
                 {keyLockBusy ? 'Waiting…' : keyLock === 'off' ? 'Turn on' : 'Turn off'}</button>
             </li>
           </ul>
           {keyLock === 'off' && passkeys.length === 0 && <p className="c-hint">Add a passkey above first.</p>}
+          <p className="c-hint">It doesn’t protect copies of this browser’s data made before you turn it on: for that, sign this device out below and start fresh with the lock on. It also doesn’t hide which chats you’re in or when messages expire. A passkey synced through iCloud or Google unlocks these keys on your other devices too.</p>
           {keyLockMsg && <p className={keyLockMsg.ok ? 'c-hint' : 'c-error'}>{keyLockMsg.text}</p>}
         </section>
       )}

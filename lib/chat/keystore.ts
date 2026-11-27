@@ -13,4 +13,4 @@ export const { get, put, del, delPrefix, keys, sweep, wipe } = keystore;
 
 /** The optional passkey lock on this browser's chat keys (see packages/core/src/adapters/web/keystore.ts). */
 export const passkeyLock = keystore.passkey;
-export { KeystoreLockedError } from '../../packages/core/src/adapters/web/keystore';
+export { KeystoreLockedError, KEYSTORE_TAB_ID } from '../../packages/core/src/adapters/web/keystore';

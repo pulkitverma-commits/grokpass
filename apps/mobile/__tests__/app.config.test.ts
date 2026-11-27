@@ -58,3 +58,14 @@ test('Firebase file override must exist; iOS does not require Android Firebase',
   expect(() => androidFirebaseFile({ GOOGLE_SERVICES_JSON: '/tmp/missing.json' }, () => false)).toThrow('missing file');
   expect(androidFirebaseFile({ EAS_BUILD_PLATFORM: 'ios', EAS_BUILD_PROFILE: 'production' }, () => false)).toBeUndefined();
 });
+
+test('Firebase helper reads the real environment when no fixture is passed', () => {
+  const previous = process.env.GOOGLE_SERVICES_JSON;
+  try {
+    process.env.GOOGLE_SERVICES_JSON = '/tmp/onepeek-fcm.json';
+    expect(androidFirebaseFile(undefined, () => true)).toBe('/tmp/onepeek-fcm.json');
+  } finally {
+    if (previous === undefined) delete process.env.GOOGLE_SERVICES_JSON;
+    else process.env.GOOGLE_SERVICES_JSON = previous;
+  }
+});

@@ -1,0 +1,160 @@
+import 'fake-indexeddb/auto';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { createWebKeyStore, KeystoreLockedError, type PrfProvider } from './keystore';
+
+// A simulated authenticator. Each passkey has a secret; PRF(salt) = SHA-256(secret || salt), so the
+// same passkey and salt always give the same 32 bytes and a different passkey gives different ones.
+type FakeAuthenticator = { chosen: string; mode: 'ok' | 'cancel' | 'no-prf'; calls: { credId?: string }[] };
+const secrets: Record<string, Uint8Array> = { alice: new Uint8Array(32).fill(1), other: new Uint8Array(32).fill(2) };
+const idOf = (name: string) => new TextEncoder().encode('cred-' + name);
+const nameOf = (id: Uint8Array) => new TextDecoder().decode(id).replace(/^cred-/, '');
+
+function fakePrf(a: FakeAuthenticator): PrfProvider {
+  return async ({ credId, salt }) => {
+    a.calls.push({ credId: credId ? nameOf(credId) : undefined });
+    if (a.mode === 'cancel') return null;
+    // With allowCredentials the browser only offers that passkey; without, the person picks one.
+    const name = credId ? nameOf(credId) : a.chosen;
+    if (a.mode === 'no-prf') return { credId: idOf(name), output: null };
+    const secret = secrets[name];
+    const buf = new Uint8Array(secret.length + salt.length);
+    buf.set(secret); buf.set(salt, secret.length);
+    return { credId: idOf(name), output: new Uint8Array(await crypto.subtle.digest('SHA-256', buf)) };
+  };
+}
+
+async function raw(store: 'meta' | 'sealed'): Promise<{ keys: string[]; values: any[] }> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('onepeek-chat', 1);
+    req.onsuccess = () => {
+      const s = req.result.transaction(store, 'readonly').objectStore(store);
+      const k = s.getAllKeys();
+      const v = s.getAll();
+      v.onsuccess = () => { resolve({ keys: (k.result as IDBValidKey[]).map(String), values: v.result }); req.result.close(); };
+      v.onerror = () => reject(v.error);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+let auth: FakeAuthenticator;
+let ks: ReturnType<typeof createWebKeyStore>;
+
+/** A new page load: a fresh store instance with nothing unlocked in memory. */
+function reload() {
+  ks.passkey.lockNow();
+  ks = createWebKeyStore({ prf: fakePrf(auth) });
+}
+
+describe('keystore passkey lock', () => {
+  beforeEach(async () => {
+    auth = { chosen: 'alice', mode: 'ok', calls: [] };
+    ks = createWebKeyStore({ prf: fakePrf(auth) });
+    await ks.wipe();
+    await ks.put('device:u1', { id: 'dev-1', signing: new Uint8Array([9, 9]) });
+    await ks.put('room:r1:state', { s: new Uint8Array([1, 2, 3]) });
+  });
+
+  it('is off by default and works exactly as before', async () => {
+    expect(await ks.passkey.status()).toBe('off');
+    expect(await ks.get('room:r1:state')).toEqual({ s: new Uint8Array([1, 2, 3]) });
+    expect(auth.calls).toHaveLength(0);
+  });
+
+  it('turning it on keeps every record readable and removes the device key', async () => {
+    await ks.passkey.enable();
+    expect(await ks.passkey.status()).toBe('unlocked');
+    expect(await ks.get('device:u1')).toEqual({ id: 'dev-1', signing: new Uint8Array([9, 9]) });
+    expect(await ks.get('room:r1:state')).toEqual({ s: new Uint8Array([1, 2, 3]) });
+    const meta = await raw('meta');
+    expect(meta.keys).toEqual(['pk']);                       // no usable 'wrap' key left on disk
+    expect(meta.values[0].wrapped).toBeInstanceOf(ArrayBuffer);
+  });
+
+  it('after a reload nothing can be read or written until the passkey unlocks it', async () => {
+    await ks.passkey.enable();
+    reload();
+    expect(await ks.passkey.status()).toBe('locked');
+    await expect(ks.get('room:r1:state')).rejects.toBeInstanceOf(KeystoreLockedError);
+    await expect(ks.put('room:r1:state', { s: 1 })).rejects.toBeInstanceOf(KeystoreLockedError);
+    // Missing records still read as missing, without needing the key.
+    expect(await ks.get('nope')).toBeNull();
+    await ks.passkey.unlock();
+    expect(auth.calls.at(-1)).toEqual({ credId: 'alice' });  // asks for the same passkey
+    expect(await ks.get('room:r1:state')).toEqual({ s: new Uint8Array([1, 2, 3]) });
+  });
+
+  it('a different passkey cannot unlock it', async () => {
+    await ks.passkey.enable();
+    reload();
+    // Simulate an authenticator answering for another credential with the requested id.
+    ks = createWebKeyStore({ prf: async ({ salt }) => ({ credId: idOf('alice'), output: new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array([...secrets.other, ...salt]))) }) });
+    await expect(ks.passkey.unlock()).rejects.toThrow('wrong_passkey');
+    expect(await ks.passkey.status()).toBe('locked');
+  });
+
+  it('records on disk cannot be opened with anything left on disk', async () => {
+    await ks.passkey.enable();
+    const meta = (await raw('meta')).values[0];
+    const sealed = await raw('sealed');
+    // Everything stored is ciphertext or public parameters; there is no CryptoKey object any more.
+    for (const v of [...(await raw('meta')).values, ...sealed.values]) expect(v).not.toBeInstanceOf(CryptoKey);
+    expect(meta.salt).toHaveLength(32);
+  });
+
+  it('cancelling or an authenticator without PRF changes nothing', async () => {
+    auth.mode = 'cancel';
+    await expect(ks.passkey.enable()).rejects.toThrow('cancelled');
+    auth.mode = 'no-prf';
+    await expect(ks.passkey.enable()).rejects.toThrow('prf_unsupported');
+    expect(await ks.passkey.status()).toBe('off');
+    expect((await raw('meta')).keys).toEqual(['wrap']);
+    expect(await ks.get('room:r1:state')).toEqual({ s: new Uint8Array([1, 2, 3]) });
+  });
+
+  it('turning it off restores a device key and keeps the records', async () => {
+    await ks.passkey.enable();
+    reload();
+    await expect(ks.passkey.disable()).rejects.toBeInstanceOf(KeystoreLockedError);
+    await ks.passkey.unlock();
+    await ks.passkey.disable();
+    expect(await ks.passkey.status()).toBe('off');
+    reload();
+    expect(await ks.get('room:r1:state')).toEqual({ s: new Uint8Array([1, 2, 3]) });
+    expect((await raw('meta')).keys).toEqual(['wrap']);
+  });
+
+  it('new writes while unlocked survive a reload and unlock', async () => {
+    await ks.passkey.enable();
+    await ks.put('room:r2:state', { s: 'new' });
+    reload();
+    await ks.passkey.unlock();
+    expect(await ks.get('room:r2:state')).toEqual({ s: 'new' });
+  });
+
+  it('expired records are dropped when turning it on', async () => {
+    await ks.put('msg:old', { b: 'x' }, Date.now() - 1);
+    await ks.passkey.enable();
+    expect(await ks.keys('msg:')).toEqual([]);
+  });
+
+  it('wipe removes the passkey lock too', async () => {
+    await ks.passkey.enable();
+    await ks.wipe();
+    expect(await ks.passkey.status()).toBe('off');
+    expect((await raw('meta')).keys).toEqual([]);
+    await ks.put('x', 1);
+    expect(await ks.get('x')).toBe(1);
+  });
+
+  it('a second instance in the same page stops using the old device key once the lock is on', async () => {
+    const other = createWebKeyStore({ prf: fakePrf(auth) });
+    await other.put('a', 1);                                  // caches the device key
+    await ks.passkey.enable();
+    await other.put('b', 2);                                  // must use the passkey data key now
+    reload();
+    await ks.passkey.unlock();
+    expect(await ks.get('a')).toBe(1);
+    expect(await ks.get('b')).toBe(2);
+  });
+});

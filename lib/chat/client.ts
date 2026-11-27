@@ -9,7 +9,7 @@
 
 import { supabase } from '../supabase';
 import { createChatClient, type LocalMessage } from '../../packages/core/src/chat/client';
-import { createWebPlatform, fileSource, toBlob } from '../../packages/core/src/adapters/web/platform';
+import { createWebPlatform, fileSource, toBlob, webLock } from '../../packages/core/src/adapters/web/platform';
 import { keystore as ks } from './keystore';
 
 export { ChatError, toBytea, fromBytea, keyChanged, MAX_ATTACHMENT_BYTES, SYNC_PAGE_SIZE, SYNC_MAX_PAGES, RESUBSCRIBE_DELAYS_MS } from '../../packages/core/src/chat/client';
@@ -46,6 +46,25 @@ export function sendFile(roomId: string, file: File, ttl: number, viewOnce: bool
  */
 export async function openFile(roomId: string, m: LocalMessage): Promise<Blob> {
   return toBlob(await client.openFile(roomId, m));
+}
+
+/** True while chats are hidden: Panic-locked, or passkey-locked and not yet unlocked in this page. */
+export async function chatsLocked() {
+  return isLocked() || (await ks.passkey.status()) === 'locked';
+}
+
+/**
+ * Unlocks chats with one check. With the passkey lock on, unlocking the keys already needs the
+ * passkey (Face ID / Touch ID / PIN), so that also clears a Panic lock; otherwise it's the usual
+ * unlock (which asks for a passkey sign-in when the account has one).
+ */
+export async function unlockChats() {
+  if ((await ks.passkey.status()) !== 'off') {
+    await ks.passkey.unlock();
+    webLock.clear();
+    return;
+  }
+  await unlock();
 }
 
 export { ks as keystore };

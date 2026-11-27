@@ -28,7 +28,7 @@ export default function DashboardChat() {
   useEffect(() => {
     let alive = true;
     loadChat().then(async chat => {
-      if (chat.isLocked()) { if (alive) { setLocked(true); setRooms([]); } return; }
+      if (await chat.chatsLocked()) { if (alive) { setLocked(true); setRooms([]); } return; }
       const list = await chat.myRooms();
       if (alive) setRooms(list.filter(r => new Date(r.expiresAt).getTime() > Date.now()));
     }).catch(() => { if (alive) setRooms([]); });

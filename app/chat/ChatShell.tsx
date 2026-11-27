@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import Icon from '../components/Icon';
 import SiteFooter from '../components/SiteFooter';
-import { isLocked, lock, unlock } from '@/lib/chat/client';
+import { chatsLocked, lock, unlockChats, keystore } from '@/lib/chat/client';
 
 const NAV = [
   { href: '/chat', label: 'Chats' },
@@ -33,18 +33,27 @@ export function panicExit() {
 
 export default function ChatShell({ children }: { children: React.ReactNode }) {
   const path = usePathname() || '/chat';
-  const [locked, setLocked] = useState(false);
+  // null while checking: nothing renders until we know whether the chat keys are usable.
+  const [locked, setLocked] = useState<boolean | null>(null);
+  const [keysLocked, setKeysLocked] = useState(false);
   const [veiled, setVeiled] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [err, setErr] = useState('');
   const inConvo = path.startsWith('/chat/r/');
 
   useEffect(() => {
-    setLocked(isLocked());
+    chatsLocked().then(async l => {
+      setLocked(l);
+      setKeysLocked((await keystore.passkey.status()) === 'locked');
+    }).catch(() => setLocked(false));
     let bc: BroadcastChannel | null = null;
     try {
       bc = new BroadcastChannel('onepeek-chat');
-      bc.onmessage = (e) => { if (e.data?.t === 'lock') setLocked(true); };
+      bc.onmessage = (e) => {
+        if (e.data?.t === 'lock') setLocked(true);
+        // Another tab turned the passkey lock on or off: this tab's key is out of date.
+        if (e.data?.t === 'keystore') window.location.reload();
+      };
     } catch { /* ignore */ }
     // Hide content when the app is backgrounded (app switcher previews, glances).
     const vis = () => setVeiled(document.visibilityState !== 'visible');
@@ -95,21 +104,39 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
   const doUnlock = useCallback(async () => {
     setErr('');
     setUnlocking(true);
-    try { await unlock(); setLocked(false); }
-    catch { setErr('Couldn’t verify it’s you. Try again.'); }
+    try { await unlockChats(); setLocked(false); setKeysLocked(false); }
+    catch (e) {
+      const code = e instanceof Error ? e.message : '';
+      setErr(code === 'cancelled' ? 'Unlock was cancelled.'
+        : code === 'wrong_passkey' ? 'That passkey doesn’t unlock the chats on this device. Use the one you turned the lock on with.'
+        : code === 'prf_unsupported' ? 'This passkey can’t unlock chats in this browser.'
+        : 'Couldn’t verify it’s you. Try again.');
+    }
     finally { setUnlocking(false); }
   }, []);
 
   return (
     <div className={`chat${veiled ? ' c-veiled' : ''}`}>
-      {locked ? (
+      {locked === null ? null : locked ? (
         <div className="c-lock" role="dialog" aria-label="Chats locked">
           <div>
             <Icon name="lock" size={34} />
             <h1 className="c-h1">Chats locked</h1>
-            <p>Unlock to see your conversations on this device.</p>
-            <button className="c-btn" onClick={doUnlock} disabled={unlocking}>{unlocking ? 'Checking…' : 'Unlock'}</button>
+            <p>{keysLocked
+              ? 'Your chat keys on this device are locked with your passkey. Use Face ID, Touch ID or your device PIN to open them.'
+              : 'Unlock to see your conversations on this device.'}</p>
+            <button className="c-btn" onClick={doUnlock} disabled={unlocking}>{unlocking ? 'Checking…' : keysLocked ? 'Unlock with passkey' : 'Unlock'}</button>
             {err && <p className="c-error">{err}</p>}
+            {keysLocked && (
+              <p className="c-hint" style={{ marginTop: 18 }}>
+                Passkey gone?{' '}
+                <button className="c-link" onClick={async () => {
+                  if (!confirm('Erase the chat keys on this device? You’ll leave the chats on this browser and can’t read their messages here again. This can’t be undone.')) return;
+                  await keystore.wipe();
+                  window.location.reload();
+                }}>Erase chat keys on this device</button>
+              </p>
+            )}
           </div>
         </div>
       ) : (

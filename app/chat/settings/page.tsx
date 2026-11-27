@@ -19,6 +19,9 @@ export default function ChatSettingsPage() {
   const [thisDevice, setThisDevice] = useState('');
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [keyLock, setKeyLock] = useState<'off' | 'locked' | 'unlocked'>('off');
+  const [keyLockBusy, setKeyLockBusy] = useState(false);
+  const [keyLockMsg, setKeyLockMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const load = useCallback(async () => {
     const s = await chat.ensureSession(false).catch(() => null);
@@ -28,6 +31,7 @@ export default function ChatSettingsPage() {
       const { data } = await supabase.auth.passkey.list();
       setPasskeys((data as Passkey[]) ?? []);
     }
+    setKeyLock(await chat.keystore.passkey.status());
     setDevices(await chat.listDevices().catch(() => []));
     const d = await chat.keystore.get<{ id: string }>(`device:${s.user.id}`);
     setThisDevice(d?.id ?? '');
@@ -44,6 +48,29 @@ export default function ChatSettingsPage() {
     const { error } = await supabase.auth.registerPasskey();
     if (error) setMsg({ ok: false, text: /exists/i.test(error.message) ? 'This device already has a passkey for your account.' : 'The passkey wasn’t saved. Try again.' });
     else { setMsg({ ok: true, text: 'Passkey added. You can now sign in with Face ID, Touch ID or your device PIN.' }); load(); }
+  }
+
+  async function toggleKeyLock() {
+    setKeyLockMsg(null);
+    if (keyLock !== 'off' && !confirm('Turn off the passkey lock? Your chat keys go back to being protected by this browser only.')) return;
+    setKeyLockBusy(true);
+    try {
+      if (keyLock === 'off') {
+        await chat.keystore.passkey.enable();
+        setKeyLockMsg({ ok: true, text: 'Done. From now on, opening chats on this device needs your passkey.' });
+      } else {
+        await chat.keystore.passkey.disable();
+        setKeyLockMsg({ ok: true, text: 'Passkey lock turned off on this device.' });
+      }
+    } catch (e) {
+      const code = e instanceof Error ? e.message : '';
+      setKeyLockMsg({ ok: false, text: code === 'cancelled' ? 'Cancelled. Nothing changed.'
+        : code === 'prf_unsupported' ? 'This passkey or browser can’t lock keys (it doesn’t support the WebAuthn PRF extension). Try another passkey, or Chrome, Edge or Safari 18+. Nothing changed.'
+        : 'Something went wrong. Nothing changed.' });
+    } finally {
+      setKeyLockBusy(false);
+      setKeyLock(await chat.keystore.passkey.status());
+    }
   }
 
   if (user === undefined) return <p className="c-empty">Loading…</p>;
@@ -71,6 +98,27 @@ export default function ChatSettingsPage() {
           </ul>
           {msg && <p className={msg.ok ? 'c-hint' : 'c-error'}>{msg.text}</p>}
           <p className="c-hint">Passkeys prove it’s you to OnePeek. They’re separate from the keys that encrypt your messages, which never leave this device.</p>
+        </section>
+      )}
+
+      {!user.is_anonymous && (
+        <section className="c-section">
+          <p className="c-label">Passkey lock</p>
+          <ul className="c-card c-list">
+            <li className="c-row">
+              <div className="c-avatar"><Icon name="key" size={16} /></div>
+              <div className="c-row-main">
+                <div className="c-row-title">Lock chat keys with your passkey · {keyLock === 'off' ? 'Off' : 'On'}</div>
+                <div className="c-row-meta">{keyLock === 'off'
+                  ? 'The keys that decrypt your chats on this device are opened with your passkey each time you open chat, so a copy of this browser’s data is useless without Face ID, Touch ID or your PIN.'
+                  : 'Opening chats on this device needs your passkey. If you delete that passkey, these chat keys can’t be opened again.'}</div>
+              </div>
+              <button className={keyLock === 'off' ? 'c-btn sm' : 'c-btn ghost sm'} disabled={keyLockBusy || (keyLock === 'off' && passkeys.length === 0)} onClick={toggleKeyLock}>
+                {keyLockBusy ? 'Waiting…' : keyLock === 'off' ? 'Turn on' : 'Turn off'}</button>
+            </li>
+          </ul>
+          {keyLock === 'off' && passkeys.length === 0 && <p className="c-hint">Add a passkey above first.</p>}
+          {keyLockMsg && <p className={keyLockMsg.ok ? 'c-hint' : 'c-error'}>{keyLockMsg.text}</p>}
         </section>
       )}
 

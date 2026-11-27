@@ -2,7 +2,7 @@
 // EAS profile alone and fails closed everywhere else (security review W2-6 / W3-2). The config is a
 // function of the environment, so each case sets the two variables and evaluates it afresh.
 import type { ConfigContext } from 'expo/config';
-import appConfig from '../app.config';
+import appConfig, { androidFirebaseFile } from '../app.config';
 
 const ENV = ['EXPO_PUBLIC_E2E', 'EAS_BUILD_PROFILE'] as const;
 const saved: Partial<Record<(typeof ENV)[number], string | undefined>> = {};
@@ -42,4 +42,19 @@ test('EXPO_PUBLIC_E2E=1 on the preview or production profile refuses to evaluate
   expect(() => evaluate({ EXPO_PUBLIC_E2E: '1', EAS_BUILD_PROFILE: 'preview' })).toThrow('not allowed for the "preview" build profile');
   // Without the flag those profiles evaluate, masked.
   expect(evaluate({ EAS_BUILD_PROFILE: 'production' }).extra?.e2e).toBe(false);
+});
+
+test('Android local build can omit Firebase configuration', () => {
+  expect(androidFirebaseFile({}, () => false)).toBeUndefined();
+  expect(androidFirebaseFile({}, () => true)).toBe('./google-services.json');
+});
+test('Android distribution fails closed without Firebase', () => {
+  for (const profile of ['preview', 'production']) {
+    expect(() => androidFirebaseFile({ EAS_BUILD_PLATFORM: 'android', EAS_BUILD_PROFILE: profile }, () => false)).toThrow('Android distribution requires');
+  }
+});
+test('Firebase file override must exist; iOS does not require Android Firebase', () => {
+  expect(androidFirebaseFile({ GOOGLE_SERVICES_JSON: '/tmp/fcm.json' }, () => true)).toBe('/tmp/fcm.json');
+  expect(() => androidFirebaseFile({ GOOGLE_SERVICES_JSON: '/tmp/missing.json' }, () => false)).toThrow('missing file');
+  expect(androidFirebaseFile({ EAS_BUILD_PLATFORM: 'ios', EAS_BUILD_PROFILE: 'production' }, () => false)).toBeUndefined();
 });

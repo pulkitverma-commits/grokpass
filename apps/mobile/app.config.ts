@@ -1,8 +1,33 @@
 // OnePeek mobile app config (owned by the lead). Native behaviour is configured here and through
 // config plugins only; ios/ and android/ are generated (CNG) and never edited by hand.
 import type { ConfigContext, ExpoConfig } from 'expo/config';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 const BUNDLE_ID = 'io.onepeek.app';
+
+// Android local/CI builds may omit FCM; Android distribution builds must have it.
+// The EAS file variable contains a path, never the server-side service account.
+export function androidFirebaseFile(
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (path: string) => boolean = existsSync,
+): string | undefined {
+  const supplied = env.GOOGLE_SERVICES_JSON?.trim();
+  const local = './google-services.json';
+  const candidate = supplied || local;
+  // Resolve the local fallback relative to app.config.ts, not the monorepo cwd.
+  const present = exists(resolve(__dirname, candidate));
+  if (present) return candidate;
+  const distributed = env.EAS_BUILD_PLATFORM === 'android' &&
+    ['preview', 'production'].includes(env.EAS_BUILD_PROFILE ?? '');
+  if (distributed) {
+    throw new Error('Android distribution requires GOOGLE_SERVICES_JSON (EAS file variable).');
+  }
+  if (supplied) {
+    throw new Error('GOOGLE_SERVICES_JSON points to a missing file.');
+  }
+  return undefined;
+}
 
 // `extra.e2e` makes the invite sheet render the full invite link (a bearer token) so Maestro can read
 // it. It is true only when EAS Build runs the `e2e` profile (`EAS_BUILD_PROFILE=e2e`): fail closed
@@ -55,7 +80,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     // No backups of app data: keys and message copies stay on this device only.
     // FCM client config is a secret file supplied by EAS (file-type env var); see docs/mobile/release/fcm-client-config.md.
-    googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? './google-services.json',
+    googleServicesFile: androidFirebaseFile(),
     allowBackup: false,
     predictiveBackGestureEnabled: false,
     intentFilters: [

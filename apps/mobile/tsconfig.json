@@ -2,7 +2,7 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
-    "types": ["jest", "react", "react-native"],
+    "types": ["jest", "react", "react-native", "node"],
     "paths": {
       "@/*": ["./*"],
       "@onepeek/core": ["../../packages/core/src/index.ts"],

@@ -438,3 +438,101 @@ No nested-lock deadlock found. No locked section calls `withLock`, and `put` tak
 | S-7 | info | Web Locks fallback is acceptable; refuse `enable` without it |
 
 Before merge: S-1 (at least option (b), or don't call `lockNow` while room operations are in flight), the PK-3 copy fix and S-6. The rest can follow.
+
+## Third pass: commit 734d0bf
+
+Reviewer: security-reviewer. Date: 2026-11-27. Read-only review of `git show 734d0bf`. No tests or builds run. Line numbers are at 734d0bf.
+
+### Verdict
+
+The three items required before merge (S-1, PK-3, S-6) are closed. S-4 and S-5 are closed. The new operations lock is sound: the two locks are always taken in the same order, the per-page reference count makes nesting safe, and nothing waits for itself.
+
+One new issue blocks merge: **T-1**. The idle re-lock now relies only on a timer while the tab is hidden, and drops the check on return. That timer doesn't fire on suspended pages, which includes mobile web and a laptop asleep with the tab in the background. The Settings text and limitation item 16 promise "again after 10 minutes in the background". The fix is a few lines. **Not merge-ready until T-1 is fixed, or the promise is removed from the copy and from item 16.** Everything else below is low.
+
+### Status
+
+| ID | Status | Notes |
+|---|---|---|
+| S-1 | **closed** (low residual, T-3) | `withRoomLock` runs every room-locked function under `op` (`client.ts:248-251`), and so do `createRoom` (`300-301`) and `redeemInvite` (`400-401`). On the web, `op` = `chatOperation`, which holds the operations lock shared (`keystore.ts:156-183`). `enable`/`disable` (`quietly` + exclusive, `375-394`, `430-446`) and `lockWhenIdle` (`426-428`) wait for in-flight operations in every tab. The Panic broadcast (`ChatShell.tsx:57`) and the idle re-lock (`ChatShell.tsx:72-79`) both use `lockWhenIdle`. The lock can no longer flip between "server has the commit" and "state saved" for these paths. |
+| PK-3 | **closed** | `settings/page.tsx:114, 122` now say "from now on", name leftover storage files and backups, the "start fresh" route, the sign-in that stays signed in, metadata and synced passkeys. |
+| S-6 | **closed** | Item 16 now follows the whole of item 15 (`known-limitations.md:113`). |
+| S-2 | **partly: regression, see T-1** | The flash of content on return is gone when the timer has fired. The key is no longer kept while hidden, but only if the timer fires. |
+| S-4 | **closed** | The unlocked key is stored with its lock record's salt. `currentKey`, `status` and `disable` accept it only if it matches the lock record now on disk (`keystore.ts:195-208, 364-368, 434`). The test covers a replaced record. |
+| S-5 | **closed** (note) | `readMeta`/`allSealed` reject on abort, and `open()` rejects on `blocked` (`keystore.ts:70, 116, 133`). Note: `blocked` is not final in IndexedDB. If the open later succeeds, that connection is never closed and can block a future `deleteDatabase` or upgrade. That cannot happen while the version stays fixed at 1. |
+| S-3, PK-5/PK-8 (pages outside the shell), PK-10 (gate failure), PK-12 (other-account passkey), S-7 | left as lows by decision | No change, agreed. |
+
+### New findings
+
+#### T-1 (medium, blocks merge): the idle re-lock never fires on suspended pages, and returning to the tab cancels it
+
+Code: `app/chat/ChatShell.tsx:65-80`.
+
+The re-lock is now only `setTimeout(…, IDLE_RELOCK_MS)` started when the tab becomes hidden, and `vis()` clears that timer as soon as the tab becomes visible (line 69). The b2177fa check of the hidden time on return was removed.
+
+Timers don't run, or don't advance, in several common cases:
+- iOS Safari and Home Screen web apps suspend background pages;
+- Chrome on Android freezes background tabs;
+- on macOS, the clock timers use doesn't advance while the machine sleeps.
+
+In these cases the timer is still pending when the page comes back. If the `visible` event runs before the overdue timer callback, `vis()` cancels it. The order between the two is not defined, so this is likely, not certain.
+
+Failure scenario: chat is open in a tab. The person switches tabs, closes the laptop overnight (or backgrounds the phone for an hour), and comes back. The key never left memory, and the conversation is shown again with no passkey prompt. That contradicts `settings/page.tsx:114` ("again after 10 minutes in the background") and `known-limitations.md:115`.
+
+Fix: keep the timer and restore the check on return.
+1. Record `hiddenAt` when hidden.
+2. On `visible`, if `Date.now() - hiddenAt > IDLE_RELOCK_MS` and the status is `unlocked`, keep `veiled` true (and ignore the `focus` unveil). Call `setLocked(true)` at once, then `lockWhenIdle()`, then `setKeysLocked(true)`.
+
+`Date.now()` is wall-clock time, so it counts time asleep. Add a test with fake timers in which the hidden time passes but the timer never fires.
+
+#### T-2 (low): waiting for "idle" can stall chat in every tab and drop the key mid-use
+
+Code: `keystore.ts:156-191`; `ChatShell.tsx:72-79`.
+
+Web Locks queue a new shared request behind a waiting exclusive one. While one tab's `lockWhenIdle`/`enable`/`disable` waits for a long operation in any tab (for example an RPC stuck on a bad network; supabase-js has no default timeout), every tab with no operation running queues its next send or sync. Those tabs then appear frozen, with no error, until the long operation ends.
+
+Separately: if the re-lock timer has already fired and is waiting when the person returns, `vis()` cannot cancel it. The key is then dropped, and the lock screen appears, while the person is using the tab.
+
+Fix:
+- Give the waits a limit: `locks.request(OPS_LOCK, { mode: 'exclusive', signal: AbortSignal.timeout(…) })` for `lockWhenIdle`, retrying later.
+- In the timer callback, skip the re-lock if the tab became visible again.
+- Consider a timeout on chat RPCs.
+
+#### T-3 (low): some server-then-save paths are still outside `op`
+
+Code (`client.ts`):
+- `openFile` (`661-673`): `chat_claim_attachment`, then `storeMessage({viewed:true})`;
+- `markOpened` (`1001-1008`);
+- device registration in `ensureDevice` (`213-227`) when called directly: from `sync` (`740`), the room page, or Settings;
+- `revokeDevice` (`233-238`): the RPC, then `ks.get`, then `wipe`.
+
+If the key is dropped between the RPC and the save (Panic elsewhere waits only for operations, not for these):
+- a view-once file is used up and never shown, because `storeMessage` throws before the download;
+- an opened message's expiry is not stored;
+- a device is registered on the server but not saved locally;
+- a revoked device's local keys are not erased.
+
+Fix: wrap these four in `op(...)` too. They are short, and re-entrancy makes this safe.
+
+#### T-4 (info): the operations lock design is sound
+
+- **Lock order.** Every path takes the operations lock before the keystore lock: operations then `get`/`put`/`ensureDeviceKey`; `enable`/`disable` via `quietly` and then `withLock`. `wipe` takes only the keystore lock, and `unlock` takes only the keystore lock in shared mode. Neither ever waits for the operations lock while holding the keystore lock, so the two locks cannot deadlock each other.
+- **Nesting.** A nested `chatOperation` (`createRoom` → `withRoomLock`) only increments the count and awaits the already-acquired `opsHeld`, so it never queues behind a waiting exclusive. That holds as long as nested calls run inside the outer one's lifetime, which the `await` structure guarantees. After the count drops to 0, a new operation makes a fresh request and correctly queues behind any waiting exclusive.
+- **Self-wait.** Nothing calls `enable`, `disable` or `lockWhenIdle` from inside an operation, so no page waits for itself. Keep this rule documented on `ChatPlatform.operation` (`ports.ts:129-135`): an operation must never wait for anything that waits for an exclusive operations lock.
+- **Starvation.** A page that is constantly busy delays re-locking until it goes quiet. This is documented and acceptable.
+- **The `operation` hook is optional** (`ports.ts:135`). Mobile adapters that omit it get the old behaviour, which is correct, because they have no passkey lock.
+
+### Third-pass summary
+
+| ID | Severity | Status |
+|---|---|---|
+| S-1 | n/a | closed (residual T-3, low) |
+| PK-3 | n/a | closed |
+| S-6 | n/a | closed |
+| S-4 | n/a | closed |
+| S-5 | n/a | closed (`onblocked` note) |
+| S-2 / T-1 | **medium, blocks merge** | the idle re-lock doesn't fire on suspended or sleeping pages; returning cancels it |
+| T-2 | low | a waiting exclusive lock stalls other tabs; the re-lock can drop the key mid-use |
+| T-3 | low | `openFile`, `markOpened`, direct `ensureDevice`, `revokeDevice` outside `op` |
+| T-4 | info | operations lock: lock order, nesting and starvation are fine |
+
+**Not merge-ready: fix T-1**, or remove "again after 10 minutes in the background" from `settings/page.tsx:114` and `known-limitations.md:115`. Then it can merge, with T-2, T-3 and the agreed lows tracked.

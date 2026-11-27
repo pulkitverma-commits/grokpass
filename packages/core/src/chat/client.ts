@@ -210,7 +210,11 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
   let deviceCache: DeviceRecord | null = null;
 
   /** This device's chat identity for the current user, registering one on first use. */
-  async function ensureDevice(): Promise<DeviceRecord> {
+  /** Writes to the server, then saves locally: one platform operation. */
+  function ensureDevice(): Promise<DeviceRecord> {
+    return op(() => ensureDeviceUnwrapped());
+  }
+  async function ensureDeviceUnwrapped(): Promise<DeviceRecord> {
     const session = await ensureSession(false);
     if (!session) throw new ChatError('not_signed_in');
     if (deviceCache && deviceCache.userId === session.user.id) return deviceCache;
@@ -230,7 +234,11 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
     return rpc<{ id: string; label: string; created_at: string; last_seen: string; revoked_at: string | null }[]>('chat_list_devices', {});
   }
 
-  async function revokeDevice(id: string) {
+  /** Writes to the server, then saves locally: one platform operation. */
+  function revokeDevice(id: string) {
+    return op(() => revokeDeviceUnwrapped(id));
+  }
+  async function revokeDeviceUnwrapped(id: string) {
     await rpc('chat_revoke_device', { p_device: id });
     const session = await ensureSession(false);
     const mine = session ? await ks.get<DeviceRecord>(`device:${session.user.id}`) : null;
@@ -658,7 +666,11 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
    * first: the server then allows a short download window and revokes it for good.
    * The sender can't open their own view-once file (that would use up the one view).
    */
-  async function openFile(roomId: string, m: LocalMessage): Promise<OpenedFile> {
+  /** Writes to the server, then saves locally: one platform operation. */
+  function openFile(roomId: string, m: LocalMessage): Promise<OpenedFile> {
+    return op(() => openFileUnwrapped(roomId, m));
+  }
+  async function openFileUnwrapped(roomId: string, m: LocalMessage): Promise<OpenedFile> {
     const f = m.file;
     if (!f) throw new ChatError('not_a_file');
     if (f.viewOnce && m.mine) throw new ChatError('view_once_sent');
@@ -998,7 +1010,11 @@ export function createChatClient<S extends SupabaseSession = SupabaseSession>(pl
   }
 
   /** Starts the recipient-side countdown. The server decides the expiry; we adopt it. */
-  async function markOpened(roomId: string, m: LocalMessage) {
+  /** Writes to the server, then saves locally: one platform operation. */
+  function markOpened(roomId: string, m: LocalMessage) {
+    return op(() => markOpenedUnwrapped(roomId, m));
+  }
+  async function markOpenedUnwrapped(roomId: string, m: LocalMessage) {
     if (m.mine || m.expiresAt) return m;
     const dev = await ensureDevice();
     const at = await rpc<string | null>('chat_mark_opened', { p_message: m.id, p_device: dev.id });

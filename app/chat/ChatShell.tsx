@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Icon from '../components/Icon';
 import SiteFooter from '../components/SiteFooter';
 import { chatsLocked, lock, unlockChats, keystore } from '@/lib/chat/client';
@@ -40,6 +40,8 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
   // null while checking: nothing renders until we know whether the chat keys are usable.
   const [locked, setLocked] = useState<boolean | null>(null);
   const [keysLocked, setKeysLocked] = useState(false);
+  // Whether the passkey lock is on, known synchronously for the re-lock on return.
+  const keyLockOn = useRef(false);
   const [veiled, setVeiled] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [err, setErr] = useState('');
@@ -48,7 +50,9 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     chatsLocked().then(async l => {
       setLocked(l);
-      setKeysLocked((await keystore.passkey.status()) === 'locked');
+      const st = await keystore.passkey.status();
+      keyLockOn.current = st !== 'off';
+      setKeysLocked(st === 'locked');
     }).catch(() => setLocked(true)); // fail closed: if the lock state can't be read, show the lock screen
     let bc: BroadcastChannel | null = null;
     try {
@@ -60,23 +64,33 @@ export default function ChatShell({ children }: { children: React.ReactNode }) {
       };
     } catch { /* ignore */ }
     // Hide content when the app is backgrounded (app switcher previews, glances).
-    // Long enough in the background and the passkey-unlocked key is dropped while still hidden
-    // (once any chat operation in progress has saved), so it isn't in memory meanwhile and the
-    // lock screen is already up on return.
+    // Long enough in the background and the passkey-unlocked key is dropped. Two ways, because
+    // timers don't run in suspended or sleeping pages (iOS Safari, Android, a closed laptop):
+    // a timer while hidden, and a check of the hidden time on return that puts the lock screen up
+    // before anything else renders.
     let relock: ReturnType<typeof setTimeout> | undefined;
+    let hiddenAt = 0;
+    const relockKeys = () => {
+      const lockUp = () => {
+        setKeysLocked(true);
+        setLocked(true); // in the same render as the un-veil, so the chat never shows
+        keystore.passkey.lockWhenIdle().catch(() => {}); // drops the key once in-flight work saved
+      };
+      if (keyLockOn.current) { lockUp(); return; }
+      // Turned on during this visit (Settings): find out, then lock.
+      keystore.passkey.status().then(st => { if (st !== 'off') { keyLockOn.current = true; lockUp(); } }).catch(() => {});
+    };
     const vis = () => {
       const hidden = document.visibilityState !== 'visible';
       setVeiled(hidden);
       if (relock) { clearTimeout(relock); relock = undefined; }
-      if (!hidden) return;
-      relock = setTimeout(async () => {
-        try {
-          if ((await keystore.passkey.status()) !== 'unlocked') return;
-          await keystore.passkey.lockWhenIdle();
-          setKeysLocked(true);
-          setLocked(true);
-        } catch { /* ignore */ }
-      }, IDLE_RELOCK_MS);
+      if (hidden) {
+        hiddenAt = Date.now();
+        relock = setTimeout(relockKeys, IDLE_RELOCK_MS);
+        return;
+      }
+      if (hiddenAt && Date.now() - hiddenAt >= IDLE_RELOCK_MS) void relockKeys();
+      hiddenAt = 0;
     };
     const blur = () => setVeiled(true);
     const focus = () => setVeiled(false);

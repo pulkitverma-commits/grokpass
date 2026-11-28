@@ -8,12 +8,14 @@ on:
       - 'packages/core/**'
       - 'package-lock.json'
       - '.github/workflows/android-build.yml'
+      - '.github/scripts/android-user-release.sh'
   pull_request:
     paths:
       - 'apps/mobile/**'
       - 'packages/core/**'
       - 'package-lock.json'
       - '.github/workflows/android-build.yml'
+      - '.github/scripts/android-user-release.sh'
 permissions:
   contents: read
 jobs:

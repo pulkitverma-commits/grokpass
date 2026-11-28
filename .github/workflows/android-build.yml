@@ -61,6 +61,15 @@ jobs:
               raise SystemExit("Unexpected React Native settings; review the CI toolchain workaround.")
           path.write_text(updated)
           PY
+      # expo-constants is hoisted to root node_modules, but expo itself may be
+      # nested in the mobile workspace. Node subprocesses spawned by Gradle need
+      # that workspace in their resolution path (Metro settings do not apply).
+      - name: Verify Expo config resolution for native build
+        shell: bash
+        run: |
+          export NODE_PATH="$GITHUB_WORKSPACE/apps/mobile/node_modules:$GITHUB_WORKSPACE/node_modules"
+          node -e 'const {createRequire}=require("node:module"); const path=require("node:path"); const req=createRequire(path.resolve("node_modules/expo-constants/scripts/getAppConfig.js")); console.log(req.resolve("expo/config"));'
+          echo "NODE_PATH=$NODE_PATH" >> "$GITHUB_ENV"
       - name: Compile debug APK
         working-directory: apps/mobile/android
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace

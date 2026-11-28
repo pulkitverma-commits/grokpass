@@ -46,8 +46,7 @@ jobs:
       - name: Generate Android project
         working-directory: apps/mobile
         run: npx expo prebuild --platform android --clean --no-install
-      # The runner already provides JDK 17. Foojay only downloads missing JDKs;
-      # avoid the unavailable plugin marker in this CI job, not in app source.
+      # The runner already provides JDK 17; the resolver only downloads missing JDKs.
       - name: Use installed JDK for React Native Gradle plugin
         shell: bash
         run: |
@@ -56,14 +55,8 @@ jobs:
           import pathlib, re
           path = pathlib.Path("node_modules/@react-native/gradle-plugin/settings.gradle.kts")
           source = path.read_text()
-          pattern = r'(?m)^\s*plugins\s*\{\s*id\("org\.gradle\.toolchains\.foojay-resolver-convention"\)\s*(?:\.version\("1\.0\.0"\)|version\s+"1\.0\.0")\s*\}[ \t]*
-      - uses: actions/upload-artifact@v4
-        with:
-          name: onepeek-android-debug
-          path: apps/mobile/android/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-
-          updated, count = re.subn(pattern, '\n// CI: use the installed JDK 17 instead of auto-provisioning.', source)
+          pattern = r'(?m)^[ \t]*plugins\s*\{\s*id\("org\.gradle\.toolchains\.foojay-resolver-convention"\)\s*(?:\.version\("1\.0\.0"\)|version\s+"1\.0\.0")\s*\}[ \t]*$'
+          updated, count = re.subn(pattern, '// CI: use the installed JDK 17 instead of auto-provisioning.', source)
           if count != 1:
               raise SystemExit("Unexpected React Native settings; review the CI toolchain workaround.")
           path.write_text(updated)
